@@ -1,5 +1,3 @@
-fastapi
-uvicorn
+gradio
 opencv-python-headless
 numpy
-python-multipart
