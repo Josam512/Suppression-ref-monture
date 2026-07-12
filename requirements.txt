@@ -1,6 +1,11 @@
+# --- App pinceau (app.py) ---
 streamlit
 streamlit-drawable-canvas
 opencv-python-headless
 numpy
 Pillow
- 
+
+# --- Traitement par lots (batch_clean.py) ---
+# backend recommande (CPU suffit) :
+easyocr
+# backend alternatif sans torch : opencv seul + modele EAST (--backend east)
