@@ -43,5 +43,5 @@ if uploaded_files and st.button("🚀 Lancer le nettoyage en rafale", type="prim
             
             # Affichage dans la grille
             with cols[idx % 3]:
-                st.image(result_bytes, caption=f"Nettoyé : {file.name}", use_container_width=True)
+                st.image(result_bytes, caption=f"Nettoyé : {file.name}", width="stretch")
                 st.download_button(label="📥 Télécharger", data=result_bytes, file_name=f"sans_branche_{file.name}", mime="image/png", key=str(uuid.uuid4()))
