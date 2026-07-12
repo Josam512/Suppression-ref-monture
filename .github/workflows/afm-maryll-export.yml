@@ -2,6 +2,7 @@ name: AFM Maryll export
 on:
   push:
     branches: [tmp/afm-maryll-photos-20260712]
+  pull_request:
   workflow_dispatch:
 jobs:
   export:
