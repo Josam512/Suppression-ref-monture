@@ -1,3 +1,6 @@
 streamlit
+streamlit-drawable-canvas
 opencv-python-headless
 numpy
+Pillow
+ 
