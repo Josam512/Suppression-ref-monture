@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#090b10">
+<title>Essayage lentilles couleur — Preview</title>
+<style>
+:root{--bg:#080a0f;--panel:#111620;--text:#f5f6f8;--muted:#9ca6b6;--line:rgba(255,255,255,.12);--gold:#d4c49a;--danger:#ffb1b1;--ok:#79ddb9}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}button,input{font:inherit}button{color:inherit}
+.app{min-height:100dvh;display:grid;grid-template-rows:auto 1fr auto;max-width:980px;margin:auto;padding:12px;gap:12px}
+header{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:4px}.brand{font-size:13px;font-weight:850;letter-spacing:.12em}.brand small{display:block;color:var(--muted);font-size:11px;font-weight:500;letter-spacing:0;margin-top:3px}.secure{font-size:11px;color:var(--muted)}
+.viewer{position:relative;min-height:0;border:1px solid var(--line);border-radius:22px;overflow:hidden;background:#050608;box-shadow:0 25px 70px rgba(0,0,0,.38)}
+canvas{width:100%;height:100%;display:block;object-fit:cover;min-height:420px;max-height:72dvh;background:#050608}
+.status{position:absolute;left:12px;top:12px;z-index:3;padding:8px 11px;border:1px solid rgba(255,255,255,.15);background:rgba(7,9,13,.72);backdrop-filter:blur(9px);border-radius:999px;font-size:12px}.status:before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);margin-right:7px}.status.error{color:var(--danger)}.status.error:before{background:#ff7777}
+.start-cover{position:absolute;inset:0;z-index:4;display:grid;place-items:center;background:radial-gradient(circle at 50% 35%,rgba(45,55,72,.75),rgba(6,8,12,.96) 72%);padding:26px;text-align:center}.start-cover.hidden{display:none}.start-box{max-width:430px}.eye-icon{font-size:56px;line-height:1;margin-bottom:16px}.start-box h1{font-size:25px;line-height:1.12;margin:0 0 9px}.start-box p{color:var(--muted);font-size:14px;line-height:1.45;margin:0 0 20px}.start{border:0;border-radius:14px;background:linear-gradient(135deg,#e6d9b8,#ae955d);color:#11141a;padding:14px 19px;font-weight:850;cursor:pointer;min-width:210px}.start:disabled{opacity:.55;cursor:wait}
+.controls{border:1px solid var(--line);border-radius:20px;background:linear-gradient(180deg,#151a24,#0e121a);padding:14px}.swatches{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}.swatch{border:1px solid transparent;background:transparent;border-radius:14px;padding:6px;cursor:pointer}.swatch.active{border-color:rgba(255,255,255,.85);background:rgba(255,255,255,.06)}.orb{display:block;margin:auto;width:42px;height:42px;border-radius:50%;box-shadow:inset 0 0 0 3px rgba(0,0,0,.35),0 4px 12px rgba(0,0,0,.3);position:relative}.orb:after{content:"";position:absolute;inset:31%;border-radius:50%;background:#050608}.swatch span:last-child{display:block;font-size:10px;color:var(--muted);margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row{display:grid;grid-template-columns:78px 1fr 42px;gap:8px;align-items:center;margin-top:12px;color:var(--muted);font-size:12px}input[type=range]{width:100%;accent-color:var(--gold)}.val{text-align:right;color:var(--text)}.actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}.secondary{border:1px solid var(--line);border-radius:12px;background:#171d28;padding:10px;cursor:pointer}.secondary.active{background:#f2eee3;color:#11141a;font-weight:800}.note{text-align:center;color:#737e90;font-size:10px;margin:8px 0 0}
+@media(max-width:600px){.app{padding:8px;gap:8px}.secure{display:none}.viewer{border-radius:17px}canvas{min-height:52dvh;max-height:62dvh}.controls{padding:10px;border-radius:16px}.orb{width:36px;height:36px}.swatches{gap:4px}.swatch{padding:4px}.start-box h1{font-size:22px}}
+</style>
+</head>
+<body>
+<div class="app">
+<header><div class="brand">LUNEYES LAB<small>Preview lentilles couleur en temps réel</small></div><div class="secure">Caméra traitée localement</div></header>
+<section class="viewer">
+  <canvas id="output"></canvas>
+  <video id="camera" playsinline muted style="display:none"></video>
+  <div id="status" class="status">Prête</div>
+  <div id="startCover" class="start-cover">
+    <div class="start-box"><div class="eye-icon">◉</div><h1>Essayage en direct</h1><p>Appuie sur le bouton, autorise la caméra frontale, puis regarde l’objectif. Rien n’est envoyé ni enregistré.</p><button id="start" class="start">Activer ma caméra</button></div>
+  </div>
+</section>
+<section class="controls">
+  <div id="swatches" class="swatches"></div>
+  <div class="row"><span>Intensité</span><input id="opacity" type="range" min="20" max="90" value="58"><span id="opacityVal" class="val">58%</span></div>
+  <div class="row"><span>Diamètre</span><input id="scale" type="range" min="92" max="132" value="112"><span id="scaleVal" class="val">112%</span></div>
+  <div class="actions"><button id="toggle" class="secondary active">Lentilles actives</button><button id="switchCamera" class="secondary">Changer caméra</button></div>
+  <p class="note">Preview technique : les motifs labo remplaceront les cinq textures de démonstration.</p>
+</section>
+</div>
+<script type="module">
+const output=document.querySelector('#output');
+const ctx=output.getContext('2d',{alpha:false,desynchronized:true});
+const video=document.querySelector('#camera');
+const startBtn=document.querySelector('#start');
+const startCover=document.querySelector('#startCover');
+const statusEl=document.querySelector('#status');
+const opacity=document.querySelector('#opacity');
+const scale=document.querySelector('#scale');
+const toggle=document.querySelector('#toggle');
+const switchCamera=document.querySelector('#switchCamera');
+const swatches=document.querySelector('#swatches');
+const colors=[
+ {name:'Noisette',inner:'#d5b477',mid:'#9c7043',outer:'#3e2a20'},
+ {name:'Vert',inner:'#a8d3b8',mid:'#477f68',outer:'#193b35'},
+ {name:'Gris',inner:'#dae0e4',mid:'#7b8993',outer:'#303b45'},
+ {name:'Bleu',inner:'#9dcfe4',mid:'#3c78a0',outer:'#153a59'},
+ {name:'Miel',inner:'#f0cf77',mid:'#b77f38',outer:'#5b391a'}
+];
+let selected=0,enabled=true,stream=null,facing='user',landmarker=null,raf=0,lastDetect=0,landmarks=null,modelReady=false,running=false;
+colors.forEach((c,i)=>{const b=document.createElement('button');b.className='swatch'+(i===0?' active':'');b.innerHTML=`<span class="orb" style="background:radial-gradient(circle,#090a0c 0 29%,${c.inner} 31%,${c.mid} 67%,${c.outer} 100%)"></span><span>${c.name}</span>`;b.onclick=()=>{selected=i;[...swatches.children].forEach((x,j)=>x.classList.toggle('active',j===i))};swatches.appendChild(b)});
+opacity.oninput=()=>document.querySelector('#opacityVal').textContent=opacity.value+'%';
+scale.oninput=()=>document.querySelector('#scaleVal').textContent=scale.value+'%';
+toggle.onclick=()=>{enabled=!enabled;toggle.classList.toggle('active',enabled);toggle.textContent=enabled?'Lentilles actives':'Avant naturel'};
+switchCamera.onclick=async()=>{facing=facing==='user'?'environment':'user';await startCamera(true)};
+startBtn.onclick=()=>startCamera(false);
+function status(text,error=false){statusEl.textContent=text;statusEl.classList.toggle('error',error)}
+function stopStream(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}video.srcObject=null}
+async function loadTracker(){
+  if(landmarker)return landmarker;
+  status('Chargement du suivi des yeux…');
+  const mp=await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/+esm');
+  const vision=await mp.FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm');
+  landmarker=await mp.FaceLandmarker.createFromOptions(vision,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',delegate:'CPU'},runningMode:'VIDEO',numFaces:1,minFaceDetectionConfidence:.45,minFacePresenceConfidence:.45,minTrackingConfidence:.45});
+  modelReady=true;
+  return landmarker;
+}
+async function startCamera(restart){
+  if(!window.isSecureContext){status('Cette page doit être ouverte en HTTPS',true);return}
+  if(!navigator.mediaDevices?.getUserMedia){status('Caméra non prise en charge par ce navigateur',true);return}
+  startBtn.disabled=true;status('Ouverture de la caméra…');stopStream();
+  try{
+    const constraints={audio:false,video:{facingMode:{ideal:facing},width:{ideal:960,max:1280},height:{ideal:1280,max:1440},frameRate:{ideal:24,max:30}}};
+    stream=await navigator.mediaDevices.getUserMedia(constraints);
+    video.srcObject=stream;
+    await video.play();
+    startCover.classList.add('hidden');
+    running=true;
+    if(!restart) loadTracker().then(()=>status('Suivi des iris actif')).catch(e=>{console.error(e);status('Caméra active — suivi IA indisponible',true)});
+    else if(modelReady) status('Suivi des iris actif');
+    cancelAnimationFrame(raf);loop();
+  }catch(e){
+    console.error(e);running=false;startCover.classList.remove('hidden');
+    const msg=e.name==='NotAllowedError'?'Autorisation caméra refusée':e.name==='NotFoundError'?'Aucune caméra détectée':'Impossible d’ouvrir la caméra';
+    status(msg,true);
+  }finally{startBtn.disabled=false}
+}
+function resizeCanvas(){
+  const vw=video.videoWidth||720,vh=video.videoHeight||960;
+  const maxSide=720,ratio=Math.min(1,maxSide/Math.max(vw,vh));
+  const w=Math.max(2,Math.round(vw*ratio)),h=Math.max(2,Math.round(vh*ratio));
+  if(output.width!==w||output.height!==h){output.width=w;output.height=h}
+}
+function mapPoint(p){return {x:(facing==='user'?1-p.x:p.x)*output.width,y:p.y*output.height}}
+function drawLens(center,r,eyePolygon){
+  if(!enabled)return;
+  const c=colors[selected],alpha=Number(opacity.value)/100;
+  ctx.save();ctx.beginPath();eyePolygon.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();ctx.clip();
+  const grad=ctx.createRadialGradient(center.x,center.y,r*.33,center.x,center.y,r);
+  grad.addColorStop(0,'rgba(0,0,0,0)');grad.addColorStop(.11,c.inner);grad.addColorStop(.60,c.mid);grad.addColorStop(.93,c.outer);grad.addColorStop(1,'rgba(0,0,0,.70)');
+  ctx.globalAlpha=alpha;ctx.globalCompositeOperation='soft-light';ctx.fillStyle=grad;ctx.beginPath();ctx.arc(center.x,center.y,r,0,Math.PI*2);ctx.fill();
+  ctx.globalCompositeOperation='overlay';ctx.lineCap='round';
+  for(let i=0;i<72;i++){const a=i/72*Math.PI*2;const wobble=((i*29)%13)/120;const ri=r*(.38+wobble);const ro=r*(.77+((i*17)%9)/70);ctx.globalAlpha=alpha*(i%4===0?.30:.16);ctx.strokeStyle=i%3===0?c.outer:c.inner;ctx.lineWidth=Math.max(.7,r*.018);ctx.beginPath();ctx.moveTo(center.x+Math.cos(a)*ri,center.y+Math.sin(a)*ri);ctx.lineTo(center.x+Math.cos(a)*ro,center.y+Math.sin(a)*ro);ctx.stroke()}
+  ctx.globalCompositeOperation='source-over';ctx.globalAlpha=.25;ctx.strokeStyle=c.outer;ctx.lineWidth=Math.max(1,r*.055);ctx.beginPath();ctx.arc(center.x,center.y,r*.95,0,Math.PI*2);ctx.stroke();ctx.restore();
+}
+function renderLenses(face){
+  const sets=[
+   {iris:[468,469,470,471,472],eye:[33,7,163,144,145,153,154,155,133,173,157,158,159,160,161,246]},
+   {iris:[473,474,475,476,477],eye:[362,382,381,380,374,373,390,249,263,466,388,387,386,385,384,398]}
+  ];
+  sets.forEach(s=>{if(!face[s.iris[0]])return;const pts=s.iris.map(i=>mapPoint(face[i]));const center=pts[0];let r=Math.max(...pts.slice(1).map(p=>Math.hypot(p.x-center.x,p.y-center.y)));r*=Number(scale.value)/100*1.07;const poly=s.eye.map(i=>mapPoint(face[i]));drawLens(center,r,poly)});
+}
+function loop(now=performance.now()){
+  if(!running||!stream)return;
+  resizeCanvas();
+  ctx.save();if(facing==='user'){ctx.translate(output.width,0);ctx.scale(-1,1)}ctx.drawImage(video,0,0,output.width,output.height);ctx.restore();
+  if(landmarker&&now-lastDetect>70&&video.readyState>=2){try{const result=landmarker.detectForVideo(video,now);landmarks=result.faceLandmarks?.[0]||null;lastDetect=now}catch(e){console.warn(e)}}
+  if(landmarks)renderLenses(landmarks);
+  raf=requestAnimationFrame(loop)
+}
+window.addEventListener('pagehide',()=>{running=false;cancelAnimationFrame(raf);stopStream()});
+window.addEventListener('beforeunload',()=>{running=false;cancelAnimationFrame(raf);stopStream()});
+</script>
+</body>
+</html>
