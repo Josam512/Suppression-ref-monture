@@ -1,0 +1,23 @@
+name: AFM Maryll ZIP
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests beautifulsoup4
+      - run: python tools/afm_probe.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: afm-probe
+          path: probe/
+          retention-days: 1
+          compression-level: 0
