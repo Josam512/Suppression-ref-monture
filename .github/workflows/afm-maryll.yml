@@ -7,17 +7,26 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install requests beautifulsoup4
-      - run: python tools/afm_probe.py
-      - uses: actions/upload-artifact@v4
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4 Pillow
+      - name: Download and verify all AFM photos
+        run: python tools/afm_probe.py
+      - name: Upload final ZIP and control files
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: afm-probe
-          path: probe/
+          name: AFM-Maryll-Optiques-ZIP
+          path: |
+            AFM_Maryll_Optiques_FACE_PROFIL_COMPLET.zip
+            AFM_Maryll_Optiques/CONTROLE_FINAL.txt
+            AFM_Maryll_Optiques/MANIFESTE_PHOTOS.csv
+            AFM_Maryll_Optiques/ERREURS.txt
+          if-no-files-found: warn
           retention-days: 1
           compression-level: 0
