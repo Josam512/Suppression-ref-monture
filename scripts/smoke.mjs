@@ -82,6 +82,13 @@ try {
   page.on('pageerror', (e) => pageErrors.push(e.message));
 
   await page.goto(BASE, { waitUntil: 'load' });
+
+  // L'accueil propose les deux versions : il faut en ouvrir une pour arriver
+  // sur le flux vidéo. On teste la V1, celle du client à distance.
+  const v1 = page.getByRole('button', { name: /Ouvrir V1/ });
+  const v2 = page.getByRole('button', { name: /Ouvrir V2/ });
+  check('les deux versions sont proposées à l’accueil', (await v1.count()) === 1 && (await v2.count()) === 1);
+  await v1.click();
   await page.waitForTimeout(12000);
 
   const video = await page.evaluate(() => {
@@ -116,6 +123,19 @@ try {
   });
   check('détection perdue → la boucle affiche quand même l’échec (§1 bug #3)', painted);
 
+  check('V1 annonce clairement sa version', (await page.locator('body').innerText()).includes('V1 — Vente en ligne'));
+
+  // La V2 doit s'ouvrir aussi, et annoncer sa dilatation de sprite.
+  const store = await ctx.newPage();
+  const storeErrors = [];
+  store.on('pageerror', (e) => storeErrors.push(e.message));
+  await store.goto(BASE, { waitUntil: 'load' });
+  await store.getByRole('button', { name: /Ouvrir V2/ }).click();
+  await store.waitForTimeout(9000);
+  const storeText = await store.locator('body').innerText();
+  check('V2 s’ouvre et annonce son mode', storeText.includes('V2 — Mode magasin'), storeErrors.join(' | '));
+  check('V2 annonce la dilatation du sprite (§11.6)', /dilaté de 1\.5 mm/.test(storeText));
+
   check('aucune exception non rattrapée', pageErrors.length === 0, pageErrors.join(' | '));
 
   const prep = await ctx.newPage();
@@ -124,6 +144,27 @@ try {
   await prep.goto(`${BASE}/prep.html`, { waitUntil: 'load' });
   await prep.waitForTimeout(1500);
   check('l’outil de préparation se charge', prepErrors.length === 0, prepErrors.join(' | '));
+
+  // ── Preuve métrologique du rendu : les pixels peints, remesurés en mm.
+  const proofPage = await ctx.newPage();
+  await proofPage.goto(`${BASE}/tests/render-proof.html`, { waitUntil: 'load' });
+  await proofPage.waitForFunction(() => window.__PROOF__ || window.__PROOF_ERROR__, {
+    timeout: 20000,
+  });
+  const proofError = await proofPage.evaluate(() => window.__PROOF_ERROR__ ?? null);
+  if (proofError) {
+    check('banc de mesure du rendu', false, proofError);
+  } else {
+    const cases = await proofPage.evaluate(() => window.__PROOF__);
+    console.log('\n── Rendu réellement peint, remesuré ──');
+    for (const c of cases) {
+      check(
+        `  ${c.nom}`,
+        c.ok,
+        `attendu ${c.attendu.toFixed(2)} ${c.unite}, mesuré ${c.mesure.toFixed(2)} ${c.unite}`,
+      );
+    }
+  }
 } finally {
   await browser?.close();
   server.kill('SIGTERM');

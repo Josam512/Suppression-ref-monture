@@ -1,12 +1,12 @@
 /**
- * ui/useSprites.ts — chargement d'une monture préparée.
+ * ui/useSprites.ts — chargement des images d'une monture déjà validée.
  *
- * `spec.json` passe par `parseFrameSpec` : un champ manquant lève une erreur
- * qui le nomme, jamais une valeur par défaut silencieuse (T4).
+ * Le `spec.json` est passé par `parseFrameSpec` en amont (catalogue) : un champ
+ * manquant lève une erreur qui le nomme, jamais une valeur par défaut (T4).
  */
 
 import { useEffect, useState } from 'react';
-import { parseFrameSpec, type FrameSpec } from '../core/frameSpec.js';
+import type { FrameSpec } from '../core/frameSpec.js';
 import type { Sprites } from '../render/composite.js';
 
 export type SpritesState =
@@ -24,11 +24,11 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   });
 }
 
-export function useSprites(slug: string | null): SpritesState {
+export function useSprites(spec: FrameSpec | null): SpritesState {
   const [state, setState] = useState<SpritesState>({ status: 'idle' });
 
   useEffect(() => {
-    if (slug === null) {
+    if (spec === null) {
       setState({ status: 'idle' });
       return;
     }
@@ -37,16 +37,11 @@ export function useSprites(slug: string | null): SpritesState {
 
     void (async () => {
       try {
-        const base = `/frames/${slug}`;
-        const res = await fetch(`${base}/spec.json`);
-        if (!res.ok) throw new Error(`spec.json introuvable pour « ${slug} » (${res.status}).`);
-
-        const spec = parseFrameSpec(await res.json());
+        const base = `/frames/${spec.slug}`;
         const [front, profile] = await Promise.all([
           loadImage(`${base}/${spec.front}`),
           loadImage(`${base}/${spec.profile}`),
         ]);
-
         if (cancelled) return;
         setState({
           status: 'ready',
@@ -63,7 +58,7 @@ export function useSprites(slug: string | null): SpritesState {
     return () => {
       cancelled = true;
     };
-  }, [slug]);
+  }, [spec]);
 
   return state;
 }
