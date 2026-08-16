@@ -1,0 +1,35 @@
+{
+  "name": "essayage-virtuel",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Essayage virtuel de lunettes 2D avec verification de taille reelle",
+  "scripts": {
+    "sync:wasm": "node scripts/sync-wasm.mjs",
+    "predev": "npm run sync:wasm",
+    "prebuild": "npm run sync:wasm",
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "hooks:install": "git config core.hooksPath .githooks && chmod +x .githooks/pre-commit",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "^0.10.14",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.3",
+    "playwright": "^1.62.1",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.5"
+  }
+}

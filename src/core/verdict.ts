@@ -1,0 +1,218 @@
+/**
+ * core/verdict.ts — la LÉGENDE CHIFFRÉE (CLAUDE.md §5).
+ *
+ * ⚠️ Ce module NE DÉCIDE DE RIEN (§0.0.1). Il ne filtre aucun catalogue, ne
+ * bloque aucun essayage, ne recommande ni ne classe aucune monture. Il met des
+ * chiffres justes sous une image juste. Le nom `verdict` est conservé pour ne
+ * pas casser les signatures figées du §7 ; lire « légende », pas « jugement ».
+ */
+
+import { at, dist, midpoint, px, type NormalizedLandmark } from './geom.js';
+import type { UserCalibration, CalSource } from './calibration.js';
+import { totalFrameWidthMm, type FrameSpec } from './frameSpec.js';
+import {
+  EYE_L,
+  EYE_L_INNER,
+  EYE_R,
+  EYE_R_INNER,
+  frameMetrics,
+  type FrameMetrics,
+} from './faceMetrics.js';
+import { spriteToScreen } from './transform.js';
+
+export type Status = 'sous-taillee' | 'correcte' | 'surtaillee' | 'indetermine';
+
+export interface SizeVerdict {
+  frameWidthMm: number;
+  faceWidthMm: number;
+  faceWidthUncertaintyMm: number;
+  deltaMm: number;
+  /** Le seuil effectif de CE visage — il n'est pas constant (voir thresholdFor). */
+  thresholdMm: number;
+  status: Status;
+  decentrementMm: { left: number; right: number } | null;
+  /** Traçabilité et affichage SEULEMENT. Aucun calcul ne branche dessus (§4 règle 2). */
+  source: CalSource;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Règle 1 — le seuil est PROPORTIONNEL et BORNÉ (arbitrage humain)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const THRESHOLD_RATIO = 0.03; // 3 % de la largeur du visage
+export const THRESHOLD_MIN_MM = 3; // plancher : sous la précision de mesure, ça n'a plus de sens
+export const THRESHOLD_MAX_MM = 5; // plafond : au-delà, la tolérance ne veut plus rien dire
+
+/**
+ * Seuil effectif pour CE visage. Jamais de seuil en dur ailleurs.
+ *
+ * Un seuil fixe de 4 mm était un chiffre d'adulte : sur un visage de 105 mm il
+ * est proportionnellement deux fois plus sévère que sur 145 mm — exactement le
+ * présupposé de taille interdit au §0.0.3.
+ */
+export function thresholdFor(faceWidthMm: number): number {
+  return Math.min(THRESHOLD_MAX_MM, Math.max(THRESHOLD_MIN_MM, faceWidthMm * THRESHOLD_RATIO));
+}
+
+/**
+ * ⭐ Correctif B2 — l'incertitude se calcule depuis `relError`, JAMAIS depuis `source`.
+ *
+ * Arithmétique d'intervalle : on ne conclut que si l'intervalle ENTIER tombe du
+ * même côté du seuil. Deux sources de même précision produisent donc exactement
+ * le même résultat, quelle que soit leur origine.
+ */
+export function classify(deltaMm: number, cal: UserCalibration): Status {
+  const t = thresholdFor(cal.faceWidthMm);
+  const u = cal.faceWidthMm * cal.relError;
+  const lo = deltaMm - u;
+  const hi = deltaMm + u;
+
+  if (hi < -t) return 'sous-taillee';
+  if (lo > t) return 'surtaillee';
+  if (lo > -t && hi < t) return 'correcte';
+  return 'indetermine'; // l'intervalle chevauche un seuil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Règle 2 — décentrement
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const DECENTREMENT_THRESHOLD_MM = 3;
+
+/**
+ * Incertitude propagée jusqu'au décentrement lui-même.
+ *
+ * Le décentrement est un petit écart mesuré à ~30 mm du point d'ancrage. Une
+ * erreur d'échelle de r % ne le décale que de r % × 30 mm — et non de r % ×
+ * largeur du visage. Comparer `relError` au seuil de 3 mm, comme le faisait la
+ * version d'origine, revenait à comparer une erreur d'échelle relative à un
+ * écart absolu : ±6 mm sur la LARGEUR DU VISAGE ne fait pas ±6 mm sur un
+ * DÉCENTREMENT.
+ */
+export function decentrementUncertaintyMm(spec: FrameSpec, cal: UserCalibration): number {
+  const leverPx = Math.abs(spec.lensCenterL.x - spec.bridgeCenter.x);
+  const leverMm = leverPx / spec.spritePxPerMm;
+  return leverMm * cal.relError;
+}
+
+/**
+ * Écart horizontal œil ↔ centre optique, projeté sur l'axe HORIZONTAL DE LA MONTURE.
+ *
+ * ⚠️ Volontairement pas `dist()` : une distance euclidienne mélangerait le
+ * décentrement (horizontal, qui traduit un pont inadapté) avec l'erreur de pose
+ * verticale, laquelle relève de VERTICAL_OFFSET_MM et n'est pas encore calibrée.
+ * On mesurerait alors le réglage vertical en croyant mesurer le nez.
+ */
+function horizontalOffsetMm(
+  eyeOuter: NormalizedLandmark,
+  eyeInner: NormalizedLandmark,
+  lensCenterSprite: { x: number; y: number },
+  spec: FrameSpec,
+  m: FrameMetrics,
+  w: number,
+  h: number,
+): number {
+  const eye = midpoint(px(eyeOuter, w, h), px(eyeInner, w, h));
+  const lens = spriteToScreen(lensCenterSprite, spec, m);
+  const ux = Math.cos(m.rollRad);
+  const uy = Math.sin(m.rollRad);
+  const dxPx = (eye.x - lens.x) * ux + (eye.y - lens.y) * uy;
+  return Math.abs(dxPx) / m.livePxPerMm;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Règle 3 — conditions de pose
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const MAX_YAW_RAD = (12 * Math.PI) / 180;
+export const MAX_ROLL_RAD = (15 * Math.PI) / 180;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// La constante de correction — appliquée ICI, et nulle part ailleurs (§7)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Écart entre les landmarks 234/454 et les tempes anatomiques : 5 à 10 mm,
+ * c'est-à-dire DAVANTAGE que le seuil de décision lui-même.
+ *
+ * ⚠️ VALEUR NON ENCORE CALIBRÉE. Tant qu'elle vaut 0, la légende est
+ * systématiquement décalée d'un cran. Protocole au §5, exécution au lot 8.
+ * Ne jamais la retoucher pour faire passer un test.
+ */
+export const FACE_WIDTH_CORRECTION_MM = 0; // calibrée le : —  | sur N montures : 0
+
+/**
+ * Assemble tout. SEUL point d'entrée de la légende — l'UI n'appelle rien d'autre.
+ *
+ * @returns null si aucune calibration, ou si la pose est hors tolérance (règle 3).
+ *          Un null n'est PAS une erreur : c'est « je ne peux pas répondre », et
+ *          l'UI doit l'afficher comme tel, jamais le remplacer par une valeur
+ *          par défaut. Le null gèle LA LÉGENDE, jamais L'IMAGE (§0.0.2).
+ *
+ * ⚠️ Écart assumé avec le §7 d'origine, qui figeait 5 paramètres : `yawRad` est
+ * indispensable ici, puisque la règle 3 refuse justement de répondre au-delà de
+ * 12° de yaw. Sans ce paramètre, la règle 3 était inimplémentable. Documenté
+ * comme trou de contrat T9.
+ */
+export function verdict(
+  lm: readonly NormalizedLandmark[],
+  cal: UserCalibration | null,
+  spec: FrameSpec,
+  w: number,
+  h: number,
+  yawRad: number,
+): SizeVerdict | null {
+  if (cal === null) return null;
+
+  const m = frameMetrics(lm, w, h, cal, yawRad);
+
+  // Règle 3 — jamais de chiffre à l'air confiant sur une mesure dégradée.
+  if (Math.abs(m.yawRad) > MAX_YAW_RAD) return null;
+  if (Math.abs(m.rollRad) > MAX_ROLL_RAD) return null;
+
+  const faceWidthMm = cal.faceWidthMm + FACE_WIDTH_CORRECTION_MM;
+  const corrected: UserCalibration = { ...cal, faceWidthMm };
+
+  const frameWidthMm = totalFrameWidthMm(spec);
+  const deltaMm = frameWidthMm - faceWidthMm;
+
+  // Le décentrement n'est affiché que si la mesure peut réellement trancher
+  // les 3 mm. Masqué s'il n'est pas concluant — pas approximé, masqué.
+  const u = decentrementUncertaintyMm(spec, corrected);
+  const conclusive = u < DECENTREMENT_THRESHOLD_MM / 2;
+
+  const decentrementMm = conclusive
+    ? {
+        left: horizontalOffsetMm(at(lm, EYE_L), at(lm, EYE_L_INNER), spec.lensCenterL, spec, m, w, h),
+        right: horizontalOffsetMm(at(lm, EYE_R), at(lm, EYE_R_INNER), spec.lensCenterR, spec, m, w, h),
+      }
+    : null;
+
+  return {
+    frameWidthMm,
+    faceWidthMm,
+    faceWidthUncertaintyMm: faceWidthMm * cal.relError,
+    deltaMm,
+    thresholdMm: thresholdFor(faceWidthMm),
+    status: classify(deltaMm, corrected),
+    decentrementMm,
+    source: cal.source,
+  };
+}
+
+/**
+ * Libellé destiné à l'écran. Deux chiffres et leurs marges — jamais un jugement.
+ * `'indetermine'` ne produit AUCUN libellé de statut (§0.0.1).
+ */
+export function legend(v: SizeVerdict): string {
+  const u = v.faceWidthUncertaintyMm;
+  return (
+    `monture ${v.frameWidthMm.toFixed(0)} mm · ` +
+    `votre visage ${v.faceWidthMm.toFixed(0)} mm (± ${u.toFixed(0)} mm)`
+  );
+}
+
+/** Exportée pour l'overlay : distance entre les deux coins externes des yeux. */
+export function eyeSpanPx(lm: readonly NormalizedLandmark[], w: number, h: number): number {
+  return dist(px(at(lm, EYE_L), w, h), px(at(lm, EYE_R), w, h));
+}
