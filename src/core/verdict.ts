@@ -139,7 +139,22 @@ export const MAX_ROLL_RAD = (15 * Math.PI) / 180;
  * systématiquement décalée d'un cran. Protocole au §5, exécution au lot 8.
  * Ne jamais la retoucher pour faire passer un test.
  */
-export const FACE_WIDTH_CORRECTION_MM = 0; // calibrée le : —  | sur N montures : 0
+export const FACE_WIDTH_CORRECTION_MM = 0; // calibrée le : —  | sur N mesures : 0
+
+/**
+ * Second paramètre du même écart, en PROPORTION.
+ *
+ * L'écart entre les repères et la largeur réelle peut être un décalage
+ * constant en millimètres, ou une proportion qui suit la taille de la tête.
+ * Les premières mesures ne permettent pas de trancher : les deux modèles
+ * laissent la même erreur résiduelle. `prep/fitCorrection.ts` ajuste les deux
+ * et laisse une validation croisée par sujet choisir.
+ *
+ * À 1, ce paramètre est neutre : seul le décalage agit. Un seul des deux est
+ * publié à la fois — jamais les deux, sous peine d'ajuster deux fois le même
+ * écart et de perdre toute lisibilité sur ce qui a été mesuré.
+ */
+export const FACE_WIDTH_CORRECTION_RATIO = 1; // calibré le : —  | sur N mesures : 0
 
 /**
  * Assemble tout. SEUL point d'entrée de la légende — l'UI n'appelle rien d'autre.
@@ -170,7 +185,7 @@ export function verdict(
   if (Math.abs(m.yawRad) > MAX_YAW_RAD) return null;
   if (Math.abs(m.rollRad) > MAX_ROLL_RAD) return null;
 
-  const faceWidthMm = cal.faceWidthMm + FACE_WIDTH_CORRECTION_MM;
+  const faceWidthMm = cal.faceWidthMm * FACE_WIDTH_CORRECTION_RATIO + FACE_WIDTH_CORRECTION_MM;
   const corrected: UserCalibration = { ...cal, faceWidthMm };
 
   const frameWidthMm = totalFrameWidthMm(spec);

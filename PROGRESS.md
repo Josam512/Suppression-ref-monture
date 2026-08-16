@@ -40,8 +40,8 @@ L'écran d'accueil propose explicitement les deux, avec leur public, leur étalo
 | V2-2 | Sélecteur de coloris + dilatation `OVERLAY_PADDING_MM` | ⚠️ mesurée au banc ; contrôle « aucun liseré » ouvert |
 | V2-3 | Pointage en 2 clics de la monture portée | ✅ |
 
-**Contrôles automatiques :** 68 tests Vitest · `tsc --noEmit` en `strict` sans erreur ·
-`npm run build` OK · `npm run smoke` : 19 contrôles verts, dont la preuve métrologique ci-dessous.
+**Contrôles automatiques :** 76 tests Vitest · `tsc --noEmit` en `strict` sans erreur ·
+`npm run build` OK · `npm run smoke` : 20 contrôles verts, dont la preuve métrologique ci-dessous.
 
 ## La preuve que l'image est juste
 
@@ -219,11 +219,51 @@ utilise désormais un profil vide, puisqu'il mesure la face.
 - Le **détourage laisse les branches repliées visibles à travers les verres**,
   puisqu'elles sont dans la photo. Peu gênant sur un visage, mais visible.
 
+## La carte, une seule fois — jamais redemandée
+
+Arbitrage humain, V1 : le client montre sa carte **une fois**, et la mesure sert
+à tous les essayages suivants. C'est ce que fait l'application — la calibration
+est écrite en `localStorage` et le changement de monture n'y touche jamais. Un
+contrôle du banc navigateur le vérifie de bout en bout : un client déjà calibré
+arrive directement sur l'essayage, sans qu'on lui reparle ni de ses lunettes ni
+de sa carte.
+
+## Ajuster la correction sur des mesures réelles
+
+`prep/fitCorrection.ts` + `npm run fit:correction` absorbent les mesures que
+l'humain fournira, et répondent à la question que le contrat ne pouvait pas
+trancher : **décalage constant en millimètres, ou proportion ?**
+
+Les deux modèles sont ajustés, et une **validation croisée par sujet** décide —
+on retire toutes les mesures d'une personne à la fois et on regarde si le modèle
+sait prédire un visage qu'il n'a jamais vu. C'est la seule propriété qui
+intéresse un client à distance.
+
+État actuel, sur les 2 mesures disponibles :
+
+```
+  decalage  erreur croisée par sujet : 6,60 mm
+  rapport   erreur croisée par sujet : 7,29 mm
+  → Non publiable : il faut 8 mesures sur 3 sujets, sous 3 mm.
+```
+
+L'outil **refuse**, et c'est le comportement attendu. Les mesures se déposent
+dans `docs/calibration/mesures.json`, avec pour chacune son origine — compas,
+monture jugée bien ajustée, ou simple monture portée — car ces trois sources
+n'ont pas la même valeur de preuve.
+
+> ⚠️ Un modèle à **un seul paramètre**, délibérément. Avec quelques dizaines de
+> mesures, tout ce qui a plus d'un degré de liberté apprendra le bruit et
+> paraîtra excellent. Le jour où les mesures se comptent en centaines, le point
+> d'entrée pour un modèle plus riche est dans ce fichier — et le protocole de
+> validation qui l'empêchera de se mentir à lui-même aussi.
+
 ## Constantes calibrées
 
 | Constante | Valeur | Calibrée le | Sur combien d'essais |
 |---|---|---|---|
 | `FACE_WIDTH_CORRECTION_MM` | **0 (provisoire)** | — | 0 |
+| `FACE_WIDTH_CORRECTION_RATIO` | **1 (neutre)** | — | 0 |
 | `VERTICAL_OFFSET_MM` | **3 (provisoire)** | — | 0 |
 
 > 🔴 **Tant que ces deux lignes portent « provisoire », la légende chiffrée est décalée.**
