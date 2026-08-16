@@ -12,11 +12,13 @@ en argument. C'est elle qui donne l'echelle du sprite :
 
     spritePxPerMm = alphaBBox.w / totalWidthMm
 
-CONTROLE DE COHERENCE (l'equivalent du garde-fou a 3 cotes du §4)
+CONTROLE DE COHERENCE — le garde-fou a 3 cotes du §4
 Les deux verres sont detectes comme des trous fermes dans la silhouette. Leur
-ecart centre-a-centre doit valoir A + pont, la relation du systeme boxing. Si
-l'ecart depasse la tolerance, la photo n'est pas perpendiculaire ou les cotes
-ne correspondent pas a cette monture : on refuse, on ne corrige pas en douce.
+BOITE ENGLOBANTE donne A, le pont et B — les trois cotes du systeme boxing —
+qui sont autant de mesures independantes du meme facteur d'echelle. Elles
+doivent concorder avec les cotes annoncees. Si l'une deraille, la photo n'est
+pas perpendiculaire ou les cotes ne sont pas celles de cette monture : on
+refuse, on ne corrige pas en douce.
 
 Usage :
   python3 tools/prepare_frame.py photo.jpg --slug s --a 47 --pont 22 --b 43 \
@@ -102,17 +104,33 @@ def label_holes(mask: np.ndarray):
             labels[sy, sx] = current
             area = 0
             sum_y = sum_x = 0
+            min_x = max_x = sx
+            min_y = max_y = sy
             while q:
                 y, x = q.popleft()
                 area += 1
                 sum_y += y
                 sum_x += x
+                min_x = min(min_x, x)
+                max_x = max(max_x, x)
+                min_y = min(min_y, y)
+                max_y = max(max_y, y)
                 for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
                     ny, nx = y + dy, x + dx
                     if 0 <= ny < h and 0 <= nx < w and mask[ny, nx] and not labels[ny, nx]:
                         labels[ny, nx] = current
                         q.append((ny, nx))
-            stats.append((area, sum_y / area, sum_x / area))
+            stats.append(
+                {
+                    "area": area,
+                    "cy": sum_y / area,
+                    "cx": sum_x / area,
+                    "x0": min_x,
+                    "x1": max_x,
+                    "y0": min_y,
+                    "y1": max_y,
+                }
+            )
     return labels, stats
 
 
@@ -159,7 +177,7 @@ def main() -> int:
     holes = crop_white & crop_solid
     _, stats = label_holes(holes)
     area_min = MIN_LENS_AREA_RATIO * bbox["w"] * bbox["h"]
-    kept = [s for s in stats if s[0] >= area_min]
+    kept = [s for s in stats if s["area"] >= area_min]
     if not kept:
         print("❌ aucun verre detecte — cerclage ouvert, ou photo trop bruitee.")
         return 1
@@ -170,39 +188,70 @@ def main() -> int:
     # de symetrie de la silhouette, et on moyenne en ponderant par l'aire.
     axis = bbox["w"] / 2
 
-    def side_centroid(parts):
-        total = sum(p[0] for p in parts)
-        return (
-            sum(p[0] * p[1] for p in parts) / total,
-            sum(p[0] * p[2] for p in parts) / total,
-        )
+    def side_box(parts):
+        """Boite englobante du verre, tous fragments reunis.
 
-    left = [s for s in kept if s[2] < axis]
-    right = [s for s in kept if s[2] >= axis]
+        ⚠️ La BOITE, pas le centroide de surface. Le systeme boxing definit A,
+        le pont et le centre optique sur le rectangle circonscrit au verre : sur
+        une forme panto ou hexagonale, le centroide de surface s'en ecarte de
+        plusieurs millimetres et fait echouer le controle a tort.
+        """
+        return {
+            "x0": min(p["x0"] for p in parts),
+            "x1": max(p["x1"] for p in parts),
+            "y0": min(p["y0"] for p in parts),
+            "y1": max(p["y1"] for p in parts),
+        }
+
+    left = [s for s in kept if s["cx"] < axis]
+    right = [s for s in kept if s["cx"] >= axis]
     if not left or not right:
         print(f"❌ verres mal repartis ({len(left)} a gauche, {len(right)} a droite).")
         return 1
 
-    ly_l, lx_l = side_centroid(left)
-    ly_r, lx_r = side_centroid(right)
+    box_l = side_box(left)
+    box_r = side_box(right)
+    lx_l, ly_l = (box_l["x0"] + box_l["x1"]) / 2, (box_l["y0"] + box_l["y1"]) / 2
+    lx_r, ly_r = (box_r["x0"] + box_r["x1"]) / 2, (box_r["y0"] + box_r["y1"]) / 2
     print(f"  verres : {len(left)} fragment(s) a gauche, {len(right)} a droite")
 
     expected = args.a + args.pont
     center_gap_px = abs(lx_r - lx_l)
 
+    def report_cotes(scale):
+        """Le controle a 3 cotes du §4, mesure sur les boites des verres.
+
+        Chaque cote est une mesure INDEPENDANTE du meme facteur d'echelle :
+        elles doivent concorder. Si elles divergent, la photo n'est pas
+        perpendiculaire, ou les cotes ne sont pas celles de cette monture.
+        """
+        mesures = [
+            ("A", (box_l["x1"] - box_l["x0"] + 1) / scale, args.a),
+            ("pont", (box_r["x0"] - box_l["x1"]) / scale, args.pont),
+            ("A+pont", center_gap_px / scale, expected),
+        ]
+        if args.b is not None:
+            mesures.append(("B", (box_l["y1"] - box_l["y0"] + 1) / scale, args.b))
+
+        pire = 0.0
+        for nom, mesure, attendu in mesures:
+            e = abs(mesure - attendu) / attendu
+            pire = max(pire, e)
+            print(f"    {nom:6s} mesure {mesure:6.1f} mm  attendu {attendu:6.1f} mm  → {e * 100:4.1f} %")
+        return pire
+
     if args.largeur is not None:
         # Echelle donnee par le REGLET. L'ecart des centres devient alors une
         # mesure INDEPENDANTE, donc un vrai controle de coherence.
         spritePxPerMm = bbox["w"] / args.largeur
-        center_gap_mm = center_gap_px / spritePxPerMm
-        ecart = abs(center_gap_mm - expected) / expected
-        verdict = "OK" if ecart <= BOXING_TOLERANCE else "REFUSE"
-        print(
-            f"  controle boxing : ecart des centres {center_gap_mm:.1f} mm "
-            f"pour A+pont = {expected:.1f} mm → {ecart * 100:.1f} % [{verdict}]"
-        )
-        if ecart > BOXING_TOLERANCE:
-            print("❌ Photo non perpendiculaire, ou cotes rattachees a la mauvaise monture.")
+        print("  controle des cotes (echelle donnee par le reglet) :")
+        pire = report_cotes(spritePxPerMm)
+        if pire > BOXING_TOLERANCE:
+            print(
+                f"❌ Ecart maximal de {pire * 100:.1f} % au-dela de la tolerance de "
+                f"{BOXING_TOLERANCE * 100:.0f} %. Photo non perpendiculaire, ou cotes "
+                f"rattachees a la mauvaise monture."
+            )
             return 1
     else:
         # Sans reglet, l'ecart des centres SERT d'echelle. Il ne peut donc plus

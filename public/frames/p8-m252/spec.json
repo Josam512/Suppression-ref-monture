@@ -3,32 +3,35 @@
   "aMm": 43.0,
   "pontMm": 23.0,
   "brancheMm": 145.0,
-  "totalWidthMm": 139.4561456188889,
+  "totalWidthMm": 132.0,
   "front": "front.png",
   "profile": "profile.png",
-  "spritePxPerMm": 6.281544611120734,
+  "spritePxPerMm": 10.75,
   "alphaBBox": {
     "x": 0,
     "y": 0,
-    "w": 876,
-    "h": 292
+    "w": 1419,
+    "h": 475
   },
   "bridgeCenter": {
-    "x": 438.308570953543,
-    "y": 62.717948717948715
+    "x": 711.0,
+    "y": 103.44262295081967
   },
   "lensCenterL": {
-    "x": 231.0175987865588,
-    "y": 139.28305849408835
+    "x": 364.0,
+    "y": 234.5
   },
   "lensCenterR": {
-    "x": 645.5995431205272,
-    "y": 138.49771560263616
+    "x": 1058.0,
+    "y": 236.0
   },
   "hingeProfile": {
-    "x": 0,
-    "y": 0
+    "x": 0.0,
+    "y": 274.5
   },
   "calibratedAt": "2026-08-16",
-  "bMm": 38.0
+  "bMm": 38.0,
+  "profileViewAngleDeg": 38.7,
+  "profilePxPerMm": 7.7368,
+  "templeRectifiedMm": 160.4
 }

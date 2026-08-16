@@ -33,14 +33,14 @@ L'écran d'accueil propose explicitement les deux, avec leur public, leur étalo
 | 4 | `prep/DetourTool.tsx` + `prep/alphaBBox.ts` (B3) | ✅ |
 | 5 | `core/transform.ts` (T3), `render/composite.ts`, correctif S1 | ✅ |
 | 6 | `core/verdict.ts` : seuil proportionnel borné, `classify` par intervalles (B2) | ✅ |
-| 7 | `render/temple.ts` : branche + occlusion | ⚠️ code écrit ; **aucune photo de profil à plat**, donc `profile.png` transparent |
+| 7 | `render/temple.ts` : branche + occlusion | ⚠️ branches extraites des photos 3/4 et redressées ; `templeAffine` corrigée ; longueur à ±20 % |
 | 8 | Calibration humaine des deux constantes | ❌ **à faire — bloquant pour la mise en ligne** |
 | V2-0 | `assertSameModel` | ✅ |
 | V2-1 | `calibrateWithWornFrame` (2 %, T8) | ✅ |
 | V2-2 | Sélecteur de coloris + dilatation `OVERLAY_PADDING_MM` | ⚠️ mesurée au banc ; contrôle « aucun liseré » ouvert |
 | V2-3 | Pointage en 2 clics de la monture portée | ✅ |
 
-**Contrôles automatiques :** 64 tests Vitest · `tsc --noEmit` en `strict` sans erreur ·
+**Contrôles automatiques :** 68 tests Vitest · `tsc --noEmit` en `strict` sans erreur ·
 `npm run build` OK · `npm run smoke` : 19 contrôles verts, dont la preuve métrologique ci-dessous.
 
 ## La preuve que l'image est juste
@@ -75,20 +75,30 @@ les pixels peints et les reconvertit en millimètres**. Dernier passage :
 (`tools/prepare_frame.py`), fond ET verres rendus transparents, centres optiques
 détectés comme trous fermés dans la silhouette.
 
-| Monture | A | pont | B | largeur totale | échelle | contrôle A+pont |
+| Monture | A | pont | B | largeur (réglet) | échelle | pire écart des 4 cotes |
 |---|---|---|---|---|---|---|
-| `ecaille-claire` | 47 | 22 | 43 | **136,0 mm** (réglet) | 6,787 px/mm | ✅ 2,3 % |
-| `severine` | 49 | 19 | 42 | **134,0 mm** (réglet) | 7,463 px/mm | ✅ 1,9 % |
-| `p8-m252` | 43 | 23 | 38 | 139,5 mm *(déduite)* | 6,282 px/mm | ⚠️ impossible |
+| `ecaille-claire` | 47 | 22 | 43 | **136,0 mm** | 6,787 px/mm | ✅ 3,1 % |
+| `severine` | 49 | 19 | 42 | **134,0 mm** | 7,463 px/mm | ✅ 3,4 % |
+| `p8-m252` | 43 | 23 | 38 | **132,0 mm** | 10,750 px/mm | ✅ 3,3 % |
 
-Le contrôle croisé compare l'écart centre-à-centre des deux verres à `A + pont`,
-la relation du système boxing. Sur les deux montures dont la largeur vient du
-réglet, il passe à 2 % — **la chaîne de l'échelle 1 est donc vérifiée sur de
-vraies montures**, pas seulement sur un rectangle de synthèse.
+La boîte englobante de chaque verre donne **A, le pont et B** — les trois cotes
+du système boxing, soit trois mesures indépendantes du même facteur d'échelle.
+C'est exactement le garde-fou à 3 cotes du §4, exécuté automatiquement. Les
+trois montures passent sous 3,4 %.
 
-⚠️ La `p8-m252` n'a pas de largeur au réglet : son échelle est déduite de
-`A + pont`, ce qui consomme la redondance et supprime le contrôle. Les 139,5 mm
-obtenus sont vraisemblablement surestimés de 2 à 3 %. **À remesurer.**
+> ⚠️ Deux erreurs corrigées en route, toutes deux attrapées par le garde-fou.
+> **La `p8-m252` avait d'abord été livrée à 139,5 mm**, largeur *déduite* de
+> `A + pont` faute de réglet : la vraie valeur est **132 mm**, soit 5,7 % de
+> faux. Le mode « sans réglet » a été conservé mais il annonce désormais
+> lui-même qu'il supprime tout contrôle. Et le centre du verre était pris comme
+> **centroïde de surface** au lieu de **centre de la boîte** : sur une forme
+> panto ou hexagonale l'écart atteint plusieurs millimètres, et le contrôle
+> refusait une monture correcte.
+
+**Biais systématique observé :** la cote A mesurée sur l'ouverture visible est
+toujours 1 à 1,5 mm sous la cote annoncée, sur les trois montures. C'est
+attendu — la drageoir où le verre s'encastre n'est pas visible. Cohérent, donc
+sans effet sur l'échelle, qui vient de la largeur totale.
 
 ### Le sprite a enfin été composité sur un vrai visage
 
@@ -128,15 +138,60 @@ préalable.
 
 ### Ce qui manque encore, précisément
 
-- La **largeur totale au réglet de la `p8-m252`** — sans elle, pas de contrôle.
-- Une **3ᵉ monture de largeur nettement différente** : 134 et 136 mm sont trop
-  proches pour que le protocole ait du sens.
-- Une **vraie photo de profil à plat** de chaque monture. Aucune n'en a : le
-  `profile.png` livré est **entièrement transparent**, ce qui n'affiche aucune
-  branche plutôt qu'une branche de géométrie fausse. Le lot 7 reste donc ouvert.
-- La **vignette « ORIGINE FRANCE »** est encore collée sur le verre de la
-  `p8-m252` et se retrouve dans le sprite. C'est précisément le travail de
-  `app.py`, déjà présent dans ce dépôt.
+### Les branches viennent des photos trois quarts — pas besoin de profil à plat
+
+Une monture vue de trois quarts tourne autour d'un axe **vertical**. Les
+dimensions verticales ne se raccourcissent donc pas du tout : c'est le
+raisonnement de S1, appliqué à l'envers.
+
+- La **hauteur de verre** donne l'échelle, insensible à l'angle.
+- L'**écart des centres optiques**, lui, est raccourci en `cos θ` → **θ se
+  mesure**, il n'est pas supposé.
+- La branche étant perpendiculaire à la face, sa longueur apparente vaut
+  `L·sin θ` : on la redresse en l'étirant de `1/sin θ`.
+
+| Monture | Angle de vue mesuré | Branche redressée | Annoncée | Écart |
+|---|---|---|---|---|
+| `ecaille-claire` | 29,5° | 174,5 mm | 145 mm | +20,3 % |
+| `severine` | 40,0° | 137,1 mm | 147 mm | −6,7 % |
+| `p8-m252` | 38,7° | 160,4 mm | 145 mm | +10,6 % |
+
+**Aucune 3D n'est introduite** : on extrait deux scalaires d'une image, ce que
+le §4 autorise explicitement pour la carte.
+
+La longueur est donc juste à ±20 %, pas au millimètre — les branches ont un
+galbe et un angle d'ouverture que ce modèle plan ignore. C'est suffisant pour
+une branche crédible, insuffisant pour une cote. **Ce n'est pas ajusté sur la
+valeur annoncée** : l'écart affiché est un contrôle, pas un réglage.
+
+⚠️ Une première version cherchait la charnière sur la hauteur de la silhouette.
+Résultat : 12 mm sur une monture, 179 mm sur une autre. Heuristique abandonnée —
+la charnière se **calcule**, à `largeur/2` du centre, projetée par le `cos θ`
+mesuré.
+
+### Le rendu de la branche est corrigé
+
+`drawTemple` appliquait à la branche **l'affine de la face** : elle était donc
+posée au milieu du visage et **rétrécissait** quand la tête tournait, soit
+l'inverse exact du réel. `core/transform.ts` expose désormais `templeAffine`,
+ancrée à la charnière et proportionnelle à `sin(yaw)`. Quatre tests le
+verrouillent, dont « longueur nulle de face » et « ancrage ≠ centre du pont ».
+
+Restent trois défauts visibles à tête tournée : longueur +10 %, un fragment de
+tenon parasite au-dessus de la branche, et l'occlusion derrière l'oreille non
+active dans l'outil hors-ligne.
+
+### Ce qui manque encore, précisément
+
+- **Le protocole de calibration bute sur sa propre hypothèse.** Sur le même
+  visage, deux montures qu'il porte réellement donnent +20,9 mm (136 mm) et
+  ~+12 mm (132 mm) : 8,6 mm d'écart pour 4 mm de différence de monture. Or les
+  deux lui vont. **« La largeur de la monture égale la largeur du visage » porte
+  donc au moins ±4 mm de jeu**, et aucune quantité de montures ne réduira ce
+  jeu. Pour aller plus fin il faudrait une mesure directe des tempes au
+  compas, pas une monture.
+- Le **détourage laisse les branches repliées visibles à travers les verres**,
+  puisqu'elles sont dans la photo. Peu gênant sur un visage, mais visible.
 
 ## Constantes calibrées
 

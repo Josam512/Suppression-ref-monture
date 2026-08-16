@@ -60,6 +60,17 @@ export interface FrameSpec {
   lensCenterR: Pt;
   hingeProfile: Pt;
 
+  /**
+   * ⭐ T10 — grandeurs du sprite de PROFIL, quand il vient d'une photo trois
+   * quarts redressee (`tools/prepare_temple.py`). Optionnelles : un profil
+   * photographie a plat n'en a pas besoin, son echelle etant `spritePxPerMm`.
+   */
+  profilePxPerMm?: number;
+  /** Angle de vue MESURE sur la photo 3/4, en degres. Traçabilite seulement. */
+  profileViewAngleDeg?: number;
+  /** Longueur de branche obtenue apres redressement. C'est un CONTROLE, pas un reglage. */
+  templeRectifiedMm?: number;
+
   calibratedAt: string;
 }
 

@@ -15,11 +15,13 @@ import {
   calibrateWithWornFrame,
 } from '../src/core/calibration.js';
 import { haloOffsets, OVERLAY_PADDING_MM } from '../src/render/composite.js';
+import { frameMetrics } from '../src/core/faceMetrics.js';
+import { renderedTempleLengthPx, spriteAffine, templeAffine } from '../src/core/transform.js';
 import { totalFrameWidthMm } from '../src/core/frameSpec.js';
 import { verdict } from '../src/core/verdict.js';
 
-import { H, LANDMARKS_CAL, W } from './fixtures/landmarks.js';
-import { specForTotalWidthMm } from './fixtures/builders.js';
+import { H, LANDMARKS_CAL, makeFaceAtYaw, W } from './fixtures/landmarks.js';
+import { makeCal, specForTotalWidthMm } from './fixtures/builders.js';
 
 describe('V2-1 — la monture portée comme étalon', () => {
   it('est la source la plus précise des trois, sans être flattée', () => {
@@ -81,5 +83,47 @@ describe('V2-2 — dilatation du sprite sur la monture réelle (§11.6)', () => 
     const spec = specForTotalWidthMm(132);
     expect(totalFrameWidthMm(spec)).toBeCloseTo(132, 6);
     expect(OVERLAY_PADDING_MM).toBeCloseTo(1.5, 6);
+  });
+});
+
+describe('Lot 7 — la branche est perpendiculaire à la face', () => {
+  it('sa longueur rendue est NULLE de face et maximale de profil', () => {
+    const spec = specForTotalWidthMm(132);
+    const at = (yaw: number): number =>
+      renderedTempleLengthPx(spec, frameMetrics(makeFaceAtYaw(yaw), W, H, makeCal(), yaw), 800);
+
+    expect(at(0)).toBeCloseTo(0, 9);
+    expect(at(Math.PI / 6)).toBeGreaterThan(0);
+    expect(at(Math.PI / 3)).toBeGreaterThan(at(Math.PI / 6));
+  });
+
+  it('elle suit sin(yaw), là où la face suit cos(yaw)', () => {
+    // C'est la signature du bug corrigé : appliquer à la branche l'affine de la
+    // face la faisait RÉTRÉCIR quand la tête tourne, soit l'inverse du réel.
+    const spec = specForTotalWidthMm(132);
+    const yaw = Math.PI / 6;
+    const m = frameMetrics(makeFaceAtYaw(yaw), W, H, makeCal(), yaw);
+    const ratio = renderedTempleLengthPx(spec, m, 800) / (800 * m.livePxPerMm / spec.spritePxPerMm);
+    expect(ratio).toBeCloseTo(Math.sin(yaw), 6);
+  });
+
+  it('elle est ancrée à la CHARNIÈRE, pas au centre du pont', () => {
+    const spec = specForTotalWidthMm(132);
+    const yaw = Math.PI / 6;
+    const m = frameMetrics(makeFaceAtYaw(yaw), W, H, makeCal(), yaw);
+
+    const face = spriteAffine(spec, m);
+    const temple = templeAffine(spec, m, 1);
+    // Le bord externe de la face est à 66 mm du pont : les deux ancrages ne
+    // peuvent pas coïncider, sinon la branche partirait du milieu du visage.
+    const ecartPx = Math.abs(temple.e - face.e);
+    expect(ecartPx).toBeGreaterThan(60 * m.livePxPerMm);
+  });
+
+  it('les deux côtés sont symétriques', () => {
+    const spec = specForTotalWidthMm(132);
+    const yaw = Math.PI / 6;
+    const m = frameMetrics(makeFaceAtYaw(yaw), W, H, makeCal(), yaw);
+    expect(templeAffine(spec, m, 1).a).toBeCloseTo(-templeAffine(spec, m, -1).a, 9);
   });
 });
