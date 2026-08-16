@@ -207,6 +207,17 @@ function loop(): void {
 
 **Règle définitive :** la boucle de rendu ne doit **jamais** pouvoir s'arrêter sur une exception, et elle doit afficher à l'écran un compteur d'échecs consécutifs (`détection perdue : 12 frames`). Un échec silencieux est pire qu'un crash — mais un compteur qui monte alors que rien ne va mal est presque aussi nuisible : il apprend à ignorer l'alarme. **Une frame répétée n'incrémente pas le compteur.**
 
+> 🔴 **Corollaire découvert au banc navigateur (§8.3), et non à la relecture : le chemin d'échec
+> doit DESSINER.** Une première implémentation incrémentait bien le compteur dans `onLost`, mais ne
+> repeignait le canvas que dans `onFrame` — c'est-à-dire uniquement quand un visage **était**
+> détecté. Résultat : détection perdue ⇒ canvas vide ou figé sur la dernière image, et le compteur
+> exigé ci-dessus n'apparaissait **jamais**. La panne était strictement indiscernable d'un
+> fonctionnement normal : le bug #3 reconstitué à l'identique, sous une autre forme.
+>
+> Le contrat exige donc explicitement : **`onLost` efface le canvas et dessine l'overlay d'échec.**
+> Aucune relecture de code n'avait attrapé ça — il a fallu ouvrir un navigateur sans visage devant
+> la caméra. C'est la raison d'être du banc du §8.3.
+
 ---
 
 ### Bug #4 — 🟠 TensorFlow.js + Facemesh chargés depuis un CDN
@@ -769,6 +780,18 @@ export function classify(deltaMm: number, cal: UserCalibration): Status {
 }
 ```
 
+> 🔴 **Conséquence mesurée, à ne PAS « réparer ».** Une fois B2, B4 et T8 appliqués ensemble,
+> conclure exige `|Δ| > t + u`. Avec une carte sur un visage de 138 mm : `4,14 + 3,45 = 7,59 mm`.
+> **L'exemple emblématique du contrat — « 132 mm sur 138 mm, légèrement sous-taillée » — devient
+> donc `'indetermine'`.** Ce n'est pas une régression : c'est la précision réelle de la mesure,
+> qui était jusque-là masquée par un `classify` qui ne regardait l'incertitude que pour l'iris.
+>
+> La tentation sera d'abaisser `relError` ou d'élargir le seuil pour « retrouver » l'ancien
+> comportement. Ce serait annuler B4 et revenir au mode d'échec que tout ce document combat :
+> **afficher une conclusion que la mesure ne porte pas.** Le produit ne s'en trouve pas affaibli —
+> l'image reste juste, les deux chiffres restent affichés avec leurs marges, et c'est la personne
+> qui regarde (§0.0.1). Un test verrouille ce comportement.
+
 **Ce que `'indetermine'` déclenche — et ce qu'il n'affiche pas.** Ce n'est pas un échec, et ce n'est **pas un libellé montré au client** (§0.0.1) : on n'affiche jamais un jugement flou. Il déclenche, **une seule fois**, la proposition de calibration carte. Si la carte a déjà été faite, on n'insiste pas : on affiche les deux chiffres avec leurs marges et **on laisse la personne regarder l'image**, qui reste juste dans tous les cas.
 
 **Affichage obligatoire de l'incertitude.** En mode iris : *« Votre visage : environ 138 mm (± 6 mm) »*. En mode carte : *« Votre visage : 138 mm (± 3 mm) »*. Ne jamais afficher un nombre nu qui suggère une précision inexistante.
@@ -809,7 +832,18 @@ const u = decentrementUncertaintyMm(spec, cal);
 const decentrementMm = (u < DECENTREMENT_THRESHOLD_MM / 2) ? measured : null;
 ```
 
-En mode iris le diagnostic est donc **masqué s'il n'est pas concluant, pas approximé** — mais il l'est désormais pour une raison mesurée, et non parce que la mesure vient de l'iris.
+Le diagnostic est donc **masqué s'il n'est pas concluant, pas approximé** — mais pour une raison mesurée, et non parce que la mesure vient de l'iris.
+
+> 🔴 **Deuxième conséquence mesurée.** Sur une monture courante (centre optique à ~30 mm du pont),
+> l'incertitude vaut **1,29 mm en mode iris**, très en dessous de la demi-tolérance de 1,5 mm.
+> **Le décentrement est donc désormais AFFICHÉ en mode iris**, contrairement à ce que prescrivait
+> la version d'origine. Elle le masquait au motif que « le décentrement se joue à 3 mm, en dessous
+> de la barre d'erreur de ±6 mm » — mais ces ±6 mm portent sur la **largeur du visage**, pas sur un
+> écart mesuré à 30 mm de l'ancrage. On masquait une information exploitable sur la foi d'une
+> comparaison entre deux grandeurs sans rapport.
+>
+> Le masquage n'est pas mort pour autant : sur une monture à long levier (~40 mm), l'iris passe à
+> 1,72 mm et le décentrement redevient non concluant. Deux tests couvrent les deux côtés du seuil.
 
 **Règle 3 — conditions de pose.** Aucune légende chiffrée n'est affichée si : yaw > 12°, ou roll > 15°, ou détection perdue depuis > 5 frames, ou aucune échelle disponible. **Ne jamais afficher un chiffre à l'air confiant sur une mesure dégradée.**
 
@@ -865,8 +899,13 @@ export interface Affine { a: number; b: number; c: number; d: number; e: number;
 export function spriteAffine(spec: FrameSpec, m: FrameMetrics): Affine;
 
 /** Applique l'affine à un point du sprite. Utilisée par le rendu ET par le décentrement. */
-export function spriteToScreen(p: Pt, m: FrameMetrics): Pt;
+export function spriteToScreen(p: Pt, spec: FrameSpec, m: FrameMetrics): Pt;
 ```
+
+> ⚠️ **Correction relevée à l'implémentation.** Une première rédaction de cette section déclarait
+> `spriteToScreen(p, m)` sans `spec`, alors que l'affine a besoin de `spritePxPerMm` et de
+> `bridgeCenter`, qui vivent tous deux dans le spec. La signature à deux paramètres était
+> inapplicable.
 
 > ⚠️ `render/composite.ts` **n'a pas le droit** de composer sa propre matrice à coups de
 > `translate/rotate/scale` : il applique `spriteAffine()` via `ctx.setTransform(...)`. Un
@@ -991,8 +1030,15 @@ export function verdict(
   spec: FrameSpec,
   w: number,
   h: number,
+  yawRad: number,          // ⭐ T9 — voir ci-dessous
 ): SizeVerdict | null;
 ```
+
+> ⭐ **T9 — trou de contrat relevé à l'implémentation.** La signature figée comptait 5 paramètres,
+> sans `yawRad`. Or la **règle 3 refuse justement de répondre au-delà de 12° de yaw**, et le
+> décentrement exige de projeter les centres optiques, ce qui suppose l'affine, donc le yaw. La
+> signature à 5 paramètres rendait la règle 3 littéralement inimplémentable. Le paramètre est
+> ajouté en dernière position ; `w` et `h` restent avant lui pour ne pas déplacer l'existant.
 
 ```typescript
 export interface SizeVerdict {
@@ -1219,9 +1265,15 @@ grep -rn "facialTransformationMatrixes" src/core src/render && fail "Matrice Med
 
 # — h. ⭐ NOUVEAU : aucune constante de taille en dur (§0.0.3).
 #     Tout littéral entre 80 et 200 hors constante exportée est suspect.
-grep -rnE "=\s*1[0-9]{2}(\.[0-9]+)?\s*;" src/core --include=*.ts \
-  | grep -v "^\S*:.*export const" \
+grep -rnE "=[[:space:]]*1[0-9]{2}(\.[0-9]+)?[[:space:]]*;" src/core --include=*.ts \
+  | grep -v "export const" \
   && fail "Constante de taille en dur (§0.0.3) — l'exporter et la documenter"
+
+# ⚠️ INDISPENSABLE. Sans ce exit 0, le code de retour du hook serait celui du
+# DERNIER grep — lequel vaut 1 quand il ne trouve rien, c'est-à-dire quand tout
+# va bien. Le hook refuserait alors tous les commits sains, et la réaction
+# naturelle serait de le désinstaller.
+exit 0
 ```
 
 Un commit qui échoue au hook n'existe pas. L'agent ne peut pas passer outre sans que tu le voies dans le diff du hook lui-même — **surveille ce fichier à chaque relecture.**
@@ -1552,6 +1604,20 @@ Table de correspondance entre l'analyse (`docs/rapport-essayage-virtuel.md`) et 
 | **T6** | `EXPECTED_MIN_TESTS` incohérent | §9.0.b |
 | **T7** | husky contredisait la règle 9.1-8 | §9.0.a |
 | **T8** | `relError` de `worn-frame` trop optimiste | §11.3 |
+| **T9** | `verdict()` figé à 5 paramètres, sans le yaw qu'exige la règle 3 | §7 |
+
+### Relevé pendant l'implémentation (ce que la relecture n'avait pas vu)
+
+| Constat | Comment il a été trouvé | Où |
+|---|---|---|
+| `onLost` incrémentait le compteur d'échecs sans jamais le **dessiner** : détection perdue = canvas vide, panne indiscernable du fonctionnement normal | Banc navigateur, caméra sans visage | §1 bug #3 |
+| `spriteToScreen(p, m)` était inapplicable : l'affine a besoin du `spec` | Compilation | §6.1 |
+| Le hook renvoyait le code du dernier `grep` — donc 1 quand tout allait bien | Exécution du hook sur un dépôt sain | §9.0.a |
+| « 132 mm sur 138 mm → sous-taillée » devient `'indetermine'` une fois B2+B4+T8 réunis | Tests | §5 règle 1 bis |
+| Le décentrement est en réalité **exploitable en mode iris** ; l'ancienne interdiction reposait sur une comparaison entre deux grandeurs sans rapport | Tests | §5 règle 2 |
+| Le barrage B2 refusait un commentaire citant le nom du champ interdit — c'est le commentaire qui a été réécrit, pas le barrage | Suite de tests | `core/frameSpec.ts` |
+
+**État d'exécution :** lots 0 à 7 implémentés, 49 tests au vert, typecheck `strict` clean, banc navigateur vert, barrages du hook vérifiés en tentant de les contourner. **Lot 8 (calibration humaine) non fait — il ne peut pas l'être par un agent.**
 
 **Arbitrages humains intégrés :** seuil proportionnel borné 3–5 mm (§5) · rotation de tête seulement en cas de doute (§4) · contrat corrigé avant tout code.
 

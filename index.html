@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Essayage virtuel — vérification de taille réelle</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, -apple-system, sans-serif;
+      }
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #111;
+        color: #eee;
+      }
+      /* Le miroir s'applique UNE SEULE FOIS, ici (CLAUDE.md §6).
+         core/ travaille toujours en coordonnées non miroitées. */
+      .stage {
+        position: relative;
+        width: fit-content;
+        transform: scaleX(-1);
+      }
+      .stage video,
+      .stage canvas {
+        display: block;
+      }
+      .stage canvas {
+        position: absolute;
+        inset: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
