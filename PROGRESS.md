@@ -177,9 +177,35 @@ l'inverse exact du réel. `core/transform.ts` expose désormais `templeAffine`,
 ancrée à la charnière et proportionnelle à `sin(yaw)`. Quatre tests le
 verrouillent, dont « longueur nulle de face » et « ancrage ≠ centre du pont ».
 
-Restent trois défauts visibles à tête tournée : longueur +10 %, un fragment de
-tenon parasite au-dessus de la branche, et l'occlusion derrière l'oreille non
-active dans l'outil hors-ligne.
+### Les quatre défauts du rendu, et leur correctif
+
+| Défaut | Cause | Correctif |
+|---|---|---|
+| Branche 10 à 20 % trop longue | le modèle plan ignore le galbe et l'angle d'ouverture | **la longueur vient du réglet**, comme la largeur de la face ; le redressement ne sert plus qu'à la forme, et l'écart reste affiché comme contrôle |
+| Fragment de tenon en l'air | la coupe à la charnière est une verticale, le tenon ne l'est pas | on ne garde que la **composante connexe** la plus grande |
+| Branches repliées visibles dans les verres | elles sont dans la photo studio, donc dans le sprite | l'ouverture d'un verre étant convexe par ligne, tout ce qui est **entre le premier et le dernier pixel d'ouverture** d'une rangée est effacé |
+| Occlusion inactive hors ligne | l'outil ne passait pas le contour du visage | il le passe — et cela a révélé le bug ci-dessous |
+
+### 🔴 `destination-out` perçait un trou dans tout ce qui était dessous
+
+L'occlusion s'appliquait **directement sur le canvas principal**. Or
+`destination-out` efface tout ce qui est déjà peint à cet endroit, pas
+seulement la branche.
+
+Dans l'application le canvas est transparent au-dessus d'un `<video>`, donc le
+trou tombait sur du vide et **ne se voyait pas**. Sur un outil qui dessine une
+photo dans le même canvas, il a percé le visage en noir d'un seul coup. Le
+défaut était là depuis le début, masqué par la configuration.
+
+Deux correctifs, tous deux nécessaires :
+1. l'occlusion se fait sur un **calque isolé**, composé ensuite — elle ne peut
+   plus atteindre quoi que ce soit d'autre ;
+2. la branche est dessinée **avant** la face, ce qui est aussi le bon ordre
+   physique : la branche passe derrière la tête, la face est devant.
+
+⚠️ Le banc du §8.3 a immédiatement signalé ce changement d'ordre : ses deux
+contrôles de yaw mesuraient la bounding box peinte, branche comprise. Le banc
+utilise désormais un profil vide, puisqu'il mesure la face.
 
 ### Ce qui manque encore, précisément
 

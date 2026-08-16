@@ -69,6 +69,20 @@ export function drawFrame(
   faceOutline: Path2D | null,
   options: DrawOptions = {},
 ): void {
+  // ⚠️ ORDRE CRITIQUE : la branche D'ABORD, la face ensuite.
+  //
+  // L'occlusion de la branche se fait par `destination-out` sur le contour du
+  // visage. Or `destination-out` efface TOUT ce qui est deja peint a cet
+  // endroit : en dessinant la face avant, on l'effaçait avec la branche, et la
+  // monture disparaissait du milieu du visage des que la tete tournait.
+  //
+  // Dessiner la branche en premier est aussi le bon ordre physique : la branche
+  // passe derriere la tete, la face est devant.
+  const templeAlpha = smoothstep(TEMPLE_FADE_IN, TEMPLE_FADE_FULL, Math.abs(m.yawRad));
+  if (templeAlpha > 0.01) {
+    drawTemple(ctx, sprites.profile, m, templeAlpha, faceOutline);
+  }
+
   // ⚠️ yawRad se lit sur `m` (T2). Ne PAS le repasser en paramètre : deux
   // sources pour la même grandeur finissent toujours par diverger.
   const t = spriteAffine(sprites.front.spec, m);
@@ -83,9 +97,4 @@ export function drawFrame(
   ctx.setTransform(t.a, t.b, t.c, t.d, t.e, t.f);
   ctx.drawImage(sprites.front.img, 0, 0); // toute la géométrie est dans l'affine
   ctx.restore();
-
-  const templeAlpha = smoothstep(TEMPLE_FADE_IN, TEMPLE_FADE_FULL, Math.abs(m.yawRad));
-  if (templeAlpha > 0.01) {
-    drawTemple(ctx, sprites.profile, m, templeAlpha, faceOutline);
-  }
 }

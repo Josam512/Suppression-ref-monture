@@ -118,9 +118,16 @@ export function runProof(): ProofCase[] {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (ctx === null) throw new Error('canvas 2D indisponible');
 
+  // ⚠️ Profil VIDE : ce banc mesure la FACE. Depuis que la branche est peinte
+  // avant elle, un profil non vide entrerait dans la bounding box mesuree et
+  // fausserait les controles de yaw — le banc l'a d'ailleurs signale.
+  const emptyProfile = document.createElement('canvas');
+  emptyProfile.width = 1;
+  emptyProfile.height = 1;
+
   const sprites = {
     front: { img: sprite, spec: SPEC },
-    profile: { img: sprite, spec: SPEC },
+    profile: { img: emptyProfile, spec: SPEC },
   };
 
   const paint = (lm: ReturnType<typeof makeFace>, yaw: number, paddingMm = 0): Painted => {

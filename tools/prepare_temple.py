@@ -130,10 +130,25 @@ def main() -> int:
         f"(face {'a droite' if temple_on_left else 'a gauche'}, demi-face {half_front_px:.0f} px)"
     )
 
-    temple_solid = crop_solid[:, band]
+    temple_solid = crop_solid[:, band].copy()
     if temple_solid.sum() == 0:
         print("❌ aucune branche visible au-dela de la charniere.")
         return 1
+
+    # ⚠️ La coupe a la charniere est une VERTICALE, or le tenon ne l'est pas :
+    # quelques ilots de face debordent dans la bande et se retrouvaient peints
+    # en l'air au-dessus de la branche. On ne garde que la composante connexe
+    # la plus grande — la branche elle-meme.
+    labels, parts = label_holes(temple_solid)
+    if len(parts) > 1:
+        # ⚠️ On repere la composante par son NUMERO, pas par son centroide : sur
+        # une branche galbee le centroide tombe hors de la forme, et le filtre
+        # gardait alors l'ilot en jetant la branche.
+        best = max(range(len(parts)), key=lambda i: parts[i]["area"])
+        keep = labels == (best + 1)
+        drop = int(temple_solid.sum() - keep.sum())
+        temple_solid = temple_solid & keep
+        print(f"  {len(parts) - 1} ilot(s) de tenon ecarte(s) ({drop} px)")
 
     # ── Redressement : la branche est raccourcie en sin(theta) le long de sa
     #    longueur, et pas du tout en hauteur.
@@ -146,13 +161,20 @@ def main() -> int:
     rectified_mm = flat.width / scale
     ecart = (rectified_mm - args.branche) / args.branche
     print(
-        f"  branche : {src.width} px apparents → redressee {rectified_mm:.1f} mm "
-        f"pour {args.branche} mm annonces → {ecart * 100:+.1f} %"
+        f"  branche redressee {rectified_mm:.1f} mm pour {args.branche} mm au reglet "
+        f"→ ecart {ecart * 100:+.1f} % [CONTROLE]"
     )
-    print(
-        "  ⚠️ cet ecart est un CONTROLE, pas un reglage : la longueur redressee "
-        "n'est ajustee sur rien."
-    )
+
+    # ── La longueur finale vient du REGLET, pas de la photo.
+    #
+    # Meme principe que la face, dont l'echelle vient de la largeur mesuree et
+    # non de l'image : une cote mesuree prime toujours sur une cote reconstruite.
+    # Le redressement sert a la FORME ; la cote fixe la longueur. L'ecart
+    # ci-dessus reste affiche comme controle — il mesure ce que le modele plan
+    # ignore : le galbe de la branche et son angle d'ouverture.
+    target_px = max(1, int(round(args.branche * scale)))
+    flat = flat.resize((target_px, flat.height), Image.LANCZOS)
+    print(f"  longueur calee sur le reglet : {flat.width / scale:.1f} mm")
 
     out_dir = Path(args.out) / args.slug
     out_dir.mkdir(parents=True, exist_ok=True)

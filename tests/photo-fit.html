@@ -12,6 +12,7 @@
       import { parseFrameSpec } from '/src/core/frameSpec.ts';
       import { drawFrame } from '/src/render/composite.ts';
       import { verdict, legend } from '/src/core/verdict.ts';
+      import { faceOutlinePath } from '/src/tracking/landmarker.ts';
 
       const load = (src) =>
         new Promise((ok, ko) => {
@@ -52,7 +53,7 @@
           ctx,
           { front: { img: front, spec }, profile: { img: profile, spec } },
           m,
-          null,
+          faceOutlinePath(det.landmarks, W, H),
           { overlayPaddingMm: paddingMm },
         );
 
