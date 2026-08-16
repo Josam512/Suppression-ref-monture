@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Sonde landmarks sur photo fixe — CI uniquement</title>
+  </head>
+  <body>
+    <p id="status">prêt</p>
+    <script type="module">
+      import { FaceLandmarker, FilesetResolver } from '/node_modules/@mediapipe/tasks-vision/vision_bundle.mjs';
+      import { FACE_L, FACE_R, SELLION, irisWidthPx, faceWidthPx } from '/src/core/faceMetrics.ts';
+
+      const fileset = await FilesetResolver.forVisionTasks('/wasm');
+      const landmarker = await FaceLandmarker.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: '/models/face_landmarker.task', delegate: 'CPU' },
+        runningMode: 'IMAGE',
+        numFaces: 1,
+        outputFacialTransformationMatrixes: true,
+      });
+
+      /**
+       * Analyse une photo fixe et renvoie les grandeurs de la chaine de mesure,
+       * plus une image annotee en dataURL pour inspection humaine.
+       */
+      window.__probe = async (url) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        await new Promise((ok, ko) => {
+          img.onload = ok;
+          img.onerror = () => ko(new Error('image ' + url));
+          img.src = url;
+        });
+
+        const res = landmarker.detect(img);
+        const lm = res.faceLandmarks[0];
+        if (!lm) return { url, found: false };
+
+        const W = img.naturalWidth;
+        const H = img.naturalHeight;
+
+        const c = document.createElement('canvas');
+        c.width = W;
+        c.height = H;
+        const ctx = c.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+
+        const px = (i) => ({ x: lm[i].x * W, y: lm[i].y * H });
+        const L = px(FACE_L);
+        const R = px(FACE_R);
+
+        // Nuage complet, discret.
+        ctx.fillStyle = 'rgba(80, 220, 160, 0.5)';
+        for (const p of lm) ctx.fillRect(p.x * W - 1, p.y * H - 1, 2, 2);
+
+        // La grandeur qui porte toute la mesure : 234 ↔ 454.
+        ctx.strokeStyle = '#ff3b30';
+        ctx.lineWidth = Math.max(3, W / 400);
+        ctx.beginPath();
+        ctx.moveTo(L.x, L.y);
+        ctx.lineTo(R.x, R.y);
+        ctx.stroke();
+        for (const p of [L, R]) {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, ctx.lineWidth * 2.2, 0, 6.283);
+          ctx.fillStyle = '#ff3b30';
+          ctx.fill();
+        }
+
+        const S = px(SELLION);
+        ctx.fillStyle = '#0a84ff';
+        ctx.beginPath();
+        ctx.arc(S.x, S.y, ctx.lineWidth * 2.2, 0, 6.283);
+        ctx.fill();
+
+        const mat = res.facialTransformationMatrixes[0];
+        const yawRad = mat ? Math.atan2(mat.data[8], mat.data[10]) : null;
+
+        return {
+          url,
+          found: true,
+          imageW: W,
+          imageH: H,
+          faceWidthPx: faceWidthPx(lm, W, H),
+          irisWidthPx: irisWidthPx(lm, W, H),
+          yawDeg: yawRad === null ? null : (yawRad * 180) / Math.PI,
+          faceL: L,
+          faceR: R,
+          sellion: S,
+          annotated: c.toDataURL('image/jpeg', 0.85),
+        };
+      };
+
+      document.getElementById('status').textContent = 'ready';
+    </script>
+  </body>
+</html>
