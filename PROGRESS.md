@@ -33,14 +33,14 @@ L'écran d'accueil propose explicitement les deux, avec leur public, leur étalo
 | 4 | `prep/DetourTool.tsx` + `prep/alphaBBox.ts` (B3) | ✅ |
 | 5 | `core/transform.ts` (T3), `render/composite.ts`, correctif S1 | ✅ |
 | 6 | `core/verdict.ts` : seuil proportionnel borné, `classify` par intervalles (B2) | ✅ |
-| 7 | `render/temple.ts` : branche + occlusion | ✅ code écrit, **rendu jamais vu sur un visage** |
+| 7 | `render/temple.ts` : branche + occlusion | ⚠️ code écrit ; **aucune photo de profil à plat**, donc `profile.png` transparent |
 | 8 | Calibration humaine des deux constantes | ❌ **à faire — bloquant pour la mise en ligne** |
 | V2-0 | `assertSameModel` | ✅ |
 | V2-1 | `calibrateWithWornFrame` (2 %, T8) | ✅ |
 | V2-2 | Sélecteur de coloris + dilatation `OVERLAY_PADDING_MM` | ⚠️ mesurée au banc ; contrôle « aucun liseré » ouvert |
 | V2-3 | Pointage en 2 clics de la monture portée | ✅ |
 
-**Contrôles automatiques :** 56 tests Vitest · `tsc --noEmit` en `strict` sans erreur ·
+**Contrôles automatiques :** 64 tests Vitest · `tsc --noEmit` en `strict` sans erreur ·
 `npm run build` OK · `npm run smoke` : 19 contrôles verts, dont la preuve métrologique ci-dessous.
 
 ## La preuve que l'image est juste
@@ -66,6 +66,78 @@ les pixels peints et les reconvertit en millimètres**. Dernier passage :
 > n'établit **rien** sur la justesse de la mesure du visage réel, qui dépend des deux constantes
 > non calibrées ci-dessous, ni sur le rendu d'une vraie monture sur un vrai visage.
 
+
+## 🔴 Première confrontation aux vraies montures et aux vrais visages — 2026-08-16
+
+### Trois montures réelles sont préparées
+
+`public/frames/` n'est plus vide. Détourage automatique depuis les photos studio
+(`tools/prepare_frame.py`), fond ET verres rendus transparents, centres optiques
+détectés comme trous fermés dans la silhouette.
+
+| Monture | A | pont | B | largeur totale | échelle | contrôle A+pont |
+|---|---|---|---|---|---|---|
+| `ecaille-claire` | 47 | 22 | 43 | **136,0 mm** (réglet) | 6,787 px/mm | ✅ 2,3 % |
+| `severine` | 49 | 19 | 42 | **134,0 mm** (réglet) | 7,463 px/mm | ✅ 1,9 % |
+| `p8-m252` | 43 | 23 | 38 | 139,5 mm *(déduite)* | 6,282 px/mm | ⚠️ impossible |
+
+Le contrôle croisé compare l'écart centre-à-centre des deux verres à `A + pont`,
+la relation du système boxing. Sur les deux montures dont la largeur vient du
+réglet, il passe à 2 % — **la chaîne de l'échelle 1 est donc vérifiée sur de
+vraies montures**, pas seulement sur un rectangle de synthèse.
+
+⚠️ La `p8-m252` n'a pas de largeur au réglet : son échelle est déduite de
+`A + pont`, ce qui consomme la redondance et supprime le contrôle. Les 139,5 mm
+obtenus sont vraisemblablement surestimés de 2 à 3 %. **À remesurer.**
+
+### Le sprite a enfin été composité sur un vrai visage
+
+`scripts/fit-on-photo.mjs` pose une monture préparée sur une photo fixe, à
+l'échelle réelle. Le contrôle décisif est l'**auto-superposition** : on repose
+sur la personne la monture qu'elle porte réellement.
+
+**Résultat : le sprite se confond avec la monture réelle en largeur.** Les bords
+externes coïncident. C'était le dernier maillon jamais vérifié du projet.
+
+Deux choses se voient aussitôt, et ce sont exactement les deux constantes du
+lot 8 : le sprite se pose **trop bas** (`VERTICAL_OFFSET_MM` provisoire à 3 mm),
+et la légende annonce **« votre visage 115 mm »** pour un homme adulte.
+
+### 🔴 `FACE_WIDTH_CORRECTION_MM` : l'écart est de l'ordre de 20 mm, pas de 5 à 10
+
+Deux essais, deux visages, deux montures de largeur connue au réglet :
+
+| Visage | Monture portée | Largeur réelle | Lue sur 234/454 | Écart |
+|---|---|---|---|---|
+| homme | ecaille-claire | 136,0 mm | 115,1 mm | **+20,9 mm** |
+| femme | severine | 134,0 mm | 119,7 mm | **+14,3 mm** |
+
+**Dispersion : 6,6 mm — au-delà des 3 mm du protocole. On ne fige donc pas.**
+
+Trois lectures possibles, à trancher par l'humain :
+1. mon pointage des bords est fait à l'œil sur une image agrandie, à ±2 % près ;
+2. les deux montures ne « vont » pas également bien aux deux visages, or tout le
+   protocole repose sur cette hypothèse ;
+3. l'écart n'est peut-être pas une constante en millimètres mais une proportion
+   — les rapports valent 1,18 et 1,12, qui ne concordent pas mieux.
+
+Ce qui est acquis, en revanche : **l'écart est bien plus grand que les 5 à 10 mm
+estimés dans le rapport**, et avec la constante à 0 l'application annonce à un
+homme adulte un visage de 115 mm. Le lot 8 n'est pas un raffinement, c'est un
+préalable.
+
+### Ce qui manque encore, précisément
+
+- La **largeur totale au réglet de la `p8-m252`** — sans elle, pas de contrôle.
+- Une **3ᵉ monture de largeur nettement différente** : 134 et 136 mm sont trop
+  proches pour que le protocole ait du sens.
+- Une **vraie photo de profil à plat** de chaque monture. Aucune n'en a : le
+  `profile.png` livré est **entièrement transparent**, ce qui n'affiche aucune
+  branche plutôt qu'une branche de géométrie fausse. Le lot 7 reste donc ouvert.
+- La **vignette « ORIGINE FRANCE »** est encore collée sur le verre de la
+  `p8-m252` et se retrouve dans le sprite. C'est précisément le travail de
+  `app.py`, déjà présent dans ce dépôt.
+
 ## Constantes calibrées
 
 | Constante | Valeur | Calibrée le | Sur combien d'essais |
@@ -84,14 +156,12 @@ les pixels peints et les reconvertit en millimètres**. Dernier passage :
 1. **Lot 8 — calibration humaine.** Aucun agent ne peut mesurer un vrai visage devant une vraie
    webcam. Seule tâche strictement bloquante avant une mise en ligne.
 
-2. **Aucune monture réelle n'est préparée.** `public/frames/` est vide : il faut une photo réelle
-   détourée, que seul l'opticien possède. **Aucun sprite factice n'a été créé** — un faux sprite
-   aurait donné l'illusion que le rendu est validé alors qu'il ne l'est pas. Le rectangle du banc
-   de mesure vit dans `tests/`, jamais dans `public/frames/`.
+2. ✅ **Trois montures réelles sont préparées** (voir plus haut). Reste la largeur au réglet de
+   la `p8-m252` et une monture de largeur nettement différente.
 
-3. **Le rendu n'a jamais été vu sur un visage.** La géométrie est prouvée au pixel près, mais la
-   mire de synthèse de Chromium ne contient aucun visage : le sprite n'a jamais été composité sur
-   de vrais landmarks. Les critères visuels des lots 5, 7 et V2-2 restent ouverts.
+3. ✅ **Le rendu a été vu sur un vrai visage**, et il se superpose à la monture réellement portée.
+   Restent ouverts : le lot 7 (aucune photo de profil à plat) et le contrôle V2-2 (coloris clair
+   sur monture noire).
 
 4. **Le banc `.y4m` n'est pas alimenté.** Une courte vidéo de visage dans `tests/fixtures/`
    permettrait de tester le compositing sur de vrais landmarks en CI. À produire par l'humain.
