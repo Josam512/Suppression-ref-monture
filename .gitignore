@@ -1,5 +1,10 @@
 node_modules/
 dist/
+
+# WASM MediaPipe recopié depuis node_modules par scripts/vendor-mediapipe.mjs
+# (~35 Mo). Reproductible via package-lock.json, donc inutile de le versionner.
+# Le MODÈLE, lui, est bien commité dans public/models/ : il ne vient pas de npm.
+public/mediapipe/
 .DS_Store
 *.local
 

@@ -1,11 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 /**
- * Flux webcam + canvas superposé — CLAUDE.md §2 et §1 bug #3 / bug #5.
- *
- * Lot 1 : la boucle ne fait encore que nettoyer le canvas. Elle est écrite
- * dès maintenant sous sa forme définitive (celle qui ne peut pas mourir),
- * pour que le lot 2 n'ait qu'à y brancher le FaceLandmarker.
+ * Flux webcam + canvas superposé — CLAUDE.md §2, §1 bug #3, §1 bug #5.
  */
 
 export type CameraStatus = 'loading' | 'ready' | 'error';
@@ -17,9 +13,16 @@ const IDEAL_HEIGHT = 720;
 /** Au-delà, on affiche à l'écran que la détection est perdue (§1 bug #3). */
 const LOST_DETECTION_WARN_FRAMES = 5;
 
+/** Le HUD ne se rafraîchit pas à chaque frame : ce serait 60 rendus React/s. */
+const HUD_REFRESH_MS = 500;
+
 export interface CameraProps {
-  /** Appelée à chaque frame, après nettoyage du canvas. Ne doit jamais throw silencieusement. */
-  onFrame?: (ctx: CanvasRenderingContext2D, video: HTMLVideoElement) => void;
+  /**
+   * Appelée à chaque frame, après nettoyage du canvas.
+   * Renvoyer `false` signifie « rien de détecté » et alimente le compteur de
+   * perte. `true` ou rien signifie que la frame est exploitée.
+   */
+  onFrame?: (ctx: CanvasRenderingContext2D, video: HTMLVideoElement) => boolean | void;
 }
 
 export function Camera({ onFrame }: CameraProps) {
@@ -28,9 +31,16 @@ export function Camera({ onFrame }: CameraProps) {
   const rafRef = useRef<number | null>(null);
   const runningRef = useRef(false);
 
+  // ⚠️ onFrame passe par une ref, JAMAIS par les dépendances de l'effet.
+  // Sinon chaque rendu de React (ne serait-ce que le compteur de fps)
+  // relancerait getUserMedia et ferait clignoter la caméra.
+  const onFrameRef = useRef(onFrame);
+  onFrameRef.current = onFrame;
+
   const [status, setStatus] = useState<CameraStatus>('loading');
   const [message, setMessage] = useState('Ouverture de la caméra…');
-  const [failedFrames, setFailedFrames] = useState(0);
+  const [lostFrames, setLostFrames] = useState(0);
+  const [fps, setFps] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -39,9 +49,11 @@ export function Camera({ onFrame }: CameraProps) {
     /**
      * ⚠️ RÈGLE DÉFINITIVE (§1 bug #3) : cette boucle ne doit JAMAIS pouvoir
      * s'arrêter sur une exception. Elle replanifie avant toute chose, et
-     * chaque échec est rendu VISIBLE — un échec silencieux est pire qu'un crash.
+     * chaque perte est rendue VISIBLE — un échec silencieux est pire qu'un crash.
      */
-    let consecutiveFailures = 0;
+    let consecutiveLost = 0;
+    let framesSinceHud = 0;
+    let hudSince = performance.now();
 
     const loop = () => {
       rafRef.current = requestAnimationFrame(loop);
@@ -52,18 +64,25 @@ export function Camera({ onFrame }: CameraProps) {
       const ctx = canvas?.getContext('2d');
       if (!video || !canvas || !ctx) return;
 
+      let lost = false;
       try {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        onFrame?.(ctx, video);
-        if (consecutiveFailures !== 0) {
-          consecutiveFailures = 0;
-          setFailedFrames(0);
-        }
+        lost = onFrameRef.current?.(ctx, video) === false;
       } catch (err) {
-        consecutiveFailures++;
-        setFailedFrames(consecutiveFailures);
-        // Visible en console ET à l'écran : on ne masque jamais une perte.
-        console.error(`Erreur de rendu (frame ${consecutiveFailures}) :`, err);
+        lost = true;
+        console.error('Erreur de rendu :', err);
+      }
+
+      if (lost) consecutiveLost++;
+      else consecutiveLost = 0;
+
+      framesSinceHud++;
+      const now = performance.now();
+      if (now - hudSince >= HUD_REFRESH_MS) {
+        setFps(Math.round((framesSinceHud * 1000) / (now - hudSince)));
+        setLostFrames(consecutiveLost);
+        framesSinceHud = 0;
+        hudSince = now;
       }
     };
 
@@ -71,7 +90,7 @@ export function Camera({ onFrame }: CameraProps) {
       try {
         if (!navigator.mediaDevices?.getUserMedia) {
           throw new Error(
-            "navigator.mediaDevices est indisponible. La page doit être servie depuis " +
+            'navigator.mediaDevices est indisponible. La page doit être servie depuis ' +
               'un secure context : http://localhost:5173 via `npm run dev`, jamais un ' +
               'fichier ouvert en file:// (§1 bug #5).',
           );
@@ -91,7 +110,7 @@ export function Camera({ onFrame }: CameraProps) {
         video.srcObject = stream;
 
         // §2 : dimensionner le canvas sur les métadonnées, PUIS SEULEMENT
-        // démarrer la boucle. L'inverse donne un canvas à 0×0 et un écran noir.
+        // démarrer la boucle. L'inverse donne un canvas 0×0 et un écran noir.
         video.onloadedmetadata = () => {
           if (cancelled) return;
           const canvas = canvasRef.current;
@@ -122,13 +141,14 @@ export function Camera({ onFrame }: CameraProps) {
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
       stream?.getTracks().forEach((t) => t.stop());
     };
-  }, [onFrame]);
+  }, []);
 
   return (
     <div className="camera">
       <div className={`status status--${status}`} role="status">
         <span className="status__dot" />
         {message}
+        {status === 'ready' && <span className="status__fps">{fps} fps</span>}
       </div>
 
       {/*
@@ -142,9 +162,9 @@ export function Camera({ onFrame }: CameraProps) {
         <canvas ref={canvasRef} className="camera__canvas" />
       </div>
 
-      {failedFrames >= LOST_DETECTION_WARN_FRAMES && (
+      {lostFrames >= LOST_DETECTION_WARN_FRAMES && (
         <div className="status status--error" role="alert">
-          détection perdue : {failedFrames} frames
+          détection perdue : {lostFrames} frames
         </div>
       )}
     </div>

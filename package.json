@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "guards": "node scripts/check-guards.mjs"
+    "guards": "node scripts/check-guards.mjs",
+    "postinstall": "node scripts/vendor-mediapipe.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",

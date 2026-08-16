@@ -131,7 +131,102 @@ Aucune. `FACE_WIDTH_CORRECTION_MM` (rapport S3) n'existera qu'au lot 6 et devra
 
 ---
 
-## Décisions en attente (bloquent les lots 3b et 6, pas les lots 1 et 2)
+## Lot 2 — `tracking/landmarker.ts`, modèle vendorisé ⏳ (validation humaine requise)
+
+### Ce qui marche, vérifié ici
+
+| Vérification | Résultat |
+|---|---|
+| `npm run typecheck` | ✅ 0 erreur |
+| `npm test` | ✅ 28 tests (13 geom, 8 landmarker, 5 overlay, 2 méta) |
+| `npm run build` | ✅ 295 kB (93 kB gzip) |
+| Modèle servi depuis notre origine | ✅ `/models/face_landmarker.task` → 200, 3 758 596 octets |
+| WASM servi depuis notre origine | ✅ `/mediapipe/wasm/*` → 200, 33,8 Mo |
+| `Content-Length` présent sur le modèle | ✅ — c'est ce qui rend le pourcentage **réel** |
+| Aucune référence CDN dans `src/` et `index.html` | ✅ aucune |
+
+**Les 478 points sont vérifiés sans webcam.** `tests/overlay.test.ts` compte les
+tracés sur un contexte canvas simulé : exactement un point par landmark, aucun
+oublié, aucun en double, iris distingués du maillage, et dénormalisation vers
+les pixels image (0,5 × 1280 = 640) et non vers les coordonnées normalisées.
+
+### Le vrai correctif du lot 2 : la garde de monotonie (rapport S5)
+
+Le correctif du §1 bug #3 était écrit pour l'ancienne API tfjs (`estimateFaces`,
+asynchrone). `@mediapipe/tasks-vision` se comporte autrement :
+
+- `detectForVideo` est **synchrone** ;
+- il **lève une exception si le timestamp n'est pas strictement croissant**.
+
+Sans garde, la boucle passe son temps à catcher dès qu'une frame est répétée
+(webcam lente, onglet en arrière-plan) et le compteur d'échecs sature sans cause
+réelle. Le `try/catch` seul ne suffit donc pas.
+
+`createVideoDetector` ajoute les deux gardes manquantes, et elles sont testées :
+horloge figée → 1000, 1001, 1002 ; horloge qui recule → toujours croissant ;
+frame vidéo déjà analysée → `null` sans appeler le modèle.
+
+`null` ne compte **pas** comme une perte de détection : c'est « rien de neuf à
+analyser ». Le confondre avec une perte ferait clignoter l'alerte en permanence.
+
+### Deux pièges corrigés au passage
+
+1. **`onFrame` passait par les dépendances de `useEffect`.** Chaque rendu React
+   — ne serait-ce que le compteur de fps — aurait relancé `getUserMedia` et fait
+   clignoter la caméra. Il passe désormais par une ref, l'effet a `[]` en deps.
+2. **Le HUD ne se rafraîchit plus à chaque frame** mais toutes les 500 ms :
+   60 rendus React par seconde pour afficher un nombre, c'était le fps lui-même
+   qu'on aurait mesuré.
+
+### `outputFacialTransformationMatrixes: false` — explicite et commenté
+
+Le §4 interdit la géométrie faciale métrique de MediaPipe : elle ramène tout
+visage aux dimensions du modèle canonique, donc l'échelle n'y est vraie
+qu'« à une constante près ». L'option est désactivée **explicitement** dans
+`createFaceLandmarker`, avec le motif en commentaire — une option laissée par
+défaut se réactive un jour sans que personne ne s'en aperçoive.
+
+### Vendorisation — zéro CDN au runtime (§1 bug #4)
+
+| Élément | Où | Versionné ? |
+|---|---|---|
+| `face_landmarker.task` (3,76 Mo) | `public/models/` | ✅ commité — il ne vient pas de npm |
+| WASM MediaPipe (33,8 Mo) | `public/mediapipe/wasm/` | ❌ gitignoré — recopié depuis `node_modules` par `scripts/vendor-mediapipe.mjs`, lancé en `postinstall` |
+
+Le script ne télécharge rien : la reproductibilité vient de `package-lock.json`.
+
+### ⚠️ Ce qui n'est PAS vérifié
+
+**Les deux critères d'acceptation qui exigent une caméra :**
+
+- « 478 points dessinés en overlay » — la fonction de dessin est prouvée, mais
+  personne n'a vu les points accrocher un vrai visage ;
+- « ≥ 25 fps » — non mesurable ici. Le compteur de fps est affiché en haut à
+  droite du bandeau vert, à lire chez toi.
+
+```bash
+npm install && sh scripts/setup-hooks.sh   # postinstall vendorise le WASM
+npm run dev                                # http://localhost:5173
+```
+
+Attendu : barre de chargement avec un **pourcentage qui monte** (pas un spinner),
+puis le maillage bleu sur ton visage, les **iris en vert**, et un compteur de
+fps ≥ 25. Si les fps s'effondrent, le premier réglage à tenter est
+`delegate: 'GPU'` → `'CPU'` dans `src/tracking/landmarker.ts`.
+
+### Constantes calibrées
+
+Toujours aucune. `FACE_WIDTH_CORRECTION_MM` (rapport S3) n'existera qu'au lot 6.
+
+### Ce qui reste
+
+- Validation humaine + tags `lot-0-ok`, `lot-1-ok`, `lot-2-ok`.
+- Lot 3a : `core/units.ts` + échelle iris. **Ne dépend d'aucune décision en
+  attente** — la rotation de tête ne concerne que la carte (lot 3b).
+
+---
+
+## Décisions en attente (bloquent les lots 3b et 6, pas les lots 1, 2 et 3a)
 
 1. **Seuil de « ça lui va »** : 4 mm fixe, ou ~3 % de la largeur du visage ?
    `THRESHOLD_MM = 4` est un chiffre d'adulte : sur un visage de 105 mm il est

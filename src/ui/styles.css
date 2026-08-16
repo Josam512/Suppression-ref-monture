@@ -51,6 +51,30 @@ body {
   flex: none;
 }
 
+.status__fps {
+  margin-left: auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.82rem;
+}
+
+/* Barre de chargement du modèle : un VRAI pourcentage, jamais un spinner (§1 bug #4). */
+.progress {
+  flex: 1;
+  height: 5px;
+  margin-left: 0.5rem;
+  border-radius: 3px;
+  background: rgb(255 255 255 / 12%);
+  overflow: hidden;
+}
+
+.progress__bar {
+  display: block;
+  height: 100%;
+  background: var(--warn);
+  transition: width 120ms linear;
+}
+
 .status--loading .status__dot { background: var(--warn); }
 .status--ready   .status__dot { background: var(--ok); }
 .status--error   .status__dot { background: var(--err); }

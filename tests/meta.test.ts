@@ -12,9 +12,9 @@ import { join } from 'node:path';
  * suppression visible immédiatement.
  *
  * Échelle prévue par le contrat §9.0b : lot 3 : 12 | lot 5 : 18 | lot 6 : 24
- * État réel :                            lot 0 :  2 | lot 1 : 15
+ * État réel :                            lot 0 :  2 | lot 1 : 15 | lot 2 : 28
  */
-const EXPECTED_MIN_TESTS = 15;
+const EXPECTED_MIN_TESTS = 28;
 
 const TESTS_DIR = join(process.cwd(), 'tests');
 
