@@ -272,6 +272,26 @@ def main() -> int:
     alpha = np.where(crop_solid, 255, 0).astype(np.uint8)
     alpha[holes] = 0
 
+    # ⚠️ Les BRANCHES REPLIEES se voient a travers les verres sur une photo
+    # studio : elles appartiennent a la photo, donc au sprite, et se
+    # retrouveraient peintes en travers de l'oeil du client.
+    #
+    # L'ouverture d'un verre est convexe par ligne (rond, panto, hexagone) : sur
+    # chaque rangee, tout ce qui se trouve ENTRE le premier et le dernier pixel
+    # d'ouverture est de l'ouverture — branche comprise. Le cerclage, lui, est
+    # toujours a l'exterieur de ce segment, donc jamais entoure.
+    effaces = 0
+    for box in (box_l, box_r):
+        for y in range(box["y0"], box["y1"] + 1):
+            row = np.where(holes[y, box["x0"] : box["x1"] + 1])[0]
+            if len(row) < 2:
+                continue
+            a0 = box["x0"] + row[0]
+            a1 = box["x0"] + row[-1]
+            effaces += int((alpha[y, a0 : a1 + 1] > 0).sum())
+            alpha[y, a0 : a1 + 1] = 0
+    print(f"  branches repliees effacees dans les verres : {effaces} px")
+
     out_dir = Path(args.out) / args.slug
     out_dir.mkdir(parents=True, exist_ok=True)
     Image.fromarray(np.dstack([crop_rgb, alpha])).save(out_dir / "front.png")
