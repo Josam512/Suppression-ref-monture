@@ -1,0 +1,34 @@
+{
+  "slug": "p8-m252",
+  "aMm": 43.0,
+  "pontMm": 23.0,
+  "brancheMm": 145.0,
+  "totalWidthMm": 139.4561456188889,
+  "front": "front.png",
+  "profile": "profile.png",
+  "spritePxPerMm": 6.281544611120734,
+  "alphaBBox": {
+    "x": 0,
+    "y": 0,
+    "w": 876,
+    "h": 292
+  },
+  "bridgeCenter": {
+    "x": 438.308570953543,
+    "y": 62.717948717948715
+  },
+  "lensCenterL": {
+    "x": 231.0175987865588,
+    "y": 139.28305849408835
+  },
+  "lensCenterR": {
+    "x": 645.5995431205272,
+    "y": 138.49771560263616
+  },
+  "hingeProfile": {
+    "x": 0,
+    "y": 0
+  },
+  "calibratedAt": "2026-08-16",
+  "bMm": 38.0
+}
