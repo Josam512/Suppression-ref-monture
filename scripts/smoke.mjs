@@ -138,6 +138,24 @@ try {
 
   check('aucune exception non rattrapée', pageErrors.length === 0, pageErrors.join(' | '));
 
+  // ── V1 : la carte se montre UNE fois, et n'est plus jamais redemandee.
+  const revenant = await ctx.newPage();
+  await revenant.goto(BASE, { waitUntil: 'load' });
+  await revenant.evaluate(() =>
+    localStorage.setItem(
+      'essayage.calibration.v1',
+      JSON.stringify({ faceWidthMm: 138, source: 'card', relError: 0.025, measuredAt: 1 }),
+    ),
+  );
+  await revenant.goto(BASE, { waitUntil: 'load' });
+  await revenant.getByRole('button', { name: /Ouvrir V1/ }).click();
+  await revenant.waitForTimeout(9000);
+  const texteRevenant = await revenant.locator('body').innerText();
+  check(
+    'client deja calibre : la carte n’est PAS redemandee',
+    !/Portez-vous des lunettes/.test(texteRevenant) && !/carte bancaire/.test(texteRevenant),
+  );
+
   const prep = await ctx.newPage();
   const prepErrors = [];
   prep.on('pageerror', (e) => prepErrors.push(e.message));
