@@ -1212,6 +1212,33 @@ La boucle de rendu, l'intégration MediaPipe et le compositing deviennent donc t
 > ⚠️ **Cet outil n'existe qu'en CI. Il ne fait pas partie de l'application et n'est jamais présenté
 > à un client** (§0.0.2). Aucun chemin de code de `src/` ne doit pouvoir lire un `.y4m`.
 
+#### La preuve métrologique du rendu — `tests/render-proof.html`
+
+Vitest teste la géométrie en calcul pur. Il ne répond pas à la seule question qui compte
+vraiment : **les pixels réellement peints mesurent-ils bien 132 mm ?** Le banc compose donc le
+sprite avec le vrai `drawFrame`, sur un vrai canvas, puis **remesure la bounding box des pixels
+peints et la reconvertit en millimètres**. Il ferme la boucle `spec.json → affine → drawImage →
+pixels → millimètres`.
+
+Huit contrôles, tous exécutés par `npm run smoke` :
+
+| Contrôle | Ce qu'il attrape |
+|---|---|
+| largeur peinte reconvertie en mm | l'erreur globale de la chaîne |
+| le padding alpha n'élargit pas la monture | B3 — 1624 px de fichier pour 1584 px de monture |
+| centre peint ↔ centre du pont projeté | B3, second volet : un sprite padé mais **décalé** |
+| décalage vertical sous le sellion | T1 — `VERTICAL_OFFSET_MM` réellement appliqué en mm |
+| hauteur peinte à 20° vs 0° | S1 — le yaw ne raccourcit rien verticalement |
+| largeur à 20° / largeur à 0° = cos(yaw) | S1 — le cos appliqué **une** fois, pas deux |
+| dilatation V2 de chaque côté | §11.6 — la dilatation vaut bien 1,5 mm réels |
+| la dilatation reste centrée | un halo asymétrique déplacerait la monture |
+
+> ⚠️ Le sprite du banc est un **rectangle de synthèse aux cotes connues**. Ce n'est pas une
+> monture et il ne prétend pas l'être : il sert d'étalon pour vérifier la chaîne géométrique. La
+> forme réelle vient toujours d'une photo (§1 bug #2). Un rectangle est même **préférable** ici :
+> ses bords sont exactement à la cote, donc l'écart mesuré est imputable à la chaîne, pas au
+> détourage.
+
 ---
 
 ## 9. Règles de travail pour Claude Code — protocole anti-casse
@@ -1523,10 +1550,16 @@ export const OVERLAY_PADDING_MM = 1.5;
 
 | # | Lot | Critère d'acceptation |
 |---|---|---|
-| V2-0 | `assertSameModel` + tests | Un coloris rattaché au mauvais modèle est rejeté avec un message clair |
-| V2-1 | `calibrateWithWornFrame` + garde-fou §11.4 | Les 3 sources donnent le même verdict à calibration égale |
-| V2-2 | Sélecteur de coloris + `OVERLAY_PADDING_MM` | Coloris clair sur monture noire : aucun liseré visible |
-| V2-3 | Détection assistée de la monture portée | L'opticien clique 2 points sur les bords externes → calibration |
+| V2-0 | `assertSameModel` + tests | ✅ Un coloris rattaché au mauvais modèle est rejeté avec un message clair |
+| V2-1 | `calibrateWithWornFrame` + garde-fou §11.4 | ✅ Les 3 sources donnent le même verdict à calibration égale |
+| V2-2 | Sélecteur de coloris + `OVERLAY_PADDING_MM` | ⚠️ Code écrit et dilatation mesurée au banc (1,5 mm de chaque côté, centrée). **Le contrôle « aucun liseré sur monture noire » reste ouvert** : il exige deux vraies photos et un vrai client. |
+| V2-3 | Détection assistée de la monture portée | ✅ L'opticien pointe 2 points sur les bords externes → calibration à 2 % |
+
+> ⚠️ **La dilatation `OVERLAY_PADDING_MM` épaissit la silhouette, elle n'agrandit pas la monture.**
+> Un agrandissement par l'échelle rendrait la monture plus large qu'elle n'est et casserait le
+> critère de succès du projet. Le halo est donc construit par redessins décalés, à rayon constant
+> en millimètres réels, symétriques — trois propriétés verrouillées par des tests, et vérifiées
+> sur les pixels peints au banc du §8.3.
 
 > Pour V2-3, **ne pas tenter la détection automatique de monture au premier jet.** Deux clics d'un opticien professionnel sont plus fiables, plus rapides à coder, et testables. L'automatisation viendra après, si le besoin se confirme.
 

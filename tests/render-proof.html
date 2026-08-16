@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Banc de mesure du rendu — CI uniquement</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 24px;
+      }
+      table {
+        border-collapse: collapse;
+      }
+      td,
+      th {
+        border: 1px solid #999;
+        padding: 4px 10px;
+        text-align: right;
+      }
+      th:first-child,
+      td:first-child {
+        text-align: left;
+      }
+      .ko {
+        background: #ffdddd;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Banc de mesure du rendu</h1>
+    <p>
+      Outil d'intégration continue. Ne fait pas partie de l'application et n'est jamais présenté à
+      un client.
+    </p>
+    <div id="out">calcul…</div>
+    <script type="module">
+      import { runProof } from '/tests/render-proof.ts';
+
+      try {
+        const cases = runProof();
+        window.__PROOF__ = cases;
+        document.getElementById('out').innerHTML =
+          '<table><tr><th>contrôle</th><th>attendu</th><th>mesuré</th><th>écart</th></tr>' +
+          cases
+            .map(
+              (c) =>
+                `<tr class="${c.ok ? '' : 'ko'}"><td>${c.nom}</td><td>${c.attendu.toFixed(3)} ${c.unite}</td>` +
+                `<td>${c.mesure.toFixed(3)} ${c.unite}</td><td>${c.ecart.toFixed(3)}</td></tr>`,
+            )
+            .join('') +
+          '</table>';
+      } catch (err) {
+        window.__PROOF_ERROR__ = String(err);
+        document.getElementById('out').textContent = 'ERREUR : ' + err;
+      }
+    </script>
+  </body>
+</html>
