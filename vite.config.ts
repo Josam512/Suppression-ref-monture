@@ -13,6 +13,8 @@ export default defineConfig({
         main: 'index.html',
         // L'outil interne de préparation des montures — jamais montré à un client.
         prep: 'prep.html',
+        // Outil de calibration du lot 8 — interne, jamais montré à un client.
+        calib: 'calib.html',
       },
     },
   },
