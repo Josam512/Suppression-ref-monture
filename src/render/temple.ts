@@ -7,7 +7,7 @@
 
 import type { FrameSpec } from '../core/frameSpec.js';
 import type { FrameMetrics } from '../core/faceMetrics.js';
-import { spriteAffine } from '../core/transform.js';
+import { templeAffine } from '../core/transform.js';
 
 export interface ProfileSprite {
   img: CanvasImageSource;
@@ -29,7 +29,9 @@ export function drawTemple(
   alpha: number,
   faceOutline: Path2D | null,
 ): void {
-  const t = spriteAffine(profile.spec, m);
+  // La branche visible est celle du cote oppose au sens de rotation de la tete.
+  const side: 1 | -1 = m.yawRad >= 0 ? -1 : 1;
+  const t = templeAffine(profile.spec, m, side);
 
   ctx.save();
   ctx.globalAlpha = alpha;

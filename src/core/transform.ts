@@ -108,3 +108,61 @@ export function renderedFrameHeightPx(spec: FrameSpec, m: FrameMetrics): number 
   const s = m.livePxPerMm / spec.spritePxPerMm;
   return spec.alphaBBox.h * s;
 }
+
+
+/**
+ * Affine de la BRANCHE (CLAUDE.md §6).
+ *
+ * Une branche n'est pas une face : elle est perpendiculaire a celle-ci. Sa
+ * projection ne se raccourcit donc pas en cos(yaw) mais grandit en sin(yaw) —
+ * nulle de face, maximale de profil. Elle est ancree a la CHARNIERE, au bord
+ * externe de la face, et non au centre du pont.
+ *
+ * ⚠️ Une premiere implementation appliquait a la branche l'affine de la face.
+ * La branche etait alors posee au centre du visage et retrecissait quand la
+ * tete tournait — soit l'exact inverse du comportement physique.
+ *
+ * @param side +1 si la branche visible est celle de droite du sprite, -1 sinon.
+ */
+export function templeAffine(spec: FrameSpec, m: FrameMetrics, side: 1 | -1): Affine {
+  const profileScale = spec.profilePxPerMm ?? spec.spritePxPerMm;
+  const s = m.livePxPerMm / profileScale;
+
+  // ⭐ Le sin, symetrique du cos de la face : la branche apparait en tournant.
+  const sx = s * Math.sin(Math.abs(m.yawRad)) * side;
+  const sy = s;
+
+  const cosR = Math.cos(m.rollRad);
+  const sinR = Math.sin(m.rollRad);
+
+  const a = cosR * sx;
+  const b = sinR * sx;
+  const c = -sinR * sy;
+  const d = cosR * sy;
+
+  // La charniere sur la FACE : bord externe de la bbox alpha, a hauteur du pont.
+  const hingeOnFront = {
+    x: side > 0 ? spec.alphaBBox.x + spec.alphaBBox.w : spec.alphaBBox.x,
+    y: spec.bridgeCenter.y,
+  };
+  const anchor = spriteToScreen(hingeOnFront, spec, m);
+
+  // Sur le sprite de profil, la charniere est le bord gauche (x = 0).
+  const hx = spec.hingeProfile.x;
+  const hy = spec.hingeProfile.y;
+
+  return {
+    a,
+    b,
+    c,
+    d,
+    e: anchor.x - (a * hx + c * hy),
+    f: anchor.y - (b * hx + d * hy),
+  };
+}
+
+/** Longueur de branche rendue a l'ecran, en pixels. Nulle de face. */
+export function renderedTempleLengthPx(spec: FrameSpec, m: FrameMetrics, widthPx: number): number {
+  const profileScale = spec.profilePxPerMm ?? spec.spritePxPerMm;
+  return (widthPx * m.livePxPerMm * Math.sin(Math.abs(m.yawRad))) / profileScale;
+}

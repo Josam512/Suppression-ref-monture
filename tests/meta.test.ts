@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 // ⭐ T6 : l'ancienne valeur (12) ne correspondait à rien — la §8 n'en listait que 11.
-const EXPECTED_MIN_TESTS = 64; // V1 : 49 | + V2 : 56 | + lot 8 : 64
+const EXPECTED_MIN_TESTS = 68; // V1 : 49 | V2 : 56 | lot 8 : 64 | lot 7 : 68
 
 const TESTS_DIR = 'tests';
 
