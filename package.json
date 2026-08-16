@@ -1,0 +1,18 @@
+{
+  "name": "essayage-virtuel",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Essayage virtuel de lunettes 2D avec vérification de taille réelle — voir CLAUDE.md",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "guards": "node scripts/check-guards.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

@@ -1,0 +1,36 @@
+#!/bin/sh
+# Garde-fous mécaniques — CLAUDE.md §9.0a
+#
+# Un commit qui échoue à ce hook n'existe pas. Ce fichier est lui-même à
+# surveiller dans les diffs : c'est le seul moyen de le contourner.
+#
+# Installé via `git config core.hooksPath .githooks` (voir scripts/setup-hooks.sh)
+# plutôt que via husky : husky serait une dépendance npm, ce que la règle §9.1.8
+# interdit sans validation. core.hooksPath fait la même chose avec zéro paquet.
+
+echo "── Garde-fous pre-commit ─────────────────────────────────────────"
+
+# §9.0d — le diff sous les yeux avant chaque commit. Un lot censé toucher
+# 2 fichiers qui en modifie 9 est le signe avant-coureur d'un refactor spontané.
+echo ""
+echo "Fichiers touchés par ce commit :"
+git diff --cached --stat
+echo ""
+
+# Barrières structurelles : slider de taille, 3D, tests désactivés,
+# branchement sur le mode, vocabulaire de sélection, tailles en dur.
+node scripts/check-guards.mjs || exit 1
+
+if [ ! -d node_modules ]; then
+  echo ""
+  echo "❌ node_modules absent : typecheck et tests non vérifiables."
+  echo "   Lancer 'npm install' avant de commiter. On ne commite jamais"
+  echo "   sans avoir vu la suite au vert (§9.1.3)."
+  exit 1
+fi
+
+npm run typecheck || { echo "❌ Typecheck en échec"; exit 1; }
+npm test          || { echo "❌ Suite de tests en échec — on ne commite pas (§9.1.3)"; exit 1; }
+
+echo ""
+echo "✅ Garde-fous franchis."
