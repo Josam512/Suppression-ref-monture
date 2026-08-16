@@ -1,5 +1,17 @@
 # Rapport d'analyse — Essayage virtuel de lunettes (V1 & V2)
 
+> ✅ **Statut : traité.** Les 15 correctifs (B1–B5, S1–S5, T1–T8) et les 7 renforcements de
+> garde-fous décrits ici sont **appliqués au `CLAUDE.md`**, avec les trois arbitrages rendus
+> par l'humain : seuil proportionnel borné 3–5 mm · rotation de tête seulement en cas de doute ·
+> contrat corrigé avant tout code. Table de correspondance au §13 du `CLAUDE.md`.
+>
+> Une **divergence assumée** avec ce rapport est documentée au §5 du contrat : le masquage du
+> décentrement se décide sur l'incertitude propagée, et non sur `relError <= 0.02` — ce seuil
+> devenant inapplicable une fois la carte passée à 0,025 par le correctif B4 de ce même rapport.
+>
+> Ce document reste la référence sur le **pourquoi** de chaque correctif. Le `CLAUDE.md` fait foi
+> sur le **quoi**. Il n'est pas mis à jour au fil du projet : c'est un instantané d'analyse.
+
 **Objet :** revue complète du contrat `CLAUDE.md` avant écriture de la moindre ligne de code.
 **Question posée :** « Est-ce que tout est codable, en mettant en place des contrôles pour éviter les bugs et les régressions ? »
 **Réponse courte :** oui, intégralement — mais 15 défauts du contrat doivent être corrigés d'abord. Quatre d'entre eux faussent la mesure **en silence**, c'est-à-dire exactement le mode d'échec que tout le document cherche à empêcher.
