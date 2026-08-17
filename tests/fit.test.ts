@@ -14,6 +14,7 @@ import {
   publiable,
   type Measurement,
 } from '../src/prep/fitCorrection.js';
+import { canthiToTempleDepthMm } from '../src/core/cardRefinement.js';
 
 /** Fabrique n sujets dont la largeur réelle suit exactement le modèle choisi. */
 function synth(modele: 'decalage' | 'rapport', p: number, n = 10): Measurement[] {
@@ -89,5 +90,31 @@ describe('Ajustement de la correction', () => {
     rows[3] = { ...rows[3]!, reelleMm: rows[3]!.reelleMm + 60 }; // pointage raté
     const a = fitCorrection(rows)!;
     expect(a.parametre).toBeCloseTo(18, 1);
+  });
+});
+
+describe('le dernier tronçon carte → tempes', () => {
+  // ⚠️ Il valait 12 mm en absolu : un chiffre d'adulte. Sur un visage d'enfant
+  // il surestimait le tronçon de moitié — le présupposé de taille du §0.0.3,
+  // exactement celui que le §5 avait déjà chassé du seuil en le proportionnant.
+  it('suit la taille du visage, au lieu de valoir 12 mm pour tout le monde', () => {
+    const adulte = canthiToTempleDepthMm(152);
+    const enfant = canthiToTempleDepthMm(115);
+
+    expect(adulte).toBeCloseTo(12, 0); // le sujet réel sur lequel il est calé
+    expect(enfant).toBeLessThan(adulte);
+    // Proportionné, pas simplement « plus petit » : le rapport suit les largeurs.
+    expect(enfant / adulte).toBeCloseTo(115 / 152, 6);
+  });
+
+  it("il pèse assez peu pour qu'une erreur de 50 % dessus reste tolérable", () => {
+    // La correction totale vaut ~6 % ; ce tronçon en fait le quart. Se tromper
+    // de moitié dessus doit coûter moins de 1 % sur la largeur finale.
+    const D = 780;
+    const mesure = 37; // profondeur carte ↔ coins des yeux, mesurée
+    const facteur = (leg: number): number => 1 / (1 - (mesure + leg) / D);
+    const juste = facteur(canthiToTempleDepthMm(152));
+    const faux = facteur(canthiToTempleDepthMm(152) * 1.5);
+    expect(Math.abs(faux / juste - 1)).toBeLessThan(0.01);
   });
 });

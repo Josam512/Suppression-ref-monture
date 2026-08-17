@@ -29,6 +29,13 @@ import {
 } from '../../src/core/faceMetrics.js';
 import { FOREHEAD } from '../../src/core/parallax.js';
 import { CARD_WIDTH_MM } from '../../src/core/calibration.js';
+import { CARD_H_MM as CARD_HEIGHT_MM } from '../../src/core/cardPose.js';
+
+/** Un point image, en pixels. */
+interface Pt2 {
+  x: number;
+  y: number;
+}
 
 const POINT_COUNT = 478;
 
@@ -133,6 +140,44 @@ export function projectHead(
   const right = project({ x: model.headHalfMm, y: 0, z: 0 }, opts).x;
 
   return { lm, headEdgesPx: { left, right } };
+}
+
+/**
+ * Les QUATRE coins de la carte, en pixels image — ce que le client ajuste.
+ *
+ * La carte est posée sur le front, donc **inclinée** : un front n'est pas
+ * vertical, il fuit vers l'arrière. C'est cette inclinaison qui donne la
+ * perspective, et donc la focale (`core/cardPose.ts`). Le fixture la reproduit
+ * au lieu de poser une carte fronto-parallèle qui serait le cas dégénéré.
+ *
+ * @param tiltDeg inclinaison du haut de la carte vers l'arrière.
+ */
+export function cardCornersPx(
+  model: HeadModel,
+  opts: CameraOptions,
+  tiltDeg = 20,
+): [Pt2, Pt2, Pt2, Pt2] {
+  const t = (tiltDeg * Math.PI) / 180;
+  const hw = CARD_WIDTH_MM / 2;
+  const hh = CARD_HEIGHT_MM / 2;
+
+  const corner = (u: number, v: number): Pt2 =>
+    project(
+      {
+        x: u,
+        y: -model.foreheadRiseMm + v * Math.cos(t),
+        z: -model.foreheadAheadMm - v * Math.sin(t),
+      },
+      opts,
+    );
+
+  return [corner(-hw, -hh), corner(hw, -hh), corner(hw, hh), corner(-hw, hh)];
+}
+
+/** Distance caméra ↔ CENTRE de la carte, en mm. La vérité que la pose doit rendre. */
+export function cardDistanceMm(model: HeadModel, opts: CameraOptions): number {
+  const z = -model.foreheadAheadMm;
+  return opts.distanceMm + z * Math.cos(opts.yawRad); // zr = −x·sin + z·cos, avec x = 0
 }
 
 /**
