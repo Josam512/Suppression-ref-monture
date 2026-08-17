@@ -1,7 +1,7 @@
 # PROGRESS.md — état d'avancement
 
 > Tenu à jour après chaque lot (CLAUDE.md §9.1 règle 9).
-> Dernière mise à jour : 2026-08-16.
+> Dernière mise à jour : 2026-08-17.
 
 ## Les deux versions
 
@@ -13,10 +13,10 @@ sont strictement identiques — c'est ce que verrouille le garde-fou §11.4.
 |---|---|---|
 | Qui | Le client, chez lui, sans opticien ni instrument | L'opticien, client portant une monture du rayon |
 | Question posée | « Est-ce à ma taille ? » (métrologie) | « Ce coloris me va-t-il ? » (esthétique) |
-| Étalon | L'iris (11,7 mm), puis une carte bancaire en cas de doute | La monture portée, cotes connues |
-| Précision | 4,3 % (iris) · 2,5 % (carte) | **2 %** — la meilleure des trois |
-| Geste | Aucun, puis 2 s avec une carte | 2 clics de l'opticien |
-| Spécificité de rendu | aucune | sprite dilaté de 1,5 mm pour couvrir la monture réelle |
+| Étalon | **La carte bancaire, obligatoire une fois au début**, puis la rotation de tête | La monture portée, cotes connues |
+| Précision | **~2 %** sur l'échelle · ~2,2 % sur l'écart temporal mesuré | **2 %** |
+| Geste | 2 s avec une carte, puis tourner la tête à gauche et à droite | 2 clics de l'opticien |
+| Spécificité de rendu | aucune | **la monture réelle est RECOLORIÉE** (2,5 D) ; repli sur le sprite dilaté de 1,5 mm |
 | Code spécifique | — | **1 fonction + 1 valeur d'énumération** |
 
 L'écran d'accueil propose explicitement les deux, avec leur public, leur étalon et leur précision.
@@ -34,14 +34,16 @@ L'écran d'accueil propose explicitement les deux, avec leur public, leur étalo
 | 5 | `core/transform.ts` (T3), `render/composite.ts`, correctif S1 | ✅ |
 | 6 | `core/verdict.ts` : seuil proportionnel borné, `classify` par intervalles (B2) | ✅ |
 | 7 | `render/temple.ts` : branche + occlusion | ⚠️ branches extraites des photos 3/4 et redressées ; `templeAffine` corrigée ; longueur à ±20 % |
-| 8 | Calibration humaine des deux constantes | ❌ **à faire — bloquant pour la mise en ligne** |
+| 8 | Calibration humaine des deux constantes | ⚠️ `FACE_WIDTH_CORRECTION_MM` **remplacée par une mesure** (§14.2) ; `VERTICAL_OFFSET_MM` reste à calibrer |
+| ⭐ V1+ | Carte obligatoire, parallaxe mesurée, écart temporal mesuré | ✅ voir plus bas |
 | V2-0 | `assertSameModel` | ✅ |
 | V2-1 | `calibrateWithWornFrame` (2 %, T8) | ✅ |
-| V2-2 | Sélecteur de coloris + dilatation `OVERLAY_PADDING_MM` | ⚠️ mesurée au banc ; contrôle « aucun liseré » ouvert |
+| V2-2 | Sélecteur de coloris + dilatation `OVERLAY_PADDING_MM` | ⚠️ devenue le REPLI : le rendu nominal est le recoloriage |
+| ⭐ V2+ | Recoloriage 2,5 D de la monture réelle | ✅ chaîne prouvée ; qualité à juger sur vidéo réelle |
 | V2-3 | Pointage en 2 clics de la monture portée | ✅ |
 
-**Contrôles automatiques :** 76 tests Vitest · `tsc --noEmit` en `strict` sans erreur ·
-`npm run build` OK · `npm run smoke` : 20 contrôles verts, dont la preuve métrologique ci-dessous.
+**Contrôles automatiques :** 101 tests Vitest · `tsc --noEmit` en `strict` sans erreur ·
+`npm run build` OK · `npm run smoke` : 21 contrôles verts, dont la preuve métrologique ci-dessous.
 
 ## La preuve que l'image est juste
 
@@ -63,8 +65,8 @@ les pixels peints et les reconvertit en millimètres**. Dernier passage :
 
 > ⚠️ Ce que cette preuve établit, et ce qu'elle n'établit pas. Elle établit que **la chaîne
 > géométrique est juste** : spec.json → affine → drawImage → pixels → millimètres. Elle
-> n'établit **rien** sur la justesse de la mesure du visage réel, qui dépend des deux constantes
-> non calibrées ci-dessous, ni sur le rendu d'une vraie monture sur un vrai visage.
+> n'établit **rien** sur la justesse de la mesure du visage réel — laquelle est traitée, depuis
+> le 2026-08-17, par la mesure de l'écart temporal (voir plus bas).
 
 
 ## 🔴 Première confrontation aux vraies montures et aux vrais visages — 2026-08-16
@@ -262,20 +264,24 @@ n'ont pas la même valeur de preuve.
 
 | Constante | Valeur | Calibrée le | Sur combien d'essais |
 |---|---|---|---|
-| `FACE_WIDTH_CORRECTION_MM` | **0 (provisoire)** | — | 0 |
+| `FACE_WIDTH_CORRECTION_MM` | **0 (provisoire)** — ⚠️ désormais un REPLI : elle ne sert que si la mesure de l'écart temporal échoue | — | 0 |
 | `FACE_WIDTH_CORRECTION_RATIO` | **1 (neutre)** | — | 0 |
 | `VERTICAL_OFFSET_MM` | **3 (provisoire)** | — | 0 |
 
-> 🔴 **Tant que ces deux lignes portent « provisoire », la légende chiffrée est décalée.**
-> `FACE_WIDTH_CORRECTION_MM` pèse 5 à 10 mm, soit plus que le seuil de décision lui-même : à 0,
-> des montures correctes s'afficheront « sous-taillées », de façon parfaitement cohérente donc
-> invisible. Protocole au §5 du CLAUDE.md — 3 montures de largeurs différentes, 2 morphologies,
-> médiane des écarts, et on ne fige pas si la dispersion dépasse 3 mm.
+> 🔴 **`VERTICAL_OFFSET_MM` reste provisoire, et elle décale toujours la pose du sprite.**
+>
+> ⭐ `FACE_WIDTH_CORRECTION_MM`, en revanche, n'est plus sur le chemin nominal depuis le
+> 2026-08-17 : l'écart temporal est MESURÉ sur chaque client (§14.2 du CLAUDE.md). Elle ne
+> reprend la main que si cette mesure échoue — fond chargé, cheveux, rotation refusée — et
+> l'application le dit alors en clair. C'est ce qui débloque la mise en ligne : on n'attend
+> plus qu'une constante unique représente un écart de ~20 mm variant de ±4 mm selon le visage,
+> ce que la confrontation aux vraies montures avait montré impossible.
 
 ## Ce qui reste, et pourquoi ça n'a pas été fait
 
 1. **Lot 8 — calibration humaine.** Aucun agent ne peut mesurer un vrai visage devant une vraie
-   webcam. Seule tâche strictement bloquante avant une mise en ligne.
+   webcam. ⭐ Depuis le 2026-08-17, ce lot ne bloque plus que `VERTICAL_OFFSET_MM` (la hauteur
+   à laquelle le sprite se pose sur le nez) : la largeur, elle, est mesurée.
 
 2. ✅ **Trois montures réelles sont préparées** (voir plus haut). Reste la largeur au réglet de
    la `p8-m252` et une monture de largeur nettement différente.
@@ -291,8 +297,12 @@ n'ont pas la même valeur de preuve.
    Un détecteur approximatif qui laisse passer un porteur de lunettes est pire que pas de
    détecteur, puisqu'il produit une mesure fausse d'allure normale.
 
-6. **Correction de parallaxe par rotation de tête (B4, parade n°2) : non implémentée.** Seule la
-   parade n°1 l'est (distance minimale de 60 cm), d'où `CARD_REL_ERROR` à 2,5 %.
+6. ✅ **Correction de parallaxe par rotation de tête (B4, parade n°2) : implémentée.** Les deux
+   parades sont en place. `CARD_REL_ERROR` à 2,5 % reste la valeur du chemin SANS rotation ;
+   avec rotation, l'incertitude est calculée à partir de ce qui a réellement été mesuré.
+
+7. **La qualité du recoloriage V2 sur une vraie monture filmée.** La chaîne est prouvée de bout
+   en bout, la qualité ne l'est pas — elle attend la vidéo de magasin.
 
 ## Écarts assumés avec le rapport d'analyse
 
@@ -303,8 +313,96 @@ n'ont pas la même valeur de preuve.
 - **`verdict()` prend 6 paramètres** et non 5 : sans le yaw, sa propre règle 3 était
   inimplémentable (T9).
 
+## 🔴 2026-08-17 — l'écart temporal est mesuré, et la V2 recolorie le réel
+
+Trois arbitrages humains, détaillés au §14 du CLAUDE.md. Ce qu'ils changent, concrètement.
+
+### V1 — la carte d'abord, puis « tournez la tête »
+
+La carte n'est plus un recours en zone grise : c'est le premier écran, une seule fois, et
+la mesure sert à tous les essayages suivants. L'iris n'est plus une source de mesure —
+il devient la **seconde opinion** qui relit la carte et signale un écart de plus de 12 %.
+
+La rotation qui suit rend mesurables deux grandeurs jusqu'ici supposées.
+
+**1. La parallaxe de la carte (B4).** La carte est posée sur le front, 20 à 40 mm devant
+les repères temporaux. En perspective, elle fait sortir le visage 3 à 7 % trop petit. Ce
+n'est pas du bruit : c'est un biais que les « 3 mesures concordantes » du §4 ne peuvent
+pas voir, puisqu'elles le partagent toutes les trois. Deux vues tournées suffisent à le
+mesurer — un écart de profondeur, un scalaire, aucune 3D.
+
+> ⚠️ Un piège découvert en route : le milieu de deux points **projetés** n'est pas la
+> projection de leur milieu. Quand la tête tourne, la tempe la plus proche tire le milieu
+> apparent vers elle. Non corrigé, ce terme ajoutait **19 %** à la profondeur mesurée. Il
+> se retranche exactement — c'est de la projection, pas de la morphologie.
+
+**2. L'écart temporal lui-même.** Les repères 234/454 lisent 115 mm sur un homme dont la
+monture fait 136 mm au réglet, et l'écart varie d'au moins ±4 mm d'un visage à l'autre :
+**aucune constante ne peut représenter ça**. Il se lit désormais dans les pixels, à la
+frontière tête/fond, à hauteur des yeux — là où passe la face d'une monture. Le mouvement
+de la rotation confirme que le bord trouvé est celui de la tête, et non un montant de porte.
+
+Chaque cas douteux est **refusé avec sa raison en clair**, et la mesure retombe sur les
+repères : fond chargé, chevelure sur les tempes, débords asymétriques, bord immobile,
+cadrage trop serré. Jamais une valeur approximative sans le dire.
+
+**Ce que ça vaut, sur une tête de test projetée en perspective exacte** (jamais par le
+modèle plan qu'utilise la sonde — un test qui rendrait à la sonde sa propre formule serait
+vert par construction, leçon S4) :
+
+| Contrôle | Résultat |
+|---|---|
+| profondeur front ↔ tempes retrouvée | à mieux que 10 % |
+| largeur vraie des repères retrouvée | **à mieux que 1 %** |
+| idem, avec une caméra dont le champ réel diverge de 25 % du champ supposé | à mieux que 2 % |
+| écart temporal retrouvé (136 mm vrais) | à moins de 3 mm |
+| incertitude annoncée | 2,0 % sur l'échelle, 2,2 % sur l'écart temporal |
+
+`UserCalibration` porte deux champs de plus, `temporalWidthMm` et son incertitude, qui
+supplantent `FACE_WIDTH_CORRECTION_MM` quand ils existent. `frameMetrics` est **inchangée** :
+`faceWidthMm` reste la largeur du segment 234↔454, seule grandeur homologue de `faceWidthPx`.
+
+### V2 — la monture réelle est RECOLORIÉE, pas recouverte
+
+Renversement complet du §11.6. On ne pose plus un sprite par-dessus la monture portée : on
+repeint ses propres pixels. La géométrie, la perspective, l'occlusion, le flou de bougé,
+l'ombre du sourcil et le reflet qui glisse viennent du réel — tout ce qui coûte cher à
+simuler est déjà dans l'image, gratuitement. Seule la **matière** est substituée.
+
+C'est ce que la demande appelle « au moins du 2,5 D », et **aucune 3D n'y entre** : pas de
+maillage, pas de WebGL, une boucle sur les pixels d'un rectangle.
+
+Conséquence : **le liseré du §11.6 disparaît**, puisqu'il n'y a plus deux montures
+superposées. Le sprite dilaté reste le repli quand le recoloriage ne retrouve pas la
+monture dans l'image — et il le dit alors, au lieu de peindre n'importe quoi.
+
+**Preuve sur une vraie photo** — `docs/verification/recolor-avant.png` et `-apres.png` :
+59 images sur 59 recoloriées, la matière change, les yeux restent visibles derrière les
+verres, la peau n'est pas touchée.
+
+> ⚠️ Ce que cette preuve établit et ce qu'elle n'établit pas. La photo de départ est
+> elle-même un composite d'un lot précédent : elle valide **la chaîne**, pas la qualité
+> finale sur une vraie monture filmée. Le contrôle « aucun liseré sur monture noire » et
+> le jugement esthétique restent ouverts, et **attendent la vidéo réelle de magasin**.
+>
+> Commande prête : `node scripts/recolor-video.mjs <video> <slug-porté> <slug-voulu> <faceWidthMm>`.
+> Une simple photo suffit aussi : `node scripts/still-to-video.mjs <photo> essai.webm 2`.
+
+### Deux défauts trouvés en route, tous deux invisibles là où on regardait
+
+| Défaut | Pourquoi il ne se voyait pas | Correctif |
+|---|---|---|
+| `putImageData` **remplace** les pixels au lieu de les composer : le recoloriage découpait un rectangle noir autour de la monture | dans l'application, le canvas est transparent au-dessus du `<video>` — le trou tombait sur du vide. **Le mode d'échec exact de `destination-out`, une deuxième fois** | composition par `drawImage` sur un calque isolé |
+| La règle des 300 lignes du §3 n'était vérifiée par **rien** | sept fichiers l'avaient franchie ou l'approchaient sans que rien ne le signale | barrage `i` du hook + test `guards.test.ts` |
+
+**Contrôles :** 101 tests Vitest · `tsc --noEmit` en `strict` · `npm run build` · `npm run smoke`
+21 contrôles verts, dont la preuve métrologique du rendu inchangée à 131,82 mm pour 132,00 attendus.
+
 ## Journal
 
+- **2026-08-17** — Carte obligatoire en V1, parallaxe et écart temporal **mesurés**,
+  recoloriage 2,5 D en V2. Deux défauts trouvés dont un identique en nature à celui du
+  lot précédent (`putImageData` après `destination-out`).
 - **2026-08-16** — Correction du contrat : 15 correctifs (B1–B5, S1–S5, T1–T8) + 3 arbitrages.
 - **2026-08-16** — Lots 0 à 7. Six défauts relevés pendant le codage, dont un (`onLost` qui ne
   dessinait pas) qu'aucune relecture n'avait attrapé et qui reconstituait le bug #3 à l'identique.

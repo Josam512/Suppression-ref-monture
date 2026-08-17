@@ -1649,9 +1649,76 @@ Table de correspondance entre l'analyse (`docs/rapport-essayage-virtuel.md`) et 
 | « 132 mm sur 138 mm → sous-taillée » devient `'indetermine'` une fois B2+B4+T8 réunis | Tests | §5 règle 1 bis |
 | Le décentrement est en réalité **exploitable en mode iris** ; l'ancienne interdiction reposait sur une comparaison entre deux grandeurs sans rapport | Tests | §5 règle 2 |
 | Le barrage B2 refusait un commentaire citant le nom du champ interdit — c'est le commentaire qui a été réécrit, pas le barrage | Suite de tests | `core/frameSpec.ts` |
+| La règle des 300 lignes du §3 n'était vérifiée par **rien** : sept fichiers l'avaient franchie ou l'approchaient | Relecture, après coup | §9.0.i, barrage ajouté |
+| Le milieu de deux points **projetés** n'est pas la projection de leur milieu : non corrigé, ce terme ajoutait 19 % à la profondeur mesurée | Tête de test en perspective exacte | §4, `core/parallax.ts` |
+| `putImageData` **remplace** les pixels au lieu de les composer : le recoloriage V2 découpait un rectangle noir autour de la monture. Invisible dans l'application, où le canvas est transparent au-dessus du `<video>` — visible dès qu'on dessine la vidéo dans le même canvas. **Le même mode d'échec que `destination-out`, une deuxième fois** | Outil d'atelier, sur une vraie photo | `render/recolorLive.ts` |
 
-**État d'exécution :** lots 0 à 7 implémentés, 49 tests au vert, typecheck `strict` clean, banc navigateur vert, barrages du hook vérifiés en tentant de les contourner. **Lot 8 (calibration humaine) non fait — il ne peut pas l'être par un agent.**
+## 14. ⭐ Arbitrages humains du 2026-08-17 — et ce qu'ils changent
 
-**Arbitrages humains intégrés :** seuil proportionnel borné 3–5 mm (§5) · rotation de tête seulement en cas de doute (§4) · contrat corrigé avant tout code.
+> Trois décisions prises par l'humain, qui contredisent ou complètent des passages
+> antérieurs. Conformément à l'en-tête, **elles priment**, et les sections concernées
+> sont annotées.
+
+### 14.1 V1 — la carte est OBLIGATOIRE, une fois, au démarrage
+
+> « pour la v1 on dira carte obligatoire une fois au début et tu te débrouilles pour la
+> mesure de l'écart temporal, quitte à lui demander de tourner sa tête à droite et à gauche »
+
+Le §4 présentait l'iris comme le niveau 1 par défaut et la carte comme un recours en zone
+grise. Ce n'est plus le cas en V1 : **la carte est le premier écran**, une seule fois, et
+la mesure est mémorisée pour tous les essayages suivants.
+
+L'iris n'est pas supprimé pour autant — il devient le **contrôle de cohérence**
+(`core/crossCheck.ts`) : il relit la carte et signale un écart de plus de 12 %, qui trahit
+un cadre mal posé sur les bords. Il ne corrige rien et ne rejette rien.
+
+### 14.2 V1 — l'écart temporal est MESURÉ, plus jamais deviné
+
+La rotation de tête, que le §4 réservait « seulement en cas de doute », devient l'étape
+qui suit immédiatement la carte. Elle rend mesurables deux grandeurs jusqu'ici supposées :
+
+| Grandeur | Avant | Maintenant |
+|---|---|---|
+| Parallaxe carte ↔ tempes (B4) | supposée nulle, 3 à 7 % de biais **systématique** | mesurée (`core/parallax.ts`), il n'en reste que le résidu |
+| Écart temporal | `FACE_WIDTH_CORRECTION_MM`, constante jamais calibrée | mesuré dans les pixels (`core/temporalWidth.ts`), client par client |
+
+`UserCalibration` gagne donc deux champs, **ajoutés au contrat sur cet arbitrage** :
+`temporalWidthMm` et `temporalRelError`. Quand ils sont présents, ils supplantent la
+constante ; quand la mesure échoue — fond chargé, cheveux sur les tempes, rotation
+refusée — la constante reprend la main et **le refus est dit en clair**.
+
+> ⚠️ La rotation reste **facultative** dans l'IHM. Bloquer un client qui n'y arrive pas
+> serait lui interdire de voir l'image, ce que le §0.0.2 refuse. Elle est proposée, sa
+> valeur est expliquée, et son absence élargit la marge affichée — rien de plus.
+
+### 14.3 V2 — le coloris se substitue par RECOLORIAGE, pas par superposition
+
+> « pour la v2 en magasin, tu auras une vidéo réelle du rendu avec une monture. alors tu
+> peux te débrouiller à faire au moins du 2.5d avec juste une autre texture de couleur à
+> partir d'une photo »
+
+Renversement complet de la §11.6. On ne pose plus un sprite **par-dessus** la monture
+physiquement portée : on repeint **ses propres pixels** (`render/recolor.ts`).
+
+- La **géométrie** vient du réel : pose, perspective, galbe, occlusion, flou de bougé.
+- La **lumière** vient du réel : ombre du sourcil, reflet qui glisse quand la tête bouge.
+- Seule la **matière** est substituée — chrominance et niveau de luminance, pris sur la
+  photo produit du coloris voulu, à la position homologue de la silhouette.
+
+C'est ce que la demande appelle « 2,5 D », et cela **n'introduit aucune 3D** : pas de
+maillage, pas de WebGL, une boucle sur les pixels d'un rectangle. Le §0 est intact.
+
+Conséquence directe : **le liseré du §11.6 disparaît**, puisqu'il n'y a plus deux montures
+superposées mais une seule dont on change la couleur. `OVERLAY_PADDING_MM` reste en place
+pour le mode superposition, qui demeure le repli quand le recoloriage ne retrouve pas la
+monture dans l'image.
+
+> ⚠️ Le choix entre les deux rendus ne se fait **pas** sur un mode (§11.4). Il se fait sur
+> la présence d'une donnée : connaît-on la monture réellement portée ? En vente en ligne,
+> non — et le code n'a pas besoin de savoir pourquoi.
+
+**État d'exécution :** lots 0 à 7 implémentés, 101 tests au vert, typecheck `strict` clean, banc navigateur vert (21 contrôles), barrages du hook vérifiés en tentant de les contourner. **Lot 8 (calibration humaine) non fait — il ne peut pas l'être par un agent, mais la V1 n'en dépend plus tant que la mesure de l'écart temporal aboutit.**
+
+**Arbitrages humains intégrés :** seuil proportionnel borné 3–5 mm (§5) · rotation de tête seulement en cas de doute (§4), **puis systématique en V1 (§14.2)** · contrat corrigé avant tout code · carte obligatoire en V1 (§14.1) · recoloriage 2,5 D en V2 (§14.3).
 
 **Divergence assumée avec le rapport :** le masquage du décentrement se décide sur l'incertitude **propagée** jusqu'au décentrement, et non sur `relError <= 0.02` comme le suggérait le rapport — ce seuil serait devenu inapplicable une fois la carte passée à 0,025 par B4. Justification complète au §5, règle 2.

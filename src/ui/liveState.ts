@@ -13,6 +13,7 @@ import type { FrameSpec } from '../core/frameSpec.js';
 import type { NormalizedLandmark } from '../core/geom.js';
 import type { ImageBuffer } from '../core/silhouette.js';
 import type { SizeVerdict } from '../core/verdict.js';
+import type { FrontSprite } from '../render/composite.js';
 import type { RotationProbe } from './rotationProbe.js';
 import type { useSprites } from './useSprites.js';
 
@@ -41,6 +42,16 @@ export interface Live {
   irisSamples: number[] | null;
   /** La carte validée, en attente de la rotation. */
   pendingCard: PendingCard | null;
+
+  /**
+   * Sprite du modèle PHYSIQUEMENT PORTÉ, quand on le connaît (V2).
+   *
+   * ⚠️ Sa présence — et non un test de mode — décide du recoloriage 2,5 D
+   * (§11.4). En vente en ligne il vaut null, et le rendu reste le sprite posé.
+   */
+  wornSprite: FrontSprite | null;
+  /** Pourquoi le recoloriage a été refusé, le cas échéant. Affiché tel quel. */
+  recolorReason: string | null;
 }
 
 export function createLive(sprites: SpritesState, spec: FrameSpec | null, cal: UserCalibration | null, overlayPaddingMm: number): Live {
@@ -55,5 +66,7 @@ export function createLive(sprites: SpritesState, spec: FrameSpec | null, cal: U
     lastProbeRatio: -1,
     irisSamples: null,
     pendingCard: null,
+    wornSprite: null,
+    recolorReason: null,
   };
 }

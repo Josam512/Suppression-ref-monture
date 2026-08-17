@@ -11,7 +11,7 @@
  * translate/rotate/scale. Barrage mécanique au §9.0.g.
  */
 
-import type { Pt } from './geom.js';
+import { CalibrationError, type Pt } from './geom.js';
 import type { FrameSpec } from './frameSpec.js';
 import type { FrameMetrics } from './faceMetrics.js';
 
@@ -80,13 +80,45 @@ export function spriteAffine(spec: FrameSpec, m: FrameMetrics): Affine {
   };
 }
 
+/** Applique une affine à un point. Une seule définition, ici (T3). */
+export function apply(t: Affine, p: Pt): Pt {
+  return { x: t.a * p.x + t.c * p.y + t.e, y: t.b * p.x + t.d * p.y + t.f };
+}
+
 /**
  * Applique l'affine à un point du sprite.
  * Utilisée par le rendu ET par le décentrement — c'est tout l'intérêt de T3.
  */
 export function spriteToScreen(p: Pt, spec: FrameSpec, m: FrameMetrics): Pt {
-  const t = spriteAffine(spec, m);
-  return { x: t.a * p.x + t.c * p.y + t.e, y: t.b * p.x + t.d * p.y + t.f };
+  return apply(spriteAffine(spec, m), p);
+}
+
+/**
+ * Affine inverse : écran → sprite.
+ *
+ * Indispensable au recoloriage V2 (§11), qui part d'un pixel de la vidéo et doit
+ * savoir à quel endroit de la monture il correspond. Elle vit ICI, et non dans
+ * `render/`, pour la même raison que l'affine directe : deux définitions de la
+ * même géométrie finissent toujours par diverger (T3).
+ *
+ * @throws si la matrice est dégénérée — ce qui n'arrive que si l'échelle est
+ *         nulle, c'est-à-dire si la calibration est absurde. Mieux vaut le
+ *         signaler que rendre une matrice de zéros qui replierait tout sur un
+ *         point sans que rien ne le dise.
+ */
+export function invertAffine(t: Affine): Affine {
+  const det = t.a * t.d - t.b * t.c;
+  if (det === 0 || !Number.isFinite(det)) {
+    throw new CalibrationError(
+      `Transformée sprite → écran non inversible (déterminant ${det}). ` +
+        `L'échelle de rendu est nulle : la calibration est à refaire.`,
+    );
+  }
+  const a = t.d / det;
+  const b = -t.b / det;
+  const c = -t.c / det;
+  const d = t.a / det;
+  return { a, b, c, d, e: -(a * t.e + c * t.f), f: -(b * t.e + d * t.f) };
 }
 
 /**
