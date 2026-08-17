@@ -1747,6 +1747,38 @@ les longueurs horizontales, jamais les verticales — sur la vidéo du sujet ré
 (`tests/v1-on-video.ts`) et n'a pas le droit de remonter dans `src/` : le §4 interdit un
 estimateur de yaw 2D dans l'application, et il a raison — c'est un contrôle, pas une source.
 
+### 14.5 V1 — la carte n'est pas une règle, c'est une MIRE (`core/cardPose.ts`)
+
+> « du moment que la personne a mis une photo de carte bancaire devant toi, tu connais
+> les mesures de la carte, il n'y a plus rien d'autre à demander. Tu connais la distance
+> à laquelle il est et tu connais son écart temporal. »
+
+Arbitrage retenu, et il lève explicitement la réserve du §4 sur les solveurs de pose :
+un rectangle de dimensions normalisées vu en perspective **est** une mire de calibration.
+Ses quatre coins donnent une homographie ; l'homographie donne la focale, donc la
+distance en millimètres. Deux grandeurs jusqu'ici *supposées* deviennent mesurées.
+
+Ce qui reste interdit ne bouge pas : aucun maillage, aucun rendu 3D, aucune bibliothèque
+de géométrie. On extrait des scalaires par de l'algèbre linéaire écrite en clair (§0).
+
+**Ce que ça exige de l'IHM :** le cadre ajusté par le client doit rendre ses **quatre
+sommets**, pas deux bords — c'est déjà ce que le §4 décrit (« un rectangle
+redimensionnable »).
+
+**Ce que ça vaut, mesuré et non espéré.** La focale sort d'un effet perspectif du second
+ordre : sur 85 mm vus à 78 cm, le raccourci d'un bord à l'autre fait un ou deux pixels.
+
+| Vues | Bruit de pointage | Dispersion sur la distance |
+|---|---|---|
+| 1 | ±0,5 px | **±20 à 25 %** — pire que l'a priori qu'elle remplace |
+| 50 (le balayage) | ±0,5 px | **±4 à 8 %**, sans biais |
+
+> 🔴 **Une seule vue est insuffisante, et c'est verrouillé par un test.** Remplacer un
+> a priori honnête (780 mm ± 17 %) par une mesure plus bruitée mais qui *ressemble* à une
+> mesure est le mode d'échec que tout ce document combat. La carte ne remplace la
+> constante que **moyennée sur le balayage** — et le bruit de pointage, lui, se moyenne,
+> contrairement au biais de parallaxe.
+
 **État d'exécution :** lots 0 à 7 implémentés, 120 tests au vert, typecheck `strict` clean, banc navigateur vert (23 contrôles), barrages du hook vérifiés en tentant de les contourner. **Lot 8 (calibration humaine) non fait — il ne peut pas l'être par un agent, mais la V1 n'en dépend plus tant que la mesure de l'écart temporal aboutit.**
 
 **Arbitrages humains intégrés :** seuil proportionnel borné 3–5 mm (§5) · rotation de tête seulement en cas de doute (§4), **puis systématique en V1 (§14.2)** · contrat corrigé avant tout code · carte obligatoire en V1 (§14.1) · recoloriage 2,5 D en V2 (§14.3).

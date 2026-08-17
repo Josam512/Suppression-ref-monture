@@ -725,8 +725,78 @@ l'anatomie n'est pas expliqué par le yaw. Reste l'hypothèse que les repères d
 soient régularisés vers son maillage canonique sous rotation. Non tranchable sans une
 mesure au pied à coulisse sur le sujet.
 
+---
+
+## « Tu connais les mesures de la carte, il n'y a plus rien d'autre à demander »
+
+Exact. Je lisais la carte comme une **règle à plat** : deux bords, une échelle en px/mm.
+Un rectangle de dimensions normalisées vu en perspective est une **mire de calibration** :
+ses quatre coins donnent une homographie, et une homographie donne la **focale**, donc la
+**distance en millimètres**. Deux grandeurs que je supposais alors qu'elles étaient déjà
+dans l'image.
+
+`core/cardPose.ts` fait ça. Deux contraintes suffisent, et elles viennent du seul fait que
+la carte est un rectangle de cotes connues : ses deux côtés sont orthogonaux et leur
+rapport de longueur est connu. Chacune donne `f²` — donc **deux estimations indépendantes
+depuis une seule vue**, dont l'écart est un contrôle de cohérence gratuit.
+
+Vérifié contre la tête de synthèse, qui projette en perspective exacte avec une focale et
+une distance connues par construction et jamais communiquées au solveur :
+
+- focale retrouvée à moins de 1 px, à 40°, 60° et 90° de champ — donc **rien n'est supposé
+  du champ de vision**, ce que l'ancienne chaîne faisait ;
+- distance retrouvée au millimètre, de 620 à 1000 mm, de face comme à 26° ;
+- carte parfaitement fronto-parallèle → **refusée**, pas devinée : sans perspective, un
+  rectangle ne dit rien de l'objectif, et `f²` sortirait d'un 0/0.
+
+### Le chiffre qui décide, et qui n'est pas celui qu'on espérait
+
+Le client ajuste le cadre à la main. La focale, elle, sort d'un effet du **second ordre** :
+sur une carte de 85 mm vue à 78 cm, le raccourci d'un bord à l'autre fait un ou deux
+pixels. Le signal est au niveau du bruit.
+
+| Vues | Bruit de pointage | Dispersion sur la distance |
+|---|---|---|
+| 1 | ±0,25 px | ±12 % |
+| 1 | ±0,5 px | **±20 à 25 %** |
+| 10 | ±0,5 px | ±8 % |
+| 25 | ±0,5 px | ±5,5 % |
+| 50 | ±0,5 px | **±4 %**, sans biais |
+
+**Sur une seule image, la mesure est donc PIRE que l'a priori de 780 mm ± 17 % qu'elle
+devait remplacer.** Le dire plutôt que de livrer la version qui a l'air plus savante :
+c'est exactement le mode d'échec que ce dépôt combat, et il est verrouillé par un test qui
+exige que la dispersion mono-vue reste au-dessus de 15 %.
+
+Mais la carte est sur le front pendant **tout** le balayage, et le bruit de pointage n'est
+pas corrélé d'une image à l'autre — contrairement au biais de parallaxe, que le moyennage
+ne touchera jamais. Cinquante vues ramènent la distance à **±4 %**, soit quatre fois mieux
+que la constante. La rotation cesse d'être un moyen de mesurer une profondeur : elle
+devient la source de la calibration caméra.
+
+### Ce qui reste à faire pour que ça entre dans la chaîne
+
+1. **Suivre les quatre coins de la carte pendant la rotation.** Le client en pointe un
+   seul cadre ; les 49 autres doivent être suivis automatiquement. C'est le vrai travail
+   restant, et il n'est pas fait.
+2. Remplacer `NOMINAL_DISTANCE_MM` (780 ± 17 %) par la distance mesurée, partout.
+3. Alors seulement, le dernier tronçon anatomique tombe.
+
+### En attendant, un correctif partiel sur ce tronçon
+
+Il valait **12 mm en absolu** : un chiffre d'adulte, qui surestimait de moitié sur un
+visage d'enfant — le présupposé de taille du §0.0.3, celui-là même que le §5 avait déjà
+chassé du seuil en le rendant proportionnel. Il est désormais une **proportion** de la
+largeur du visage (7,9 %, calée sur le sujet réel). Ce n'est plus une hypothèse de taille ;
+c'est encore une hypothèse de forme, et elle est destinée à disparaître au point 3.
+
+**Contrôles :** 132 tests Vitest · `tsc --noEmit` en `strict`.
+
 ## Journal
 
+- **2026-08-17** — `core/cardPose.ts` : la carte devient une mire de calibration — focale et
+  distance **mesurées**. Caractérisation du bruit : inutilisable sur une vue, ±4 % sur le
+  balayage. Le suivi des coins pendant la rotation reste à écrire.
 - **2026-08-17** — Plans de rendu explicités (`core/framePlane.ts`) : la largeur reste au plan
   des tempes, le pont et le décentrement passent au plan du nez. Correction d'une conclusion
   erronée de ma part, qui aurait dessiné la monture 6 % trop large. Audit du yaw MediaPipe :
