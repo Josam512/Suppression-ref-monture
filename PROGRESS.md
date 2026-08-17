@@ -875,6 +875,21 @@ banc navigateur vert (23 contrôles).
 
 ## Journal
 
+- **2026-08-17** — Audit de la borne d'information (`core/ocularPrior.ts`), demandé pour
+  vérifier si elle était mal posée. **Structure correcte** (information de Fisher), et
+  conclusion robuste : sur tout le domaine de corrélations défendable elle reste entre
+  2,99 et 3,34 %, soit **plus de 4 mm** sur l'écart temporal — au-dessus du seuil de
+  lecture de 3 à 5 mm. Ajouter les dimensions de croissance exclues (nez, bouche,
+  bizygomatique) ne fait descendre qu'à 2,78 % : gain réel mais insuffisant. La carte
+  reste requise. ⚠️ **Sous-estimer les corrélations rend la borne trop OPTIMISTE**, pas
+  l'inverse : à `INTEROCULAR_R` = 0,5 elle donne 2,90 %, à 0,999 elle donne 3,35 %.
+  **Défaut trouvé et corrigé** : à corrélation ~0,95, Σ⁻¹ extrait un contraste de
+  variance quasi nulle et la borne s'effondre à **1,39 %** — meilleure que la carte, sans
+  aucune information ajoutée. Trappe ouverte pour quiconque « améliorerait » les
+  corrélations vers les valeurs hautes publiées. `robustScaleBound` rend désormais le
+  pire cas sur ±0,05 de corrélation, et refuse franchement quand le conditionnement est
+  rompu. Quatre tests, dont un qui verrouille le défaut lui-même.
+
 - **2026-08-17** — `VERTICAL_OFFSET_MM` **supprimée**, remplacée par `poseAnchorOf`
   (`core/faceMetrics.ts`) : X sur le sellion, Y sur la ligne des quatre canthi, le sprite
   ancré par ses PROPRES centres optiques. La constante était **incalibrable**, pas
