@@ -9,6 +9,7 @@
  */
 
 import type { FrameSpec } from '../core/frameSpec.js';
+import type { CardQuad } from '../core/cardPose.js';
 import { CardCalibration } from './CardCalibration.js';
 import { RotationStep } from './RotationStep.js';
 import { WornFrameCalibration } from './WornFrameCalibration.js';
@@ -25,7 +26,7 @@ export interface CalibrationPanelProps {
   phase: Phase;
   /** Toutes les montures, pour désigner celle qui est physiquement portée (V2). */
   catalogue: readonly FrameSpec[];
-  onCardValidated(cardWidthPx: number, frozen: HTMLCanvasElement): void;
+  onCardValidated(cardWidthPx: number, quad: CardQuad, frozen: HTMLCanvasElement): void;
   onSkipRotation(): void;
   onWornFrameValidated(widthPx: number, spec: FrameSpec): void;
   onCancel(): void;
@@ -47,7 +48,7 @@ export function CalibrationPanel(props: CalibrationPanelProps): JSX.Element | nu
       <CardCalibration
         frozen={phase.frozen}
         onCancel={props.onCancel}
-        onValidate={(cardWidthPx) => props.onCardValidated(cardWidthPx, phase.frozen)}
+        onValidate={(cardWidthPx, quad) => props.onCardValidated(cardWidthPx, quad, phase.frozen)}
       />
     );
   }

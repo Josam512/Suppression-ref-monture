@@ -5,17 +5,41 @@
  */
 
 import { useState } from 'react';
+import type { Pt } from '../core/geom.js';
 import { CARD_MIN_DISTANCE_MM, estimateDistanceMm, isTooCloseForCard } from '../core/calibration.js';
 import { TwoPointMeasure } from './TwoPointMeasure.js';
+import { CARD_H_MM, CARD_W_MM, type CardQuad } from '../core/cardPose.js';
 
 export interface CardCalibrationProps {
   frozen: HTMLCanvasElement;
-  onValidate(cardWidthPx: number): void;
+  onValidate(cardWidthPx: number, quad: CardQuad): void;
   onCancel(): void;
 }
 
 export function CardCalibration(props: CardCalibrationProps): JSX.Element {
   const [widthPx, setWidthPx] = useState(0);
+  const [edges, setEdges] = useState<{ a: Pt; b: Pt } | null>(null);
+
+  /**
+   * Le quadrilatère déduit des deux poignées, en supposant la ligne de guidage
+   * à mi-hauteur de la carte et ses proportions ISO.
+   *
+   * ⚠️ Ce n'est qu'une GRAINE : `core/cardEdges.ts` l'accroche ensuite sur les
+   * vrais bords, au dixième de pixel. Le client n'a donc pas à être précis — ce
+   * qui est bien le seul niveau d'exigence acceptable pour un client à distance.
+   */
+  const quad: CardQuad | null =
+    edges === null
+      ? null
+      : (() => {
+          const half = (Math.abs(edges.b.x - edges.a.x) * CARD_H_MM) / CARD_W_MM / 2;
+          return [
+            { x: edges.a.x, y: edges.a.y - half },
+            { x: edges.b.x, y: edges.b.y - half },
+            { x: edges.b.x, y: edges.b.y + half },
+            { x: edges.a.x, y: edges.a.y + half },
+          ] as CardQuad;
+        })();
 
   const imageWidth = props.frozen.width;
   const tooClose = widthPx > 0 && isTooCloseForCard(widthPx, imageWidth);
@@ -51,6 +75,7 @@ export function CardCalibration(props: CardCalibrationProps): JSX.Element {
       <TwoPointMeasure
         frozen={props.frozen}
         onChange={setWidthPx}
+        onEdges={(a, b) => setEdges({ a, b })}
         blocker={tooClose ? 'trop près' : null}
       />
 
@@ -66,7 +91,11 @@ export function CardCalibration(props: CardCalibrationProps): JSX.Element {
         )}
       </p>
 
-      <button type="button" disabled={tooClose || widthPx <= 0} onClick={() => props.onValidate(widthPx)}>
+      <button
+        type="button"
+        disabled={tooClose || widthPx <= 0 || quad === null}
+        onClick={() => quad !== null && props.onValidate(widthPx, quad)}
+      >
         Valider — vous pourrez ranger votre carte
       </button>{' '}
       <button type="button" onClick={props.onCancel}>
