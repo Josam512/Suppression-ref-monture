@@ -25,6 +25,7 @@ import {
   INTEROCULAR_R,
   PALPEBRAL_FISSURE,
   scaleBound,
+  robustScaleBound,
   scaleFromOcular,
 } from '../src/core/ocularPrior.js';
 
@@ -201,5 +202,64 @@ describe('l’estimateur lui-même', () => {
     const errGls = Math.abs(gls - mmPerPx);
     const errNaif = Math.abs(naif - mmPerPx);
     expect(errGls).toBeLessThan(errNaif);
+  });
+});
+
+/**
+ * ⭐ Le conditionnement de Σ ne doit JAMAIS pouvoir fabriquer de l'information.
+ *
+ * Défaut trouvé en auditant la borne : à corrélation élevée, Σ⁻¹ extrait un
+ * contraste de variance quasi nulle et la borne s'effondre sous les 1,4 % —
+ * mieux que la carte, alors qu'aucune information n'a été ajoutée. C'est le
+ * mode d'échec du dépôt : plausible, stable, faux, silencieux.
+ */
+describe('la borne ne se laisse pas fabriquer par le conditionnement', () => {
+  const quatuor = (r: number): { mean: number[]; sd: number[]; corr: number[][] } => ({
+    mean: [HVID.meanMm, HVID.meanMm, PALPEBRAL_FISSURE.meanMm, PALPEBRAL_FISSURE.meanMm],
+    sd: [HVID.sdMm, HVID.sdMm, PALPEBRAL_FISSURE.sdMm, PALPEBRAL_FISSURE.sdMm],
+    corr: [
+      [1, INTEROCULAR_R, r, r],
+      [INTEROCULAR_R, 1, r, r],
+      [r, r, 1, INTEROCULAR_R],
+      [r, r, INTEROCULAR_R, 1],
+    ],
+  });
+
+  it('la borne NAÏVE s’effondre à corrélation élevée — le défaut, documenté', () => {
+    const q = quatuor(0.95);
+    // On verrouille le défaut lui-même : si un jour il disparaît, il faut le
+    // savoir, parce que c'est ce qui justifie l'existence de robustScaleBound.
+    expect(scaleBound(q.mean, covarianceOf(q.sd, q.corr))).toBeLessThan(0.02);
+  });
+
+  it('GARDE-FOU : la borne DÉFENDABLE refuse ce même cas', () => {
+    const q = quatuor(0.95);
+    expect(robustScaleBound(q.mean, q.sd, q.corr)).toBe(Infinity);
+  });
+
+  it('sur le domaine défendable, elle ne descend pas sous 4 mm — la carte gagne', () => {
+    // Balayage, pas un point : c'est la règle du §11.4 sur les garde-fous.
+    //
+    // ⚠️ Le seuil est en MILLIMÈTRES, pas en pourcents, et c'est délibéré. Une
+    // première rédaction affirmait « au-dessus de 3 % » : mesure faite, la borne
+    // vaut 2,99 % à corrélation nulle. C'est le test qui était faux, pas le
+    // code — et le pourcentage n'était de toute façon pas la grandeur qui
+    // tranche. Ce qui décide, c'est l'écart en millimètres face au seuil de
+    // lecture de 3 à 5 mm du §5 : 4,2 mm au mieux, la carte reste requise.
+    for (const r of [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]) {
+      const q = quatuor(r);
+      const b = robustScaleBound(q.mean, q.sd, q.corr);
+      expect(b, `r=${r}`).toBeGreaterThan(0.029);
+      expect(b * TEMPORAL_MM, `r=${r}`).toBeGreaterThan(4);
+    }
+  });
+
+  it('elle est toujours PIRE ou égale à la borne naïve : c’est un pire cas', () => {
+    for (const r of [0, 0.2, 0.4, 0.6]) {
+      const q = quatuor(r);
+      expect(robustScaleBound(q.mean, q.sd, q.corr)).toBeGreaterThanOrEqual(
+        scaleBound(q.mean, covarianceOf(q.sd, q.corr)) - 1e-12,
+      );
+    }
   });
 });

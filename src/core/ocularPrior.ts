@@ -153,6 +153,70 @@ export function covarianceOf(
   return sd.map((si, i) => sd.map((sj, j) => si * sj * (correlation[i]?.[j] ?? 0)));
 }
 
+/**
+ * Incertitude sur les corrélations elles-mêmes.
+ *
+ * Ce ne sont pas des constantes de la nature : `INTEROCULAR_R` est publiée entre
+ * 0,87 et 0,98 selon les études, et `HVID_PFL_R` n'est **pas sourcée du tout**.
+ * ±0,05 est déjà optimiste.
+ */
+export const CORRELATION_UNCERTAINTY = 0.05;
+
+/**
+ * ⭐ Borne d'information DÉFENDABLE — celle à utiliser pour conclure.
+ *
+ * ## Le piège que ce garde-fou ferme
+ *
+ * `scaleBound` suppose la matrice de corrélation **exactement connue**. Quand
+ * les corrélations montent, Σ approche la singularité et Σ⁻¹ se met à extraire
+ * un CONTRASTE de variance quasi nulle entre deux variables presque
+ * proportionnelles. La borne s'effondre alors — mesuré sur ce fichier :
+ *
+ * | corrélation HVID↔PFL supposée | borne rendue |
+ * |---|---|
+ * | 0,30 | 3,20 % |
+ * | 0,90 | 2,30 % |
+ * | **0,95** | **1,39 %** ← artefact |
+ * | 0,98 et plus | Infinity (refus franc) |
+ *
+ * Ce 1,39 % n'est pas une information : c'est un contraste qui n'existe que si
+ * `r` vaut 0,95 au centième près. Personne ne connaît `r` à ce point. Et c'est
+ * exactement le mode d'échec que ce dépôt combat : un chiffre plausible, stable,
+ * meilleur que la carte — et faux, sans que rien ne le signale. La trappe était
+ * ouverte : il suffisait qu'un lot futur « améliore » les corrélations vers les
+ * valeurs hautes publiées pour croire avoir battu la carte.
+ *
+ * ## Ce que fait ce garde-fou
+ *
+ * Il rend la borne du **pire cas** sur une perturbation des corrélations de
+ * ±`CORRELATION_UNCERTAINTY`. Une borne qui dépend d'un `r` au centième près se
+ * dénonce d'elle-même : l'une des perturbations rend `Infinity`, donc le pire
+ * cas aussi. Aucun réglage ne permet plus de faire descendre le chiffre en
+ * jouant sur les corrélations.
+ */
+export function robustScaleBound(
+  meanMm: readonly number[],
+  sd: readonly number[],
+  correlation: readonly number[][],
+): number {
+  let worst = 0;
+  for (const delta of [-CORRELATION_UNCERTAINTY, 0, CORRELATION_UNCERTAINTY]) {
+    const shifted = correlation.map((row, i) =>
+      row.map((r, j) => {
+        if (i === j) return 1;
+        // Pousser CHAQUE corrélation vers ±1 du même mouvement : c'est la
+        // direction qui dégrade le conditionnement, donc celle qui compte.
+        const s = r >= 0 ? 1 : -1;
+        return Math.max(-1, Math.min(1, r + s * delta));
+      }),
+    );
+    const b = scaleBound(meanMm, covarianceOf(sd, shifted));
+    if (!Number.isFinite(b)) return Infinity; // conditionnement rompu : on refuse
+    if (b > worst) worst = b;
+  }
+  return worst;
+}
+
 /** Inversion de Gauss-Jordan. Les matrices en jeu font 2 à 6 lignes. */
 function invert(m: readonly number[][]): number[][] {
   const n = m.length;
