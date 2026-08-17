@@ -157,6 +157,33 @@ export const FACE_WIDTH_CORRECTION_MM = 0; // calibrée le : —  | sur N mesure
 export const FACE_WIDTH_CORRECTION_RATIO = 1; // calibré le : —  | sur N mesures : 0
 
 /**
+ * La largeur à laquelle on compare la monture, et son incertitude.
+ *
+ * ⭐ Deux chemins, dans cet ordre de préférence :
+ *
+ *  1. l'écart temporal **mesuré sur ce client** pendant la calibration
+ *     (`core/temporalWidth.ts`) — la largeur de sa tête à hauteur des yeux ;
+ *  2. à défaut, l'écartement des repères 234/454 corrigé par les deux
+ *     constantes ci-dessus, qui valent aujourd'hui « aucune correction ».
+ *
+ * ⚠️ Ce n'est PAS un branchement sur la source (§4 règle 2) : la question posée
+ * est « cette grandeur a-t-elle été mesurée ? », pas « d'où vient-elle ? ». Une
+ * calibration carte sans rotation et une calibration iris prennent exactement le
+ * même chemin ici, comme l'exige le garde-fou §11.4.
+ */
+export function comparisonWidth(cal: UserCalibration): { mm: number; relError: number } {
+  const measured = cal.temporalWidthMm;
+  const measuredRel = cal.temporalRelError;
+  if (measured !== undefined && measuredRel !== undefined) {
+    return { mm: measured, relError: measuredRel };
+  }
+  return {
+    mm: cal.faceWidthMm * FACE_WIDTH_CORRECTION_RATIO + FACE_WIDTH_CORRECTION_MM,
+    relError: cal.relError,
+  };
+}
+
+/**
  * Assemble tout. SEUL point d'entrée de la légende — l'UI n'appelle rien d'autre.
  *
  * @returns null si aucune calibration, ou si la pose est hors tolérance (règle 3).
@@ -185,15 +212,20 @@ export function verdict(
   if (Math.abs(m.yawRad) > MAX_YAW_RAD) return null;
   if (Math.abs(m.rollRad) > MAX_ROLL_RAD) return null;
 
-  const faceWidthMm = cal.faceWidthMm * FACE_WIDTH_CORRECTION_RATIO + FACE_WIDTH_CORRECTION_MM;
-  const corrected: UserCalibration = { ...cal, faceWidthMm };
+  const compared = comparisonWidth(cal);
+  const faceWidthMm = compared.mm;
+  const corrected: UserCalibration = { ...cal, faceWidthMm, relError: compared.relError };
 
   const frameWidthMm = totalFrameWidthMm(spec);
   const deltaMm = frameWidthMm - faceWidthMm;
 
   // Le décentrement n'est affiché que si la mesure peut réellement trancher
   // les 3 mm. Masqué s'il n'est pas concluant — pas approximé, masqué.
-  const u = decentrementUncertaintyMm(spec, corrected);
+  //
+  // ⚠️ Il se propage depuis l'incertitude d'ÉCHELLE (`cal.relError`), pas depuis
+  // celle de l'écart temporal : le décentrement est une longueur mesurée à
+  // l'écran, il ne dépend pas de la largeur à laquelle on compare la monture.
+  const u = decentrementUncertaintyMm(spec, cal);
   const conclusive = u < DECENTREMENT_THRESHOLD_MM / 2;
 
   const decentrementMm = conclusive
@@ -206,7 +238,7 @@ export function verdict(
   return {
     frameWidthMm,
     faceWidthMm,
-    faceWidthUncertaintyMm: faceWidthMm * cal.relError,
+    faceWidthUncertaintyMm: faceWidthMm * compared.relError,
     deltaMm,
     thresholdMm: thresholdFor(faceWidthMm),
     status: classify(deltaMm, corrected),

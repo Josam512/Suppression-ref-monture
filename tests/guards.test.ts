@@ -98,6 +98,21 @@ describe('GARDE-FOU §0.0.1 — le code ne branche jamais sur la source', () => 
     }
   });
 
+  /**
+   * §3 — « aucun fichier > 300 lignes ; s'il dépasse, il se scinde ».
+   *
+   * Le monolithe HTML de 800 lignes était la cause racine de « ça marche, puis
+   * ça recasse ». La règle existait déjà dans le contrat mais rien ne la
+   * vérifiait : trois fichiers l'avaient franchie sans que personne s'en avise.
+   */
+  it('aucun fichier de src/ ne dépasse 300 lignes (§3)', () => {
+    const LIMITE = 300;
+    for (const file of walk('src')) {
+      const lignes = readFileSync(file, 'utf8').split('\n').length;
+      expect(lignes, `${file} fait ${lignes} lignes : le scinder`).toBeLessThanOrEqual(LIMITE);
+    }
+  });
+
   it('aucun vocabulaire de sélection dans src/', () => {
     for (const root of ['src']) {
       for (const file of walk(root)) {
@@ -121,6 +136,7 @@ describe('GARDE-FOU — le hook pre-commit n\'a pas été vidé', () => {
       'source ===',
       'img\\.width',
       'ctx\\.scale',
+      '300 lignes',
     ]) {
       expect(hook, `barrage manquant : ${needle}`).toContain(needle);
     }

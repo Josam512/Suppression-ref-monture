@@ -53,6 +53,14 @@ grep -rnE "=[[:space:]]*1[0-9]{2}(\.[0-9]+)?[[:space:]]*;" src/core --include=*.
   | grep -v "export const" \
   && fail "Constante de taille en dur (§0.0.3) — l'exporter et la documenter"
 
+# — i. ⭐ NOUVEAU : la règle des 300 lignes (§3), jusqu'ici jamais vérifiée.
+#      Le monolithe HTML de 800 lignes est la cause racine documentée de
+#      « ça marche, puis ça recasse ». Trois fichiers avaient franchi la barre
+#      sans que personne s'en avise.
+find src \( -name '*.ts' -o -name '*.tsx' \) -exec wc -l {} + \
+  | awk '$2 != "total" && $1 > 300 { print "   " $2 " : " $1 " lignes"; found = 1 } END { exit !found }' \
+  && fail "Fichier de plus de 300 lignes (§3) — le scinder"
+
 # ⚠️ Indispensable : sans ce exit 0, le code de retour du hook serait celui du
 # dernier grep, qui vaut 1 quand il ne trouve RIEN — c'est-à-dire quand tout va
 # bien. Le hook refuserait alors tous les commits sains.
