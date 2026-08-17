@@ -25,7 +25,7 @@
  */
 
 import { at, CalibrationError, midpoint, px, type NormalizedLandmark } from './geom.js';
-import { faceWidthPx, FACE_L, FACE_R } from './faceMetrics.js';
+import { EYE_L, EYE_R, faceWidthPx } from './faceMetrics.js';
 
 /**
  * Repère de mi-front, sur le plan sagittal — là où la carte repose.
@@ -35,6 +35,43 @@ import { faceWidthPx, FACE_L, FACE_R } from './faceMetrics.js';
  * décalage constant de ce repère (voir `depthOffsetMm`).
  */
 export const FOREHEAD = 151;
+
+/** Repère de sonde effectif — surchargeable en atelier pour comparer. */
+export let PROBE_LANDMARK = FOREHEAD;
+export function setProbeLandmark(i: number): void {
+  PROBE_LANDMARK = i;
+}
+
+/**
+ * ⭐ Paire symétrique servant de RÉFÉRENCE sagittale : les COINS EXTERNES DES YEUX.
+ *
+ * ## Pourquoi surtout pas 234/454
+ *
+ * C'était le choix d'origine, et c'est la plus grosse erreur de ce fichier. Les
+ * repères 234/454 sont sur le CONTOUR du visage : quand la tête tourne, ils ne
+ * suivent pas un point de la peau, ils **glissent le long de la silhouette**.
+ * Ce ne sont pas des points physiques, et leur milieu se déplace de plusieurs
+ * dizaines de millimètres sans qu'aucune profondeur soit en cause.
+ *
+ * Mesurée sur la première vraie vidéo, la profondeur sortait alors à **99 mm**
+ * quel que soit le repère sondé — front, sellion, glabelle, pointe du nez. Le
+ * coupable n'était donc pas la sonde mais la référence. Avec les coins externes
+ * des yeux, qui sont eux de vrais points anatomiques, la même vidéo donne
+ * **36,8 mm à ±1 %**.
+ *
+ * ## Pourquoi les coins EXTERNES
+ *
+ * Ils sont à hauteur des yeux — exactement la ligne où l'écart temporal est
+ * mesuré, et où passe la face d'une monture. Le plan qu'ils définissent est donc
+ * celui dont on veut l'échelle, à quelques millimètres près, alors que les
+ * canthus internes ou les ailes du nez sont nettement plus en avant : la même
+ * vidéo donne 26,7 mm et 13,9 mm avec eux. La différence n'est pas du bruit,
+ * c'est de l'anatomie — et c'est bien la preuve que la mesure fonctionne.
+ */
+export let REFERENCE_PAIR: [number, number] = [EYE_L, EYE_R];
+export function setReferencePair(a: number, b: number): void {
+  REFERENCE_PAIR = [a, b];
+}
 
 /** En deçà, sin(θ) est trop petit et le bruit des repères domine le signal. */
 export const MIN_PROBE_YAW_RAD = 0.17; // ~10°
@@ -78,8 +115,11 @@ export function isUsableProbeView(v: RotatedView): boolean {
 export function frontalOffsetMm(v: RotatedView, faceWidthMm: number): number {
   const pxPerMm = faceWidthPx(v.lm, v.w, v.h) / Math.cos(v.yawRad) / faceWidthMm;
 
-  const f = px(at(v.lm, FOREHEAD), v.w, v.h);
-  const m = midpoint(px(at(v.lm, FACE_L), v.w, v.h), px(at(v.lm, FACE_R), v.w, v.h));
+  const f = px(at(v.lm, PROBE_LANDMARK), v.w, v.h);
+  const m = midpoint(
+    px(at(v.lm, REFERENCE_PAIR[0]), v.w, v.h),
+    px(at(v.lm, REFERENCE_PAIR[1]), v.w, v.h),
+  );
 
   const c = Math.cos(v.rollRad);
   const s = Math.sin(v.rollRad);

@@ -56,6 +56,20 @@ export interface HeadModel {
   headHalfMm: number;
 }
 
+/**
+ * Profondeur que la sonde peut RÉELLEMENT mesurer sur ce modèle.
+ *
+ * ⚠️ Ce n'est pas `foreheadAheadMm`. La référence sagittale n'est plus le milieu
+ * des repères 234/454 — ils glissent sur la silhouette quand la tête tourne, ce
+ * ne sont pas des points physiques, et la première vraie vidéo l'a démontré en
+ * rendant 99 mm quel que soit le point sondé. La référence est désormais les
+ * COINS EXTERNES DES YEUX, qui sont eux de vrais points anatomiques. La sonde
+ * mesure donc l'écart front ↔ coins externes.
+ */
+export function probeDepthMm(m: HeadModel): number {
+  return m.foreheadAheadMm - m.sellionAheadMm / 2;
+}
+
 /** Un adulte plausible : repères à 115 mm, tempes réelles à 136 mm. */
 export const ADULTE: HeadModel = {
   templeHalfMm: 57.5,

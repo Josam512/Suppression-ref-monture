@@ -30,7 +30,8 @@
 
 import { at, px, type NormalizedLandmark } from './geom.js';
 import { EYE_L, EYE_R, FACE_L, FACE_R } from './faceMetrics.js';
-import { findHeadEdge, type ImageBuffer } from './silhouette.js';
+import { findHeadEdgeByGrowth } from './headGrowth.js';
+import { type ImageBuffer } from './silhouette.js';
 import {
   glassesRefusal,
   MAX_TEMPLE_MARGIN_MM,
@@ -115,7 +116,7 @@ function medianEdge(
 
   const first = -Math.floor(EDGE_ROWS / 2);
   for (let k = 0; k < EDGE_ROWS; k++) {
-    const r = findHeadEdge({
+    const r = findHeadEdgeByGrowth({
       buf: input.frontal,
       motion: input.motion,
       y: y + (first + k) * EDGE_ROW_STEP_PX,

@@ -42,6 +42,9 @@ export const MIN_FIT_VIEWS = 4;
  */
 export const MIN_YAW_SPREAD_RAD = 0.12; // ~7°
 
+/** Écart minimal de sin(yaw) entre deux vues pour que leur pente ait un sens. */
+const MIN_SIN_GAP = 0.15;
+
 /** Bornes de plausibilité de la distance mesurée. Détecteur de panne. */
 export const DISTANCE_MIN_MM = 250;
 export const DISTANCE_MAX_MM = 1500;
@@ -49,6 +52,18 @@ export const DISTANCE_MAX_MM = 1500;
 export const DEPTH_MIN_MM = 5;
 export const DEPTH_MAX_MM = 60;
 
+/**
+ * 🔴 L'estimateur à DEUX paramètres a été SUPPRIMÉ, pas désactivé.
+ *
+ * Il ajustait `g(θ) = A·sinθ + B·sinθcosθ` pour tirer d'un coup la profondeur et
+ * la distance. Sur la tête de synthèse il marchait ; sur la première vraie vidéo
+ * il rendait 14,6 mm puis 43,8 mm pour la même personne, parce que les deux
+ * régresseurs restent presque colinéaires sur la plage exploitable.
+ *
+ * Le garder « au cas où » aurait laissé dans le dépôt un estimateur dont on sait
+ * qu'il ment avec assurance. La distance n'est plus ajustée du tout : elle est
+ * fixée à la fenêtre de travail, où elle ne pèse que 3,4 % de la profondeur.
+ */
 export interface DepthAndDistance {
   /** Profondeur front ↔ plan des repères temporaux, en mm. Robuste. */
   depthMm: number;
@@ -70,197 +85,111 @@ export interface DepthAndDistance {
   yawSpreadRad: number;
 }
 
-/** Résout le système 2×2 des moindres carrés. `null` si mal conditionné. */
-function solve2x2(
-  suu: number,
-  suv: number,
-  svv: number,
-  sug: number,
-  svg: number,
-): { a: number; b: number } | null {
-  const det = suu * svv - suv * suv;
-  // Le déterminant normalisé mesure la colinéarité des deux régresseurs.
-  if (!Number.isFinite(det) || Math.abs(det) < 1e-12 * Math.abs(suu * svv)) return null;
-  return {
-    a: (sug * svv - svg * suv) / det,
-    b: (svg * suu - sug * suv) / det,
-  };
-}
-
-interface Row {
-  u: number;
-  w: number;
-  g: number;
+function median(xs: readonly number[]): number {
+  if (xs.length === 0) return NaN;
+  const s = [...xs].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 === 1 ? (s[mid] ?? NaN) : ((s[mid - 1] ?? NaN) + (s[mid] ?? NaN)) / 2;
 }
 
 /**
- * Dispersion des deux coefficients quand on retire une vue à la fois.
+ * ⭐ Profondeur front ↔ tempes, par MÉDIANE sur les vues. Un seul paramètre.
  *
- * Le jackknife ne suppose rien sur la loi des erreurs — il mesure la sensibilité
- * réelle de l'ajustement à ses propres données. C'est ce qu'il fallait : sur la
- * première vraie vidéo, une seule vue de différence faisait tripler la
- * profondeur, et aucune formule de résidus ne le voyait venir.
+ * ## Pourquoi ceci remplace la régression à deux inconnues
+ *
+ * Vouloir tirer la profondeur ET la distance des mêmes images était une erreur
+ * de conception, et la première vraie vidéo l'a démontrée : `sin θ` et
+ * `sin θ·cos θ` restent presque colinéaires sur toute la plage exploitable
+ * (10–35°), si bien que le second paramètre absorbe le bruit et le rend au
+ * premier. Résultat mesuré : 14,6 mm sur une image frontale, 43,8 mm sur une
+ * autre, même vidéo, une seule vue d'écart.
+ *
+ * Or la distance n'a JAMAIS eu besoin d'être ajustée : elle n'intervient que
+ * dans le petit terme perspectif du milieu, qui pèse ~20 % de la profondeur. Une
+ * distance connue à ±17 % près — la fenêtre de travail imposée — n'y introduit
+ * donc que 3,4 % d'erreur sur la profondeur. On la fixe, et il ne reste qu'une
+ * inconnue.
+ *
+ * Chaque vue donne alors sa propre estimation, et on prend la **médiane** : une
+ * image floue, un roll passager, une détection qui décroche ne déplacent plus
+ * le résultat. Ce que la régression aux moindres carrés, elle, ne pardonnait pas.
  */
-function jackknife(rows: readonly Row[], halfWidthMm: number): { depthSd: number; leverSd: number } {
-  const depths: number[] = [];
-  const levers: number[] = [];
-
-  for (let skip = 0; skip < rows.length; skip++) {
-    let suu = 0;
-    let suv = 0;
-    let svv = 0;
-    let sug = 0;
-    let svg = 0;
-    for (let i = 0; i < rows.length; i++) {
-      if (i === skip) continue;
-      const r = rows[i];
-      if (r === undefined) continue;
-      suu += r.u * r.u;
-      suv += r.u * r.w;
-      svv += r.w * r.w;
-      sug += r.u * r.g;
-      svg += r.w * r.g;
-    }
-    const s = solve2x2(suu, suv, svv, sug, svg);
-    if (s === null) continue;
-    depths.push(Math.abs(s.a));
-    levers.push(Math.abs(s.b));
-  }
-
-  const sd = (xs: readonly number[]): number => {
-    if (xs.length < 2) return Infinity;
-    const m = xs.reduce((a, b) => a + b, 0) / xs.length;
-    const v = xs.reduce((a, b) => a + (b - m) ** 2, 0) / (xs.length - 1);
-    // Facteur du jackknife : la dispersion des « leave-one-out » sous-estime
-    // celle de l'estimateur d'un facteur √(n−1).
-    return Math.sqrt(v * (xs.length - 1));
-  };
-
-  void halfWidthMm;
-  return { depthSd: sd(depths), leverSd: sd(levers) };
-}
-
-/**
- * Ajuste `g(θ) = A·sinθ + B·sinθ·cosθ` sur toutes les vues, puis en tire
- * la profondeur et la distance.
- *
- * ## Le signe
- *
- * La convention de signe du yaw de MediaPipe n'est pas vérifiable sans mire. Si
- * elle est globalement inversée, `sinθ` et `sinθcosθ` changent tous deux de
- * signe, donc A et B aussi : les VALEURS ABSOLUES, elles, ne bougent pas. Or le
- * front est anatomiquement devant les tempes et la caméra est devant le sujet —
- * deux faits, pas deux mesures. On mesure les magnitudes et on pose les signes.
- *
- * @param faceWidthMm largeur naïve du visage, pour l'échelle de chaque vue.
- * @throws CalibrationError en nommant ce qui manque.
- */
-export function fitDepthAndDistance(
+export function depthFromRotation(
   views: readonly RotatedView[],
   faceWidthMm: number,
-): DepthAndDistance {
-  const usable = views.filter(isUsableProbeView);
-  if (usable.length < MIN_FIT_VIEWS) {
-    throw new CalibrationError(
-      `Seulement ${usable.length} vue(s) exploitable(s) sur ${views.length}. ` +
-        `Tournez la tête plus lentement, d'un côté puis de l'autre, sans la pencher.`,
-    );
-  }
-
-  const angles = usable.map((v) => Math.abs(v.yawRad));
-  const yawSpreadRad = Math.max(...angles) - Math.min(...angles);
-  if (yawSpreadRad < MIN_YAW_SPREAD_RAD) {
-    throw new CalibrationError(
-      `Toutes les vues sont au même angle (${((yawSpreadRad * 180) / Math.PI).toFixed(0)}° d'écart). ` +
-        `Il faut balayer progressivement, sinon la profondeur et la distance ne se distinguent pas.`,
-    );
-  }
-
-  let suu = 0;
-  let suv = 0;
-  let svv = 0;
-  let sug = 0;
-  let svg = 0;
-
-  const rows: Row[] = [];
-  for (const v of usable) {
-    const s = Math.sin(v.yawRad);
-    const u = s;
-    const w = s * Math.cos(v.yawRad);
-    const g = frontalOffsetMm(v, faceWidthMm);
-    rows.push({ u, w, g });
-    suu += u * u;
-    suv += u * w;
-    svv += w * w;
-    sug += u * g;
-    svg += w * g;
-  }
-
-  const sol = solve2x2(suu, suv, svv, sug, svg);
-  if (sol === null) {
-    throw new CalibrationError(
-      `Les angles balayés ne permettent pas de séparer la profondeur de la distance. ` +
-        `Tournez la tête plus franchement, jusqu'à environ 25° de chaque côté.`,
-    );
-  }
-
+  distanceMm: number,
+): { depthMm: number; depthRelError: number; views: number } {
   const half = faceWidthMm / 2;
-  const depthMm = Math.abs(sol.a);
+  const points: Array<{ s: number; g: number }> = [];
 
-  // ⚠️ Le coefficient du terme en `sinθ·cosθ` ne vaut PAS `a²/D`, mais
-  // `(a² + Δz²)/D`.
-  //
-  // Le développement exact de `u = f·X/Z` fait apparaître un second terme de
-  // même forme, `−(Δz²/D)·sinθ·cosθ`, qui vient du rapprochement du front
-  // lui-même quand la tête tourne. Les deux sont indiscernables par la
-  // régression : elle mesure leur somme.
-  //
-  // Ne pas en tenir compte n'affecte pas la profondeur — elle est portée par
-  // l'autre régresseur — mais sous-estime la DISTANCE de 27 % sur une tête
-  // adulte. Vérifié au banc : 509 mm rendus pour 700 mm réels, avant correction.
-  const lever = half * half + depthMm * depthMm;
-  const distanceMm = Math.abs(sol.b) > 0 ? lever / Math.abs(sol.b) : Infinity;
+  for (const v of views) {
+    if (!isUsableProbeView(v)) continue;
+    const s = Math.sin(v.yawRad);
 
-  // 🔴 Incertitude par JACKKNIFE, et non par les résidus.
+    // g(θ) = c − Δz·sinθ − (a² + Δz²)/D·cosθ·sinθ, Δz² négligeable devant a².
+    // On retranche ici le terme perspectif, connu ; il ne reste que c et Δz.
+    const midpointTerm = ((half * half) / distanceMm) * Math.cos(v.yawRad) * s;
+    points.push({ s, g: frontalOffsetMm(v, faceWidthMm) + midpointTerm });
+  }
+
+  if (points.length < MIN_FIT_VIEWS) {
+    throw new CalibrationError(
+      `Seulement ${points.length} vue(s) exploitable(s) sur ${views.length}. ` +
+        `Tournez la tête d'un côté puis de l'autre, sans la pencher.`,
+    );
+  }
+
+  // 🔴 Il reste un DÉCALAGE CONSTANT, et il faut l'éliminer, pas le moyenner.
   //
-  // La formule des résidus suppose des erreurs indépendantes d'une vue à
-  // l'autre. Sur une vraie vidéo elles ne le sont pas du tout : le détecteur se
-  // trompe de la même façon sur toutes les images d'une même phase de rotation,
-  // le flou de bougé est corrélé, le roll dérive lentement. Résultat mesuré sur
-  // la première vraie prise : les résidus annonçaient une profondeur sûre, et
-  // la valeur passait de 15 mm à 44 mm selon l'image frontale retenue.
+  // Le repère de front n'est jamais exactement sur le plan sagittal : un visage
+  // est asymétrique, et la tête n'est pas parfaitement centrée. Cela ajoute à
+  // `g` une constante `c` que la relation devient `g = c − Δz·sinθ`. Diviser
+  // chaque vue par `sinθ` transforme alors ce `c` en `c/sinθ`, qui explose aux
+  // petits angles : sur la vraie vidéo, la profondeur sortait à 103 mm — trois
+  // fois trop — et de façon parfaitement CONSTANTE d'une vue à l'autre, donc
+  // avec l'air d'une bonne mesure.
   //
-  // On refait donc l'ajustement en retirant chaque vue à tour de rôle, et on
-  // prend la DISPERSION des résultats. C'est plus lent — une trentaine de
-  // systèmes 2×2 — et c'est la seule mesure d'incertitude que la première
-  // confrontation au réel n'a pas démentie.
-  const jack = jackknife(rows, half);
-  const depthRelError = Math.min(1, jack.depthSd / Math.max(depthMm, 1e-6));
-  const distanceRelError = Math.min(1, jack.leverSd / Math.max(Math.abs(sol.b), 1e-9));
+  // La pente élimine la constante. On la prend par Theil–Sen : la médiane des
+  // pentes de toutes les paires de vues. C'est la mesure différentielle à deux
+  // vues du §4, généralisée à toutes les paires, avec une médiane pour résister
+  // aux images floues et aux décrochages de détection.
+  const slopes: number[] = [];
+  for (let i = 0; i < points.length; i++) {
+    for (let j = i + 1; j < points.length; j++) {
+      const a = points[i];
+      const b = points[j];
+      if (a === undefined || b === undefined) continue;
+      const ds = a.s - b.s;
+      if (Math.abs(ds) < MIN_SIN_GAP) continue;
+      slopes.push((a.g - b.g) / ds);
+    }
+  }
+  if (slopes.length < MIN_FIT_VIEWS) {
+    throw new CalibrationError(
+      `Les angles balayés sont trop semblables pour mesurer la profondeur. ` +
+        `Tournez la tête franchement d'un côté, puis de l'autre.`,
+    );
+  }
+
+  const slope = median(slopes);
+  const depthMm = Math.abs(slope);
+
+  // Dispersion robuste : l'écart absolu médian, mis à l'échelle d'un écart-type
+  // gaussien. Insensible aux paires aberrantes, contrairement à l'écart-type —
+  // et c'est justement d'elles qu'il s'agit de se protéger.
+  const mad = median(slopes.map((x) => Math.abs(x - slope))) * 1.4826;
+  const depthRelError = Math.min(
+    1,
+    mad / Math.sqrt(points.length) / Math.max(depthMm, 1e-6),
+  );
 
   if (depthMm < DEPTH_MIN_MM || depthMm > DEPTH_MAX_MM) {
     throw new CalibrationError(
       `Profondeur mesurée : ${depthMm.toFixed(0)} mm, hors de tout plausible ` +
-        `(${DEPTH_MIN_MM}–${DEPTH_MAX_MM} mm). Le visage a probablement été perdu en route.`,
+        `(${DEPTH_MIN_MM}–${DEPTH_MAX_MM} mm). La rotation n'a pas été exploitable.`,
     );
   }
-  // ⚠️ Une distance hors plage n'est PAS une panne : c'est le cas NOMINAL sur
-  // une vraie vidéo. Le banc l'avait annoncé — ±300 mm d'écart-type sur 700
-  // dès 0,5 px de bruit — et la première vraie prise l'a confirmé en rendant
-  // 4 cm. La profondeur, elle, reste bonne.
-  //
-  // On ne jette donc pas la mesure : on marque la distance comme inutilisable
-  // (`relError = 1`), et la fusion en aval lui donnera un poids nul. Lever ici
-  // faisait perdre AUSSI la profondeur, et la correction de parallaxe avec elle.
-  const distanceUsable =
-    Number.isFinite(distanceMm) && distanceMm >= DISTANCE_MIN_MM && distanceMm <= DISTANCE_MAX_MM;
 
-  return {
-    depthMm,
-    depthRelError,
-    distanceMm: distanceUsable ? distanceMm : NaN,
-    distanceRelError: distanceUsable ? distanceRelError : 1,
-    views: usable.length,
-    yawSpreadRad,
-  };
+  return { depthMm, depthRelError, views: points.length };
 }
+

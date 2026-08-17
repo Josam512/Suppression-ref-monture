@@ -63,7 +63,7 @@ const BG_SIGMA = 3;
 /** Plancher de tolérance : un fond parfaitement uni ne doit pas rendre tout « objet ». */
 const BG_FLOOR = 10;
 
-function offset(buf: ImageBuffer, x: number, y: number): number {
+export function offset(buf: ImageBuffer, x: number, y: number): number {
   return (y * buf.width + x) * 4;
 }
 
@@ -129,6 +129,10 @@ export interface EdgeSearch {
 
 /**
  * Cherche la frontière tête/fond sur une ligne, en partant DU FOND vers la tête.
+ *
+ * ⚠️ Conservée pour les scènes à fond parfaitement uni, où elle reste plus
+ * précise. Le chemin nominal est `findHeadEdgeByGrowth`, qui ne suppose rien
+ * de l'arrière-plan.
  *
  * ⚠️ Le sens de parcours n'est pas un détail. En partant du repère vers
  * l'extérieur, la première mèche de cheveux, un reflet de lunette ou une ombre

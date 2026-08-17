@@ -506,6 +506,80 @@ dans la mesure. La carte ISO 7810 a **0,1 %** d'incertitude normative contre
 supprimant les biais autour d'un étalon déjà parfait — c'est ce que fait la
 mesure de parallaxe — pas en cherchant un meilleur étalon biologique.
 
+## ✅ La chaîne V1 tourne sur la vraie vidéo — telle quelle
+
+Téléphone tenu à la main, salon, fenêtre et stores derrière, tête décentrée.
+**Aucune reprise de vue.** Résultat :
+
+| | |
+|---|---|
+| Profondeur carte ↔ coins des yeux | **36,8 mm ± 1 %** (37 vues) |
+| Reliquat anatomique yeux → tempes | 12 mm déclarés (± 6) |
+| Biais de parallaxe corrigé | **+6,7 %** |
+| Largeur des repères 234↔454 | 129,6 mm brute → **138,3 mm** |
+| **Écart temporal** | **152,2 mm ± 2,8 mm** (1,8 %) |
+| Incertitude d'échelle | **1,65 %** |
+
+Contrôle de stabilité sur une autre image frontale de la même vidéo :
+profondeur **35,5 mm** contre 36,8 — **3,6 % d'écart**. Avant correctifs, la même
+comparaison donnait 14,6 contre 43,8 mm.
+
+### Trois défauts, et un seul les causait tous
+
+**1. La référence sagittale n'était pas un point physique.** Le milieu des
+repères 234/454 servait de référence pour la rotation. Or ces points sont sur le
+CONTOUR : quand la tête tourne ils ne suivent pas la peau, ils **glissent le long
+de la silhouette**. Leur milieu se déplace de plusieurs centimètres sans
+qu'aucune profondeur soit en cause. La profondeur sortait alors à **99 mm quel
+que soit le point sondé** — front, sellion, glabelle, pointe du nez. Le coupable
+n'était pas la sonde mais la référence.
+
+Avec les **coins externes des yeux**, qui sont de vrais points anatomiques et
+sont à la hauteur exacte où passe une monture :
+
+| Référence | Profondeur du front | Stabilité |
+|---|---|---|
+| tempes 234/454 (glissantes) | **refus, 99 mm** | — |
+| **coins externes 33/263** | **36,8 mm** | **±1 %** |
+| coins internes 133/362 | 26,7 mm | ±2 % |
+| ailes du nez 129/358 | 13,9 mm | ±6 % |
+
+Les trois dernières lignes se hiérarchisent exactement comme l'anatomie l'exige.
+C'est la meilleure preuve que la mesure fonctionne.
+
+**2. Un décalage constant que la moyenne n'éliminait pas.** Le repère sagittal
+n'est jamais exactement sur le plan médian. La relation devient `g = c − Δz·sinθ`
+et diviser chaque vue par `sinθ` transforme `c` en `c/sinθ`, qui explose aux
+petits angles — de façon parfaitement CONSTANTE d'une vue à l'autre, donc avec
+l'air d'une bonne mesure. La pente l'élimine : **Theil–Sen**, médiane des pentes
+de toutes les paires de vues. C'est la mesure différentielle à deux vues du §4,
+généralisée à toutes les paires, avec une médiane pour résister aux images
+floues.
+
+**3. On modélisait le FOND.** L'ancienne recherche du bord de tête
+échantillonnait l'arrière-plan au bord de l'image et balayait vers l'intérieur.
+Elle imposait donc un mur uni et une tête centrée — elle transformait un problème
+de mesure en contraintes pour le client. Elle a trouvé le montant d'une fenêtre
+à 83 mm de la tempe.
+
+`core/headGrowth.ts` part désormais **de la tête** : une zone de référence prise
+sur la tempe apprend la peau ET les cheveux de cette personne dans cette lumière,
+puis on croît vers l'extérieur jusqu'au décrochage. **L'arrière-plan n'est jamais
+lu.** Mur bleu à pois verts compris.
+
+> ⚠️ La distance au plus proche des échantillons, jamais à leur moyenne : une
+> tête a au moins deux couleurs très éloignées, peau et cheveux. Les moyenner
+> donnerait un gris qui ne ressemble à rien, et la frontière tomberait au milieu
+> du visage.
+
+### 🔴 Un estimateur supprimé, pas désactivé
+
+L'ajustement à deux paramètres qui tirait d'un coup la profondeur et la distance
+a été **retiré du dépôt**. Il passait sur la tête de synthèse et mentait avec
+assurance sur le réel. Le garder « au cas où » aurait laissé un piège. La
+distance n'est plus ajustée : elle est fixée à la fenêtre de travail, où elle ne
+pèse que 3,4 % de la profondeur.
+
 ## 🔴 Première vraie vidéo d'un vrai sujet — 2026-08-17
 
 Un sujet sans lunettes, carte à plat sur le front, rotation de tête. 11,4 s,
