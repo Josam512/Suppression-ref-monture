@@ -130,11 +130,43 @@ function snap(buf: ImageBuffer, p: Pt, n: Pt): Pt | null {
  *         s'éloigne trop du départ : mieux vaut perdre une vue que d'en ajouter
  *         une fausse au balayage.
  */
+export interface RefinedQuad {
+  quad: CardQuad;
+  /**
+   * Nombre de bords RÉELLEMENT accrochés sur les pixels, sur quatre. Les autres
+   * sont repris de la graine.
+   *
+   * 🔴 Indispensable dès qu'on veut savoir si la carte est *là*, et pas
+   * seulement si le résultat ressemble à la graine. `refineQuad` contraint sa
+   * sortie à rester près de la graine : comparer les deux est CIRCULAIRE et ne
+   * peut pas échouer. Seul ce compte dit si les pixels ont parlé.
+   */
+  measured: number;
+}
+
+/** Variante qui expose le compte de bords mesurés. Voir `RefinedQuad`. */
+export function refineQuadDetailed(
+  buf: ImageBuffer,
+  quad: CardQuad,
+  tolerancePx = MAX_CORNER_SHIFT_PX,
+): RefinedQuad {
+  const out = refineQuadInner(buf, quad, tolerancePx);
+  return out;
+}
+
 export function refineQuad(
   buf: ImageBuffer,
   quad: CardQuad,
   tolerancePx = MAX_CORNER_SHIFT_PX,
 ): CardQuad {
+  return refineQuadInner(buf, quad, tolerancePx).quad;
+}
+
+function refineQuadInner(
+  buf: ImageBuffer,
+  quad: CardQuad,
+  tolerancePx = MAX_CORNER_SHIFT_PX,
+): RefinedQuad {
   // Deux passes. La première part d'un cadre approximatif : ses normales sont
   // légèrement de travers, et les points sont échantillonnés au mauvais endroit
   // le long du bord. La seconde repart du résultat, donc des bonnes normales —
@@ -162,7 +194,7 @@ export function refineQuad(
       );
     }
   }
-  return out;
+  return { quad: out, measured: Math.max(first.measured, second.measured) };
 }
 
 function onePass(buf: ImageBuffer, quad: CardQuad): { quad: CardQuad; measured: number } {

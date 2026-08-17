@@ -875,6 +875,30 @@ banc navigateur vert (23 contrôles).
 
 ## Journal
 
+- **2026-08-17** — ⚠️ **Cadre à remplir : logique écrite, verrou NON VALIDÉ.**
+  Renversement de l'IHM de calibration : au lieu de faire traîner un rectangle sur la carte
+  (le seul geste long du parcours), l'app affiche un cadre au rapport ISO et le client
+  approche la tête. **Le cadre est la graine de l'accrochage** : plus rien à détecter.
+  Trois détections automatiques essayées avant, toutes ratées sur la photo réelle —
+  rectangles candidats notés au rapport ISO (36 % d'erreur d'échelle), contours fermés type
+  scanner de document (**0 candidat** : le contour de la carte n'est pas fermé sur un front
+  éclairé, les contours de sa zone font 745 à 2 170 px² pour une carte de 157 874),
+  assemblage de segments (57 %). Cause commune : **la lisière des cheveux est un bord plus
+  franc que la carte**.
+  **Deux contrôles CIRCULAIRES trouvés et corrigés** : comparer les coins accrochés au
+  cadre ne peut pas échouer, puisque `refineQuad` contraint sa sortie à rester près de sa
+  graine — il verrouillait sur une carte de 282 px pour un cadre de 396 ; compter les bords
+  « mesurés » ne suffit pas non plus, le grain de peau fournit assez de gradient. Le seul
+  contrôle non circulaire lit les pixels **de part et d'autre du cadre, qui est fixe**.
+  **Résultat mesuré** : la marche de luminance culmine à **34,6 exactement là où la carte
+  remplit le cadre** (zoom 0,77), contre ~10 ailleurs — facteur 3, le signal existe.
+  🔴 **Mais le verrou automatique n'a jamais déclenché** dans la simulation, trop grossière
+  (pas de 0,05) pour produire trois images consécutives conformes. `MIN_GUIDE_EDGE_STEP`
+  reste **choisi à la main sur une seule photo** et doit être figé depuis une vraie séquence
+  webcam. Ne pas livrer, ne pas l'ajuster pour verdir un test.
+  Les 12 tests ajoutés couvrent la logique pure et les deux anti-circularités, **pas** la
+  boucle de bout en bout.
+
 - **2026-08-17** — **La focale est mesurée une fois, puis mémorisée et réutilisée**
   (`core/cameraProfile.ts`). Le balayage la mesurait déjà, s'en servait pour une
   conversion, puis la **jetait** : à la séance suivante — ou si le client passait la
