@@ -33,9 +33,10 @@ import {
 import { findHeadEdge, motionMask } from '../src/core/silhouette.js';
 import { measureTemporalWidth, MAX_TEMPLE_MARGIN_MM } from '../src/core/temporalWidth.js';
 import { comparisonWidth } from '../src/core/verdict.js';
-import { CalibrationError } from '../src/core/geom.js';
+import { at, CalibrationError } from '../src/core/geom.js';
+import { EYE_L, EYE_R } from '../src/core/faceMetrics.js';
 import { ADULTE, cardWidthPx, projectHead, type CameraOptions } from './fixtures/head3d.js';
-import { makeScene, type SceneOptions } from './fixtures/scene.js';
+import { makeScene, type GlassesOptions, type SceneOptions } from './fixtures/scene.js';
 import { makeCal } from './fixtures/builders.js';
 
 const W = 1280;
@@ -151,7 +152,7 @@ describe('écart temporal lu dans les pixels', () => {
   const { lm, headEdgesPx } = projectHead(ADULTE, cam);
   const cardPx = cardWidthPx(ADULTE, cam);
 
-  const sceneOf = (over: Partial<SceneOptions> = {}) =>
+  const sceneOf = (over: Partial<SceneOptions> & { glasses?: GlassesOptions } = {}) =>
     makeScene({
       w: W,
       h: H,
@@ -230,6 +231,49 @@ describe('écart temporal lu dans les pixels', () => {
     });
     expect(r.measured).toBe(false);
     expect(r.reason).toMatch(/cheveux/i);
+  });
+
+  it('🔴 un client qui a GARDÉ SES LUNETTES est refusé, pas mesuré', () => {
+    // La ligne de balayage passe à hauteur des coins externes des yeux — donc
+    // exactement là où passent les branches d'une monture déjà portée. Sans ce
+    // contrôle, on mesurerait la monture du client en lui annonçant sa tête.
+    const pxPerMm = cardPx / CARD_WIDTH_MM;
+    const eyeY = Math.round(((at(lm, EYE_L).y + at(lm, EYE_R).y) / 2) * H);
+    const porteur = sceneOf({
+      glasses: {
+        eyeY,
+        halfHeightPx: Math.round(9 * pxPerMm),
+        overhangPx: Math.round(5 * pxPerMm),
+      },
+    });
+
+    const r = measureTemporalWidth({
+      frontal: porteur,
+      motion: null,
+      lm,
+      w: W,
+      h: H,
+      pxPerMm,
+      scaleRelError: 0.02,
+    });
+    expect(r.measured).toBe(false);
+    expect(r.reason).toMatch(/lunettes/i);
+  });
+
+  it('contre-épreuve : sans lunettes, le même visage passe', () => {
+    // Sans cette contre-épreuve, le contrôle précédent serait satisfait par un
+    // refus systématique — il vérifierait sa propre sévérité, pas sa justesse.
+    const r = measureTemporalWidth({
+      frontal,
+      motion,
+      lm,
+      w: W,
+      h: H,
+      pxPerMm: cardPx / CARD_WIDTH_MM,
+      scaleRelError: 0.02,
+    });
+    expect(r.reason).toBeNull();
+    expect(r.measured).toBe(true);
   });
 
   it('un bord immobile pendant la rotation est REFUSÉ', () => {

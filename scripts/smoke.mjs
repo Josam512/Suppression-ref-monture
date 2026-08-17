@@ -132,6 +132,10 @@ try {
     'V1 : la carte est demandée d’emblée, sans passer par l’iris',
     /carte bancaire/i.test(texteV1) && !/Portez-vous des lunettes/i.test(texteV1),
   );
+  check(
+    'V1 : la consigne « retirez vos lunettes » est donnée AVANT la mesure',
+    /Retirez vos lunettes/i.test(texteV1),
+  );
 
   // La V2 doit s'ouvrir aussi, et annoncer sa dilatation de sprite.
   const store = await ctx.newPage();

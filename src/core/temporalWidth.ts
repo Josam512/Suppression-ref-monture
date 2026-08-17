@@ -31,22 +31,19 @@
 import { at, px, type NormalizedLandmark } from './geom.js';
 import { EYE_L, EYE_R, FACE_L, FACE_R } from './faceMetrics.js';
 import { findHeadEdge, type ImageBuffer } from './silhouette.js';
+import {
+  glassesRefusal,
+  MAX_TEMPLE_MARGIN_MM,
+  refusal,
+  type LineWidth,
+} from './temporalRefusals.js';
 
-/**
- * Débord maximal admis, PAR CÔTÉ, entre le repère facial et le bord de tête.
- *
- * Les deux seuls essais dont on dispose donnent 20,9 et 14,3 mm au total, soit
- * 10,5 et 7,2 mm par côté. La borne est posée nettement au-dessus pour ne pas
- * refuser une morphologie large, et nettement en dessous d'une chevelure, qui
- * ajoute couramment 20 mm et plus par côté.
- */
-export const MAX_TEMPLE_MARGIN_MM = 18;
-
-/** En deçà, le « bord de tête » est le repère lui-même : rien n'a été trouvé. */
-export const MIN_TEMPLE_MARGIN_MM = 1;
-
-/** Un visage n'est pas parfaitement symétrique, mais pas à ce point-là. */
-export const MAX_TEMPLE_ASYMMETRY_MM = 7;
+export {
+  GLASSES_STEP_MAX_MM,
+  MAX_TEMPLE_ASYMMETRY_MM,
+  MAX_TEMPLE_MARGIN_MM,
+  MIN_TEMPLE_MARGIN_MM,
+} from './temporalRefusals.js';
 
 /** Incertitude de pointage d'un bord de tête, SUR UNE LIGNE, en pixels. */
 export const EDGE_NOISE_PX = 4;
@@ -139,44 +136,24 @@ function medianEdge(
   return { x: mid, confident: true, reason: null, rows: xs.length };
 }
 
-/**
- * Pourquoi la mesure est refusée, ou `null` si elle tient.
- *
- * Séparée du calcul pour que chaque motif de refus soit lisible d'un coup
- * d'œil : c'est la partie du fichier qu'on relira quand un client dira
- * « ça n'a pas marché chez moi ».
- */
-function refusal(
-  left: { confident: boolean; reason: string | null },
-  right: { confident: boolean; reason: string | null },
-  marginMm: { left: number; right: number },
-): string | null {
-  if (!left.confident) return `À gauche : ${left.reason ?? 'mesure refusée'}.`;
-  if (!right.confident) return `À droite : ${right.reason ?? 'mesure refusée'}.`;
-
-  if (marginMm.left < MIN_TEMPLE_MARGIN_MM || marginMm.right < MIN_TEMPLE_MARGIN_MM) {
-    return `Aucun débord détecté au-delà du contour du visage : le bord de la tête n'a pas été trouvé.`;
-  }
-
-  // ⚠️ Ce contrôle-ci est indispensable, et il ne va PAS de soi. Le balayage
-  // part du bord de l'image, donc il trouve aussi les cheveux qui dépassent
-  // LARGEMENT de la fenêtre de recherche : la fenêtre borne où l'on s'arrête,
-  // pas ce que l'on rencontre avant.
-  if (marginMm.left > MAX_TEMPLE_MARGIN_MM || marginMm.right > MAX_TEMPLE_MARGIN_MM) {
-    return (
-      `Débord de ${Math.max(marginMm.left, marginMm.right).toFixed(0)} mm au-delà du visage : ` +
-      `ce sont probablement des cheveux. Dégagez les tempes et recommencez.`
-    );
-  }
-
-  if (Math.abs(marginMm.left - marginMm.right) > MAX_TEMPLE_ASYMMETRY_MM) {
-    return (
-      `Débords très différents à gauche (${marginMm.left.toFixed(0)} mm) et à droite ` +
-      `(${marginMm.right.toFixed(0)} mm) : cheveux ou objet d'un seul côté.`
-    );
-  }
-
-  return null;
+function widthAtLine(
+  input: TemporalInput,
+  y: number,
+  innerLeft: number,
+  innerRight: number,
+  windowPx: number,
+): LineWidth {
+  const left = medianEdge(input, y, innerLeft, -1, windowPx);
+  const right = medianEdge(input, y, innerRight, 1, windowPx);
+  return {
+    left,
+    right,
+    widthMm: (right.x - left.x) / input.pxPerMm,
+    marginMm: {
+      left: (innerLeft - left.x) / input.pxPerMm,
+      right: (right.x - innerRight) / input.pxPerMm,
+    },
+  };
 }
 
 /**
@@ -185,6 +162,9 @@ function refusal(
  * La ligne de balayage est la moyenne des coins externes des yeux : c'est la
  * hauteur à laquelle passe la face d'une monture, donc la seule qui intéresse
  * un opticien.
+ *
+ * ⚠️ C'est aussi, très exactement, la hauteur des BRANCHES d'une monture déjà
+ * portée — d'où le contrôle des deux lignes ci-dessous.
  */
 export function measureTemporalWidth(input: TemporalInput): TemporalMeasurement {
   const { lm, w, h, pxPerMm } = input;
@@ -200,16 +180,14 @@ export function measureTemporalWidth(input: TemporalInput): TemporalMeasurement 
 
   const windowPx = MAX_TEMPLE_MARGIN_MM * pxPerMm;
 
-  const left = medianEdge(input, y, innerLeft, -1, windowPx);
-  const right = medianEdge(input, y, innerRight, 1, windowPx);
+  const eyeLine = widthAtLine(input, y, innerLeft, innerRight, windowPx);
+  const { left, right, marginMm, widthMm } = eyeLine;
 
-  const marginMm = {
-    left: (innerLeft - left.x) / pxPerMm,
-    right: (right.x - innerRight) / pxPerMm,
-  };
-  const widthMm = (right.x - left.x) / pxPerMm;
-
-  const reason = refusal(left, right, marginMm);
+  const reason =
+    refusal(left, right, marginMm) ??
+    glassesRefusal(input, y, eyeLine, (line) =>
+      widthAtLine(input, line, innerLeft, innerRight, windowPx),
+    );
   if (reason !== null) return { widthMm, relError: 1, marginMm, measured: false, reason };
 
   // Deux bords pointés indépendamment, chacun médian sur `rows` lignes, plus

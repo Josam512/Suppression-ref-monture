@@ -34,17 +34,37 @@ function noiseAt(x: number, y: number): number {
   return s - Math.floor(s) - 0.5;
 }
 
-export function makeScene(opts: SceneOptions): ImageBuffer {
+export interface GlassesOptions {
+  /** Ligne des yeux, en pixels. Les branches y passent. */
+  eyeY: number;
+  /** Demi-hauteur de la bande occupée par la monture, en pixels. */
+  halfHeightPx: number;
+  /** De combien la monture dépasse la tête, de chaque côté. */
+  overhangPx: number;
+}
+
+export function makeScene(opts: SceneOptions & { glasses?: GlassesOptions }): ImageBuffer {
   const bg = opts.bgLuma ?? 205;
   const head = opts.headLuma ?? 85;
   const noise = opts.bgNoise ?? 2;
   const shift = opts.shiftPx ?? 0;
 
+  const g = opts.glasses;
+
   const data = new Uint8ClampedArray(opts.w * opts.h * 4);
   for (let y = 0; y < opts.h; y++) {
     for (let x = 0; x < opts.w; x++) {
       const inHead = x >= opts.headLeftPx + shift && x <= opts.headRightPx + shift;
-      const v = inHead ? head : bg + noise * 2 * noiseAt(x, y);
+
+      // Une monture PORTÉE : une bande sombre à hauteur des yeux, qui déborde
+      // de la tête de quelques millimètres — exactement ce que fait une branche.
+      const inGlasses =
+        g !== undefined &&
+        Math.abs(y - g.eyeY) <= g.halfHeightPx &&
+        x >= opts.headLeftPx + shift - g.overhangPx &&
+        x <= opts.headRightPx + shift + g.overhangPx;
+
+      const v = inGlasses ? 30 : inHead ? head : bg + noise * 2 * noiseAt(x, y);
       const i = (y * opts.w + x) * 4;
       data[i] = v;
       data[i + 1] = v;
