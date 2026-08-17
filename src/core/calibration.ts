@@ -198,17 +198,12 @@ export interface MeasuredCardCalibration {
 /**
  * ⭐ V1 — la carte, une seule fois, complétée par la rotation de tête.
  *
- * Cette fonction est ADDITIVE : `calibrateWithCard` reste inchangée et reste le
- * chemin nominal du §4. Celle-ci fait trois choses de plus, toutes mesurées :
- *
- *   1. elle corrige le biais de parallaxe B4 au lieu de le supposer nul ;
- *   2. elle mesure l'écart temporal du client au lieu d'appliquer une constante ;
- *   3. elle recalcule `relError` à partir de ce qui a réellement été mesuré,
- *      au lieu de réciter une valeur de catalogue.
- *
- * Aucune de ces trois étapes n'est obligatoire : chacune peut échouer, et la
- * calibration reste alors exactement celle du §4, ni meilleure ni pire, mais
- * annoncée pour ce qu'elle est.
+ * ADDITIVE : `calibrateWithCard` reste le chemin nominal du §4. Celle-ci fait
+ * trois choses de plus, toutes mesurées — parallaxe B4 corrigée au lieu d'être
+ * supposée nulle, écart temporal mesuré au lieu d'une constante, `relError`
+ * recalculée sur ce qui a réellement été mesuré. Aucune n'est obligatoire :
+ * chacune peut échouer, et la calibration reste celle du §4, annoncée pour ce
+ * qu'elle est.
  */
 export function calibrateWithCardMeasured(
   cardWidthPx: number,
@@ -218,6 +213,12 @@ export function calibrateWithCardMeasured(
   h: number,
   views: readonly RotatedView[] | null,
   scene: TemporalScene | null,
+  /**
+   * Distance MESURÉE sur la carte (`core/cardSweep.ts`), ou `null`. Optionnelle
+   * et en dernier : son absence n'est pas une erreur, c'est une marge plus
+   * large (§14.5).
+   */
+  measuredDistance: { cardDistanceMm: number; relError: number } | null = null,
 ): MeasuredCardCalibration {
   void imageWidthPx; // ⭐ plus aucune estimation de distance ici : elle est MESURÉE.
   const naive = calibrateWithCard(cardWidthPx, lm, w, h);
@@ -228,6 +229,7 @@ export function calibrateWithCardMeasured(
     clickRelError: CARD_CLICK_REL_ERROR,
     views,
     scene,
+    measuredDistance,
   });
 
   const faceWidthMm = naive.faceWidthMm * refinement.parallaxFactor;

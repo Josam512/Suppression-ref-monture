@@ -54,6 +54,15 @@ export interface RefinementInput {
   views: readonly RotatedView[] | null;
   /** L'image de face figée, pour chercher les bords de la tête. */
   scene: TemporalScene | null;
+  /**
+   * Distance MESURÉE sur la carte elle-même (`core/cardSweep.ts`), ou `null`.
+   *
+   * ⚠️ Quand elle est là, elle remplace intégralement l'a priori de 780 mm.
+   * Quand elle n'est pas là, l'a priori reprend la main et la marge s'élargit.
+   * Le code ne demande jamais POURQUOI elle manque : c'est la présence de la
+   * donnée qui décide, jamais un mode (§11.4).
+   */
+  measuredDistance?: { cardDistanceMm: number; relError: number } | null;
 }
 
 export interface Refinement {
@@ -105,31 +114,22 @@ export const MAX_DEPTH_REL_ERROR = 0.5;
  * qui soient de vrais points physiques. La profondeur carte ↔ coins des yeux
  * est un intermédiaire ; elle n'est jamais affichée et ne sert à rien d'autre.
  *
- * ## Le seul maillon non mesuré de la chaîne — et pourquoi il le reste
+ * ## Le seul maillon non mesuré, et pourquoi il le reste
  *
- * Ce dernier tronçon n'est PAS mesurable sur ces images, et ce n'est pas faute
- * d'avoir cherché : il faudrait soit un modèle de forme de crâne — donc une
- * morphologie supposée, interdite au §0.0.3 —, soit un second objet de
- * dimension connue à hauteur des tempes. Avec une seule carte sur le front, le
- * système est sous-déterminé. C'est une propriété de la prise de vue, pas un
- * manque de traitement.
+ * Il n'est PAS mesurable sur ces images : il faudrait un modèle de forme de
+ * crâne — morphologie supposée, interdite au §0.0.3 — ou un second objet de
+ * dimension connue à hauteur des tempes. C'est une propriété de la prise de
+ * vue, pas un manque de traitement.
  *
- * ## Ce qui a été corrigé : une PROPORTION, pas une longueur en dur
- *
- * ⚠️ Cette valeur était `12 mm`, en absolu. C'était un chiffre d'adulte : sur
- * un visage d'enfant de 120 mm il surestimait le tronçon de moitié, soit
- * exactement le présupposé de taille que le §0.0.3 interdit — et le §5 avait
- * déjà tranché le même dilemme pour le seuil, en le rendant proportionnel.
- *
- * Le rapport est calé sur le sujet réel (12 mm mesurés sur ~152 mm de largeur
- * de tête) et il est sans dimension, donc il suit la personne. Il reste une
- * hypothèse de FORME ; il n'est plus une hypothèse de TAILLE.
+ * ⚠️ Il valait `12 mm` en absolu : un chiffre d'adulte, qui surestimait de
+ * moitié sur un visage d'enfant — le présupposé de taille du §0.0.3, celui que
+ * le §5 avait déjà chassé du seuil en le proportionnant. C'est désormais un
+ * RAPPORT, calé sur le sujet réel (12 mm sur ~152 mm) et sans dimension : plus
+ * une hypothèse de taille, seulement une hypothèse de forme.
  *
  * Son poids : la correction totale vaut ~6 %, ce tronçon en fait le quart. Se
- * tromper de 50 % dessus coûte **0,8 % sur la largeur finale**, soit 1,2 mm sur
- * 152 — à comparer aux 3 à 7 % de biais que l'ensemble de la correction
- * supprime. Il est déclaré, avec son incertitude, plutôt que posé à zéro en
- * silence comme il l'était.
+ * tromper de 50 % dessus coûte 0,8 % sur la largeur finale, soit 1,2 mm sur
+ * 152 — contre les 3 à 7 % de biais que la correction entière supprime.
  */
 export const CANTHI_TO_TEMPLE_DEPTH_RATIO = 0.079;
 export const CANTHI_TO_TEMPLE_DEPTH_SD_RATIO = 0.04;
@@ -148,7 +148,20 @@ interface Parallax {
 }
 
 function measureParallax(input: RefinementInput): Parallax {
-  const prior = { value: NOMINAL_DISTANCE_MM, rel: NOMINAL_DISTANCE_REL_ERROR };
+  // ⭐ La distance vient de la CARTE quand la carte a pu la donner. La carte est
+  // un objet aux cotes normalisées, présent dans l'image : il n'y avait aucune
+  // raison de continuer à supposer ce qu'elle contenait déjà.
+  //
+  // ⚠️ `cardDistanceMm` est la distance au PLAN DE LA CARTE. Le plan des tempes
+  // est derrière, de la profondeur qu'on mesure juste après — c'est-à-dire que
+  // l'écart entre les deux est précisément ce qu'on cherche, et qu'il ne faut
+  // pas le compter deux fois. On corrige donc la distance de cette profondeur
+  // une fois qu'elle est connue, plus bas.
+  const m = input.measuredDistance;
+  const prior =
+    m != null && Number.isFinite(m.cardDistanceMm)
+      ? { value: m.cardDistanceMm, rel: m.relError, measured: true }
+      : { value: NOMINAL_DISTANCE_MM, rel: NOMINAL_DISTANCE_REL_ERROR, measured: false };
 
   if (input.views === null || input.views.length === 0) {
     return {
@@ -190,8 +203,6 @@ function measureParallax(input: RefinementInput): Parallax {
     };
   }
 
-  const distance = prior;
-
   // La profondeur totale carte → tempes : la part mesurée, plus le dernier
   // tronçon que l'imagerie ne peut pas atteindre — proportionné à CE visage,
   // et non posé en millimètres d'adulte.
@@ -202,17 +213,28 @@ function measureParallax(input: RefinementInput): Parallax {
     input.naiveFaceWidthMm * CANTHI_TO_TEMPLE_DEPTH_SD_RATIO,
   );
 
-  const delta = depthTotalMm / distance.value;
-  const deltaRel = Math.hypot(depthSdMm / depthTotalMm, distance.rel);
+  // ⚠️ Les deux distances ne désignent pas le même plan, et les confondre
+  // annulerait le gain : la carte donne la distance à ELLE-MÊME, le facteur
+  // demande celle des TEMPES. L'écart entre les deux est exactement la
+  // profondeur qu'on vient de mesurer — donc on l'ajoute, une seule fois.
+  const templeDistanceMm = prior.measured ? prior.value + depthTotalMm : prior.value;
+
+  const delta = depthTotalMm / templeDistanceMm;
+  const deltaRel = Math.hypot(depthSdMm / depthTotalMm, prior.rel);
   const factor = 1 / (1 - delta);
 
   return {
     factor,
     depthMm: depthTotalMm,
-    distanceMm: distance.value,
+    distanceMm: templeDistanceMm,
     // d(facteur)/facteur ≈ δ × (incertitude relative sur δ).
     scaleRelError: Math.hypot(input.clickRelError, delta * deltaRel),
     note:
+      (prior.measured
+        ? `Vous êtes à ${(templeDistanceMm / 10).toFixed(0)} cm — mesuré sur votre carte, ` +
+          `à ±${(prior.rel * 100).toFixed(0)} %, plus supposé. `
+        : `Distance non mesurée sur la carte : ${(templeDistanceMm / 10).toFixed(0)} cm supposés ` +
+          `à ±${(prior.rel * 100).toFixed(0)} %. `) +
       `Profondeur de la carte mesurée sur ${fit.views} vues (±${(fit.depthRelError * 100).toFixed(0)} %), ` +
       `plus ${lastLegMm.toFixed(0)} mm de dernier tronçon jusqu'au plan des tempes, ` +
       `seul segment non mesurable sur ces images. ` +

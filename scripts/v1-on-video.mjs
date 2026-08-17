@@ -19,6 +19,7 @@ const argv = process.argv.slice(2);
 const video = argv[0];
 const outDir = argv[1] && !argv[1].startsWith('--') ? argv[1] : 'v1-out';
 const cardArg = argv.includes('--card') ? argv[argv.indexOf('--card') + 1] : null;
+const quadArg = argv.includes('--quad') ? argv[argv.indexOf('--quad') + 1] : null;
 const tArg = argv.includes('--t') ? Number(argv[argv.indexOf('--t') + 1]) : 0;
 
 if (!video || !existsSync(video)) {
@@ -90,9 +91,13 @@ try {
     }
   } else {
     const [x1, y1, x2, y2] = cardArg.split(',').map(Number);
+    const q = quadArg === null ? null : (() => {
+      const n = quadArg.split(',').map(Number);
+      return [0, 1, 2, 3].map((i) => ({ x: n[2 * i], y: n[2 * i + 1] }));
+    })();
     const r = await page.evaluate(
-      ({ u, c, t }) => window.__RUNV1__(u, c, t),
-      { u: url, c: { x1, y1, x2, y2 }, t: tArg },
+      ({ u, c, t, qq }) => window.__RUNV1__(u, c, t, qq ?? undefined),
+      { u: url, c: { x1, y1, x2, y2 }, t: tArg, qq: q },
     );
     console.log(`  vues utilisees      : ${r.viewsUsed}`);
     console.log(`  profondeur mesuree  : ${r.depthMm === null ? '—' : r.depthMm.toFixed(1) + ' mm'}`);
