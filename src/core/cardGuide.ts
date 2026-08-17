@@ -54,6 +54,15 @@ export const GUIDE_TOLERANCE_RATIO = 0.06;
  */
 export const LOCK_FRAMES = 3;
 
+/**
+ * ⚠️ DÉFAUT CONNU, trouvé sur la vidéo réelle du sujet : ce cadre est centré
+ * dans l'IMAGE, donc sur les yeux. La carte, elle, est posée en HAUT DU FRONT.
+ * Les deux ne se croisent jamais, et rien ne peut verrouiller.
+ *
+ * 🔴 Le placement doit venir des REPÈRES DU VISAGE — milieu du front, entre les
+ * sourcils et la naissance des cheveux — pas du centre de l'image. Tant que ce
+ * n'est pas fait, cette fonction ne doit pas être branchée dans l'application.
+ */
 /** Cadre au rapport ISO, centré dans l'image. Coins dans l'ordre de `CardQuad`. */
 export function guideQuad(imageWidthPx: number, imageHeightPx: number): CardQuad {
   const w = GUIDE_WIDTH_RATIO * imageWidthPx;
