@@ -19,6 +19,7 @@
  */
 
 import { depthFromRotation } from './depthFit.js';
+import { NOMINAL_DISTANCE_MM, NOMINAL_DISTANCE_REL_ERROR } from './framePlane.js';
 import { CalibrationError } from './geom.js';
 import { type RotatedView } from './parallax.js';
 import {
@@ -33,17 +34,14 @@ export type TemporalScene = Omit<TemporalInput, 'pxPerMm' | 'scaleRelError'>;
 /**
  * Distance de travail attendue, et son incertitude — **imposée, pas supposée**.
  *
- * ⚠️ Ce n'est PAS un retour du champ de vision supposé. C'est la fenêtre que
- * l'application fait respecter : en deçà de 60 cm elle refuse (parade B4 n°1),
- * et au-delà d'environ 1 m la carte devient trop petite en pixels pour être
- * pointée utilement. La distance réelle vit donc dans cette fourchette parce
- * qu'on l'y contraint, et non parce qu'on la devine.
- *
- * Elle sert d'a priori que la mesure par rotation vient corriger — quand cette
- * mesure vaut mieux que l'a priori, ce qui n'est pas toujours le cas.
+ * ⚠️ Une seule définition, dans `core/framePlane.ts`, parce que le rendu en a
+ * besoin lui aussi et qu'un import de `cardRefinement` depuis `faceMetrics`
+ * créerait un cycle. Deux copies de cette valeur finiraient par diverger.
  */
-export const DISTANCE_PRIOR_MM = 780;
-export const DISTANCE_PRIOR_REL_ERROR = 0.17; // couvre ~600–1000 mm
+export {
+  NOMINAL_DISTANCE_MM as DISTANCE_PRIOR_MM,
+  NOMINAL_DISTANCE_REL_ERROR as DISTANCE_PRIOR_REL_ERROR,
+} from './framePlane.js';
 
 export interface RefinementInput {
   /** Échelle lue sur la carte, AU PLAN DE LA CARTE (px par mm). */
@@ -130,7 +128,7 @@ interface Parallax {
 }
 
 function measureParallax(input: RefinementInput): Parallax {
-  const prior = { value: DISTANCE_PRIOR_MM, rel: DISTANCE_PRIOR_REL_ERROR };
+  const prior = { value: NOMINAL_DISTANCE_MM, rel: NOMINAL_DISTANCE_REL_ERROR };
 
   if (input.views === null || input.views.length === 0) {
     return {
@@ -211,7 +209,7 @@ export function refineCard(input: RefinementInput): Refinement {
     p = {
       factor: 1,
       depthMm: null,
-      distanceMm: DISTANCE_PRIOR_MM,
+      distanceMm: NOMINAL_DISTANCE_MM,
       scaleRelError: UNMEASURED_PARALLAX_REL_ERROR,
       note:
         (err instanceof CalibrationError ? err.message : String(err)) +

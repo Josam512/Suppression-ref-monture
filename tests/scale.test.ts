@@ -25,6 +25,11 @@ import {
 } from '../src/core/calibration.js';
 import { faceWidthPx, frameMetrics } from '../src/core/faceMetrics.js';
 import { renderedFrameHeightPx, renderedFrameWidthPx } from '../src/core/transform.js';
+import {
+  BRIDGE_AHEAD_MM,
+  NOMINAL_DISTANCE_MM,
+  planeScale,
+} from '../src/core/framePlane.js';
 import { computeAlphaBBox } from '../src/prep/alphaBBox.js';
 
 import {
@@ -154,6 +159,19 @@ describe('Échelle 3 — chaque frame', () => {
     // Et ce rapport vaut bien 132/138 : la monture est rendue plus étroite que
     // le visage, dans la proportion exacte de leurs cotes réelles.
     expect(ratio(LANDMARKS_50CM)).toBeCloseTo(132 / 138, 6);
+
+    // 🔴 Ce que cette égalité VERROUILLE, au-delà de l'invariant de distance :
+    // la largeur rendue appartient au PLAN DES TEMPES, jamais à celui du pont.
+    //
+    // « Des lunettes sont posées sur le nez, pas sur les yeux » est vrai, et la
+    // conclusion qu'on en tire spontanément — mettre le sprite à l'échelle du
+    // plan du nez — est fausse : la LARGEUR d'une monture se réalise à ses
+    // tenons, plaqués sur les côtés de la tête, pas à son pont situé ~48 mm
+    // plus avant. Le faire dessinerait la monture 6 % trop large (8 mm sur
+    // 132), et l'image aurait l'air MEILLEURE, sa partie centrale tombant
+    // mieux. Raisonnement complet : `core/framePlane.ts`.
+    const auPlanDuPont = (132 / 138) * planeScale(1, BRIDGE_AHEAD_MM);
+    expect(ratio(LANDMARKS_50CM)).not.toBeCloseTo(auPlanDuPont, 2);
   });
 
   // 🔴 S1 — signature du yaw appliqué deux fois : la hauteur bougeait.
@@ -179,5 +197,22 @@ describe('Échelle 3 — chaque frame', () => {
     const scale = (yaw: number): number =>
       frameMetrics(makeFaceAtYaw(yaw), W, H, makeCal(), yaw).livePxPerMm;
     expect(scale(Math.PI / 6)).toBeCloseTo(scale(0), 6);
+  });
+
+  // Le pont EST au plan du nez : l'échelle y est ~6 % plus grande qu'au plan
+  // des tempes. Petit, mais du bon côté — et c'est ce qui empêche la constante
+  // BRIDGE_AHEAD_MM d'être morte, donc supprimée « au nettoyage ».
+  it('le plan du pont est bien en avant de celui des tempes', () => {
+    const k = 4; // px/mm au plan des tempes
+    const attendu = 1 / (1 - BRIDGE_AHEAD_MM / NOMINAL_DISTANCE_MM);
+    expect(planeScale(k, BRIDGE_AHEAD_MM) / k).toBeCloseTo(attendu, 9);
+    expect(attendu).toBeGreaterThan(1.05);
+    expect(planeScale(k, 0)).toBe(k);
+  });
+
+  it('une profondeur de plan aberrante ne corrige rien plutôt que de corriger au hasard', () => {
+    const k = 4;
+    expect(planeScale(k, 400)).toBe(k); // 400 mm devant les tempes : impossible
+    expect(planeScale(k, Number.NaN)).toBe(k);
   });
 });

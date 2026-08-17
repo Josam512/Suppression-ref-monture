@@ -1717,7 +1717,37 @@ monture dans l'image.
 > la présence d'une donnée : connaît-on la monture réellement portée ? En vente en ligne,
 > non — et le code n'a pas besoin de savoir pourquoi.
 
-**État d'exécution :** lots 0 à 7 implémentés, 101 tests au vert, typecheck `strict` clean, banc navigateur vert (21 contrôles), barrages du hook vérifiés en tentant de les contourner. **Lot 8 (calibration humaine) non fait — il ne peut pas l'être par un agent, mais la V1 n'en dépend plus tant que la mesure de l'écart temporal aboutit.**
+### 14.4 V1 — dans quel plan chaque grandeur rendue vit (`core/framePlane.ts`)
+
+> « on s'en fout de la profondeur des yeux. des lunettes sont posées sur le nez pas yeux »
+
+Exact — et la conclusion qu'on en tire spontanément est fausse. Une monture n'est pas
+plate : son plan avant est **mesuré** à ~48 mm devant les repères 234/454, mais sa
+**largeur** se réalise à ses **tenons**, plaqués sur les côtés de la tête. Mettre tout
+le sprite à l'échelle du pont le dessinerait **6 % trop large** (8 mm sur 132) — le
+critère de succès du §0 tomberait, et l'image aurait l'air meilleure.
+
+| Grandeur | Plan | Constante |
+|---|---|---|
+| Largeur rendue du sprite | tempes / tenons | *aucune* — `livePxPerMm` brut |
+| `VERTICAL_OFFSET_MM` (§6.3) | pont | `BRIDGE_AHEAD_MM = 48 ± 10` |
+| Décentrement (§5, règle 2) | pont | idem |
+| Résidu tenons ↔ repères 234/454 | — | `ENDPIECE_AHEAD_MM = 8 ± 6`, **non corrigé** |
+
+> 🔴 **Interdit :** multiplier l'échelle du sprite par un facteur de plan. Le résidu des
+> tenons vaut 1 % avec 75 % d'incertitude — au-delà de la barre des 50 % que le projet
+> s'est lui-même fixée (`MAX_DEPTH_REL_ERROR`), corriger déplace l'erreur. Verrouillé par
+> l'invariant « la distance ne change pas le rapport monture/visage », qui affirme
+> désormais aussi que ce rapport n'est **pas** celui du plan du pont.
+
+**Audit associé.** Le yaw de MediaPipe porte toute la profondeur au premier ordre. Il a
+été confronté à une mesure indépendante prise dans les pixels — un yaw ne raccourcit que
+les longueurs horizontales, jamais les verticales — sur la vidéo du sujet réel :
+**1,013 ± 0,141 sur 70 vues**. Il est juste. L'outil vit dans l'atelier
+(`tests/v1-on-video.ts`) et n'a pas le droit de remonter dans `src/` : le §4 interdit un
+estimateur de yaw 2D dans l'application, et il a raison — c'est un contrôle, pas une source.
+
+**État d'exécution :** lots 0 à 7 implémentés, 120 tests au vert, typecheck `strict` clean, banc navigateur vert (23 contrôles), barrages du hook vérifiés en tentant de les contourner. **Lot 8 (calibration humaine) non fait — il ne peut pas l'être par un agent, mais la V1 n'en dépend plus tant que la mesure de l'écart temporal aboutit.**
 
 **Arbitrages humains intégrés :** seuil proportionnel borné 3–5 mm (§5) · rotation de tête seulement en cas de doute (§4), **puis systématique en V1 (§14.2)** · contrat corrigé avant tout code · carte obligatoire en V1 (§14.1) · recoloriage 2,5 D en V2 (§14.3).
 
