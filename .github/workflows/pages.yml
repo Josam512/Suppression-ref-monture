@@ -1,0 +1,76 @@
+# Déploiement de l'essayage virtuel sur GitHub Pages.
+#
+# ⚠️ L'APPLICATION NE VIT PAS SUR CETTE BRANCHE. `main` ne porte que l'ancienne
+# chaîne Python de détourage ; le code de l'essayage est sur la branche de
+# travail ci-dessous, et ce fichier va l'y chercher. C'est délibéré : seul un
+# workflow porté par la branche par défaut a le droit de déployer sur Pages
+# (politique de branche de l'environnement `github-pages`), et on ne voulait pas
+# déverser le code applicatif sur `main` pour cette seule raison.
+#
+# ⚠️ Le site vit sous /<repo>/, jamais à la racine d'un domaine. `VITE_BASE` le
+# dit à Vite, et `src/ui/assetUrl.ts` est le seul endroit du code qui construise
+# une URL de fichier servi — sans quoi le modèle MediaPipe rendrait un 404
+# silencieux et l'écran resterait sur « Chargement… » (CLAUDE.md §1 bug #4).
+#
+# ⚠️ Les outils internes (préparation des montures, calibration) sont retirés du
+# déploiement : ils ne sont jamais montrés à un client (§0.0.2).
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  APP_BRANCH: claude/virtual-glasses-fitting-9vwyuc
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.APP_BRANCH }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+
+      # Le filet du dépôt tourne aussi ici : on ne publie pas un état rouge.
+      - run: npm run typecheck
+      - run: npm test
+
+      # `prebuild` recopie le wasm MediaPipe depuis node_modules (~33 Mo, non
+      # versionné). Le modèle, lui, est bien dans public/models/.
+      - run: npm run build
+        env:
+          VITE_BASE: /${{ github.event.repository.name }}/
+
+      - run: rm -f dist/prep.html dist/calib.html && touch dist/.nojekyll
+
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
