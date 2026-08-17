@@ -21,6 +21,8 @@ import { ISO_ID1_OBJECTS } from '../core/calibration.js';
 export interface CardCalibrationProps {
   /** Avancement du verrouillage, 0 → 1. Vient de `core/cardGuide.ts`. */
   fill: number;
+  /** « Je n'y arrive pas » — bascule sans attendre le délai. */
+  onManual(): void;
   onCancel(): void;
 }
 
@@ -72,6 +74,14 @@ export function CardCalibration(props: CardCalibrationProps): JSX.Element {
           : `Cadrage : ${Math.round(100 * props.fill)} %`}
       </p>
 
+      {/*
+        🔴 Toujours présent, dès la première seconde. Un client qui n'y arrive
+        pas ne doit pas avoir à deviner qu'un délai finira par le sauver — et il
+        ne doit jamais se retrouver avec « Annuler » pour seule issue.
+      */}
+      <button type="button" onClick={props.onManual}>
+        Ça n’accroche pas — placer les repères moi-même
+      </button>{' '}
       <button type="button" onClick={props.onCancel}>
         Annuler
       </button>
