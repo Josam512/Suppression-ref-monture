@@ -137,6 +137,22 @@ try {
     /Retirez vos lunettes/i.test(texteV1),
   );
 
+  // ⭐ La carte se pose DANS LE PLAN DU VISAGE, pas sur le front : c'est ce qui
+  // supprime le biais de parallaxe B4 au lieu de le corriger.
+  check(
+    'V1 : la carte est demandee a hauteur des yeux, pas sur le front',
+    /hauteur des yeux/i.test(texteV1) && !/sur votre front/i.test(texteV1),
+  );
+
+  // 🔴 Le livrable : la mesure se prend seule. Un bouton « Valider » signifierait
+  // que le client doit juger lui-meme si son cadrage est bon — c'est-a-dire
+  // exactement le reglage manuel que ce projet bannit (§1 bug #1).
+  const boutons = await page.locator('button').allInnerTexts();
+  check(
+    'V1 : aucun bouton de validation — la mesure se prend seule',
+    !boutons.some((b) => /valider/i.test(b)),
+  );
+
   // La V2 doit s'ouvrir aussi, et annoncer sa dilatation de sprite.
   const store = await ctx.newPage();
   const storeErrors = [];

@@ -1,59 +1,33 @@
 /**
- * ui/CardCalibration.tsx — V1, calibration carte bancaire (CLAUDE.md §4, niveau 2).
+ * ui/CardCalibration.tsx — V1, l'étape carte : la consigne, et rien d'autre.
  *
- * Deux secondes, une seule fois, puis la carte disparaît définitivement.
+ * ## Ce que ce composant NE fait plus
+ *
+ * Il affichait une image figée, deux poignées à traîner sur les bords de la
+ * carte, et un bouton « Valider ». C'était le seul geste long de la calibration,
+ * et il demandait au client d'être précis — ce qui est exactement ce qu'on ne
+ * peut pas exiger d'une personne seule chez elle.
+ *
+ * Le cadre affiché en direct sur la vidéo l'a remplacé (`ui/cardGuideStep.ts`) :
+ * le client pose sa carte là où seront ses lunettes, et la mesure se prend
+ * d'elle-même. **Aucun bouton, aucune validation, aucun réglage.** La jauge dit
+ * seulement où il en est.
+ *
+ * ⚠️ Ce composant ne mesure rien. Il affiche du texte et un pourcentage.
  */
 
-import { useState } from 'react';
-import type { Pt } from '../core/geom.js';
-import {
-  ISO_ID1_OBJECTS,
-  estimateDistanceMm,
-  parallaxRelErrorFromCard,
-} from '../core/calibration.js';
-import { TwoPointMeasure } from './TwoPointMeasure.js';
-import { CARD_H_MM, CARD_W_MM, type CardQuad } from '../core/cardPose.js';
+import { ISO_ID1_OBJECTS } from '../core/calibration.js';
 
 export interface CardCalibrationProps {
-  frozen: HTMLCanvasElement;
-  onValidate(cardWidthPx: number, quad: CardQuad): void;
+  /** Avancement du verrouillage, 0 → 1. Vient de `core/cardGuide.ts`. */
+  fill: number;
   onCancel(): void;
 }
 
 export function CardCalibration(props: CardCalibrationProps): JSX.Element {
-  const [widthPx, setWidthPx] = useState(0);
-  const [edges, setEdges] = useState<{ a: Pt; b: Pt } | null>(null);
-
-  /**
-   * Le quadrilatère déduit des deux poignées, en supposant la ligne de guidage
-   * à mi-hauteur de la carte et ses proportions ISO.
-   *
-   * ⚠️ Ce n'est qu'une GRAINE : `core/cardEdges.ts` l'accroche ensuite sur les
-   * vrais bords, au dixième de pixel. Le client n'a donc pas à être précis — ce
-   * qui est bien le seul niveau d'exigence acceptable pour un client à distance.
-   */
-  const quad: CardQuad | null =
-    edges === null
-      ? null
-      : (() => {
-          const half = (Math.abs(edges.b.x - edges.a.x) * CARD_H_MM) / CARD_W_MM / 2;
-          return [
-            { x: edges.a.x, y: edges.a.y - half },
-            { x: edges.b.x, y: edges.b.y - half },
-            { x: edges.b.x, y: edges.b.y + half },
-            { x: edges.a.x, y: edges.a.y + half },
-          ] as CardQuad;
-        })();
-
-  const imageWidth = props.frozen.width;
-  // ⭐ Plus de « trop près » : on CHIFFRE la marge au lieu de bloquer le client
-  // (core/cardOptics.ts, parallaxRelErrorAt). Rien n'est refusé.
-  const parallaxPct = widthPx > 0 ? 100 * parallaxRelErrorFromCard(widthPx, imageWidth) : null;
-  const distanceCm = widthPx > 0 ? estimateDistanceMm(widthPx, imageWidth) / 10 : null;
-
   return (
     <section>
-      <h2>Mesure avec une carte bancaire</h2>
+      <h2>Posez votre carte là où seront vos lunettes</h2>
 
       {/*
         ⚠️ Première consigne, avant toute autre. Un client qui garde ses lunettes
@@ -61,8 +35,7 @@ export function CardCalibration(props: CardCalibrationProps): JSX.Element {
         exactement sur la ligne où l'on cherche le bord de sa tête, ses verres
         modifient de 10 % la taille apparente de son iris (§4, correctif S2), et
         l'essayage lui-même devient illisible avec une monture réelle sous la
-        monture virtuelle. Le code sait détecter le premier cas et le refuse —
-        mais il vaut mieux l'éviter que le rattraper.
+        monture virtuelle.
       */}
       <p style={{ fontWeight: 700 }}>
         Retirez vos lunettes, si vous en portez.
@@ -74,42 +47,29 @@ export function CardCalibration(props: CardCalibrationProps): JSX.Element {
       </p>
 
       <p>
-        Posez une carte bancaire <strong>à plat sur votre front</strong>, bord horizontal, et
-        regardez droit devant vous. Amenez les deux poignées sur les bords de la carte.
+        Tenez la carte <strong>à hauteur des yeux</strong>, contre votre visage, et amenez-la dans
+        le cadre. Ça se prend tout seul, en une seconde — vous n’avez rien à valider.
       </p>
 
-      <TwoPointMeasure
-        frozen={props.frozen}
-        onChange={setWidthPx}
-        onEdges={(a, b) => setEdges({ a, b })}
-        blocker={null}
-      />
-
-      <p>
+      {/*
+        🔴 La carte se porte dans le PLAN DU VISAGE, et pas sur le front. Ce n'est
+        pas un détail de confort : sur le front elle est ~54 mm devant les repères
+        qui mesurent le visage, ce qui introduit 13 % de biais systématique à
+        40 cm (correctif B4). Là où iront les lunettes, il n'y a plus d'écart de
+        profondeur — donc plus rien à corriger, et plus rien à supposer.
+      */}
+      <p style={{ opacity: 0.75 }}>
         Vous pouvez utiliser {ISO_ID1_OBJECTS[0]}, {ISO_ID1_OBJECTS[1]}, {ISO_ID1_OBJECTS[2]} ou{' '}
         {ISO_ID1_OBJECTS[3]} : toutes font exactement le même format normalisé.{' '}
         <em>La carte Vitale est la plus sûre — elle ne porte aucun numéro de paiement.</em>
       </p>
 
-      <p>
-        Distance estimée : {distanceCm === null ? '—' : `${distanceCm.toFixed(0)} cm`}
-        {parallaxPct !== null && (
-          <>
-            {' '}
-            — à cette distance la carte, posée sur le front, est vue environ{' '}
-            <strong>{parallaxPct.toFixed(0)} %</strong> plus grande que vos tempes. C'est corrigé,
-            et l'étape de rotation qui suit le mesure au lieu de le supposer.
-          </>
-        )}
+      <p aria-live="polite">
+        {props.fill >= 1
+          ? 'C’est bon, ne bougez plus…'
+          : `Cadrage : ${Math.round(100 * props.fill)} %`}
       </p>
 
-      <button
-        type="button"
-        disabled={widthPx <= 0 || quad === null}
-        onClick={() => quad !== null && props.onValidate(widthPx, quad)}
-      >
-        Valider — vous pourrez ranger votre carte
-      </button>{' '}
       <button type="button" onClick={props.onCancel}>
         Annuler
       </button>

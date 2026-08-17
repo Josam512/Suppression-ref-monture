@@ -19,14 +19,15 @@
 
 import { useCallback, useMemo, useRef, useState } from 'react';
 
-import { calibrateWithWornFrame, type UserCalibration } from '../core/calibration.js';
-import { crossCheckWithIris } from '../core/crossCheck.js';
-import { irisWidthPx, rollRadOf } from '../core/faceMetrics.js';
+import type { UserCalibration } from '../core/calibration.js';
 import type { FrameSpec } from '../core/frameSpec.js';
-import { CalibrationError, type NormalizedLandmark } from '../core/geom.js';
+import { type NormalizedLandmark } from '../core/geom.js';
 import { OVERLAY_PADDING_MM } from '../render/composite.js';
 import { drawOverlay } from '../render/overlay.js';
 import { CalibrationPanel, type Phase } from './CalibrationPanel.js';
+import { CardGuideStep, runCardStep } from './cardGuideStep.js';
+import { wornFrameCalibration } from './wornFrameStep.js';
+import { stepCrossCheck, stepRotation } from './liveSteps.js';
 import { FramePicker } from './FramePicker.js';
 import { createLive, type Live } from './liveState.js';
 import { paintScene } from './renderScene.js';
@@ -39,7 +40,6 @@ import { useSprites } from './useSprites.js';
 
 export type Mode = 'online' | 'store';
 
-const CROSSCHECK_FRAMES = 30;
 const STORAGE_KEY = 'essayage.calibration.v1';
 
 function loadStored(): UserCalibration | null {
@@ -75,14 +75,24 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
   const selected = essayables.find((s) => s.slug === selectedSlug) ?? essayables[0] ?? null;
   const sprites = useSprites(selected);
 
-  // ⭐ V2 — le modèle PHYSIQUEMENT PORTÉ, désigné par l'opticien à l'étalonnage.
-  // Son sprite sert de masque au recoloriage 2,5 D : on repeint la monture
-  // réelle plutôt que d'en poser une par-dessus (§11.6, liseré).
+  // ⭐ V2 — le modèle PHYSIQUEMENT PORTÉ. Son sprite sert de masque au
+  // recoloriage 2,5 D : on repeint la monture réelle (§11.6, liseré).
   const [wornSpec, setWornSpec] = useState<FrameSpec | null>(null);
   const wornSprites = useSprites(wornSpec);
 
   // Le mode ne descend jamais dans core/ ni render/ : c'est une VALEUR qui descend.
   const overlayPaddingMm = props.mode === 'store' ? OVERLAY_PADDING_MM : 0;
+
+  /**
+   * ⚠️ La phase, lue DEPUIS LA BOUCLE de détection.
+   *
+   * `phase` est un état React : la closure de `renderFrame` capturerait sa
+   * valeur au moment du rendu, et la boucle continuerait de croire qu'on est à
+   * l'étape carte longtemps après. Une `ref` est la seule lecture juste ici.
+   */
+  const phaseRef = useRef<Phase['kind']>('loading');
+  phaseRef.current = phase.kind;
+  const guideStep = useRef(new CardGuideStep());
 
   const live = useRef<Live>(createLive(sprites, selected, cal, overlayPaddingMm));
   live.current.cal = cal;
@@ -101,7 +111,7 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
   }, []);
 
   /** Fige la frame courante : seule exception au « live et jamais différé » (§0.0.2). */
-  const freeze = useCallback((kind: 'mesure-carte' | 'mesure-monture') => {
+  const freeze = useCallback((kind: 'mesure-monture') => {
     const video = videoRef.current;
     if (video === null) return;
     live.current.probe = null;
@@ -112,6 +122,19 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
     setPhase({ kind, frozen: off });
   }, []);
 
+  /** Repartir à zéro : la calibration mémorisée est jetée, l'étape carte reprend. */
+  const restart = useCallback(() => {
+    localStorage.removeItem(STORAGE_KEY);
+    live.current.cal = null;
+    live.current.irisSamples = null;
+    live.current.lastGuideFill = -1;
+    guideStep.current.reset();
+    setCal(null);
+    setNotices([]);
+    if (props.mode === 'store') freeze('mesure-monture');
+    else setPhase({ kind: 'mesure-carte', fill: 0 });
+  }, [freeze, props.mode]);
+
   const v1 = useV1Calibration({
     live,
     videoRef,
@@ -121,7 +144,8 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
     },
     onFailed: (message) => {
       setNotices([message]);
-      freeze('mesure-carte');
+      guideStep.current.reset();
+      setPhase({ kind: 'mesure-carte', fill: 0 });
     },
     onRotationStart: () =>
       setPhase({ kind: 'mesure-rotation', ratio: 0, degrees: { left: 0, right: 0 } }),
@@ -137,49 +161,40 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
       const s = live.current;
       s.lastLandmarks = lm;
 
-      if (s.probe !== null) {
-        s.probe.offer(lm, yawRad, rollRadOf(lm, w, h), w, h);
-
-        // ⚠️ On ne repeint l'IHM que quand l'avancement change vraiment : un
-        // `setPhase` par frame ferait rendre React soixante fois par seconde,
-        // au moment précis où la boucle de détection a besoin du processeur.
-        const ratio = s.probe.ratio();
-        if (Math.abs(ratio - s.lastProbeRatio) > 0.02 || s.probe.complete) {
-          s.lastProbeRatio = ratio;
-          const p = s.probe.progress;
-          const deg = (r: number): number => (r * 180) / Math.PI;
-          setPhase({
-            kind: 'mesure-rotation',
-            ratio,
-            degrees: { left: deg(p.negative), right: deg(p.positive) },
-          });
-        }
-        if (s.probe.complete) finishCalibration();
+      // ⭐ L'étape carte est LIVE : le cadre se dessine sur le flux, et la mesure
+      // se prend au moment exact où la carte le remplit. Aucun bouton.
+      if (phaseRef.current === 'mesure-carte') {
+        runCardStep(guideStep.current, ctx, lm, videoRef.current, {
+          locked: v1.onCardValidated,
+          fill: (ratio) => {
+            // Même précaution qu'à la rotation : ne pas faire rendre React
+            // soixante fois par seconde pendant que la détection travaille.
+            if (Math.abs(ratio - s.lastGuideFill) <= 0.02) return;
+            s.lastGuideFill = ratio;
+            setPhase({ kind: 'mesure-carte', fill: ratio });
+          },
+        });
+        return;
       }
 
-      // Contrôle de cohérence : l'iris relit la carte, une fois, en silence.
-      if (s.irisSamples !== null && s.cal !== null) {
-        s.irisSamples.push(irisWidthPx(lm, w, h));
-        if (s.irisSamples.length >= CROSSCHECK_FRAMES) {
-          const mean = s.irisSamples.reduce((a, b) => a + b, 0) / s.irisSamples.length;
-          s.irisSamples = null;
-          const warn = crossCheckWithIris(s.cal, mean, lm, w, h);
-          if (warn !== null) setNotices((prev) => [...prev, warn]);
-        }
+      const rot = stepRotation(s, lm, yawRad, w, h);
+      if (rot !== null) {
+        setPhase({ kind: 'mesure-rotation', ratio: rot.ratio, degrees: rot.degrees });
+        if (rot.complete) finishCalibration();
       }
+
+      const warn = stepCrossCheck(s, lm, w, h);
+      if (warn !== null) setNotices((prev) => [...prev, warn]);
 
       paintScene(ctx, s, lm, yawRad, videoRef.current);
 
       drawOverlay(ctx, { verdict: s.verdict, consecutiveFailures: 0, hint: s.recolorReason });
     },
-    [finishCalibration],
+    [finishCalibration, v1],
   );
 
-  /**
-   * ⚠️ Le chemin d'échec DOIT dessiner (§1 bug #3). Sans cela, la détection
-   * perdue laissait un canvas vide et le compteur exigé n'apparaissait jamais :
-   * la panne était indiscernable du fonctionnement normal.
-   */
+  /** ⚠️ Le chemin d'échec DOIT dessiner (§1 bug #3) : sinon la panne est
+   * indiscernable du fonctionnement normal. */
   const renderLost = useCallback((ctx: CanvasRenderingContext2D, n: number): void => {
     live.current.verdict = null;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -197,7 +212,8 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
     onProgress: (ratio) => setPhase({ kind: 'loading', ratio }),
     onReady: () => {
       if (live.current.cal !== null) setPhase({ kind: 'essayage' });
-      else freeze(props.mode === 'store' ? 'mesure-monture' : 'mesure-carte');
+      else if (props.mode === 'store') freeze('mesure-monture');
+      else setPhase({ kind: 'mesure-carte', fill: 0 });
     },
     onError: (message) => setPhase({ kind: 'error', message }),
   });
@@ -206,17 +222,12 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
   const onWornFrameValidated = useCallback(
     (widthPx: number, worn: FrameSpec) => {
       const canvas = canvasRef.current;
-      const lm = live.current.lastLandmarks;
       if (canvas === null) return;
       try {
-        if (lm === null) throw new CalibrationError('Visage perdu pendant l’étalonnage.');
-        persist(calibrateWithWornFrame(widthPx, worn, lm, canvas.width, canvas.height));
+        const out = wornFrameCalibration(widthPx, worn, live.current.lastLandmarks, canvas.width, canvas.height);
+        persist(out.cal);
         setWornSpec(worn);
-        setNotices([
-          `Étalonné sur « ${worn.slug} » — précision 2 %.`,
-          `Choisissez un autre coloris : c'est la monture que vous portez qui sera repeinte, ` +
-            `avec sa lumière, ses reflets et sa perspective réels.`,
-        ]);
+        setNotices(out.notices);
       } catch (err) {
         setNotices([err instanceof Error ? err.message : String(err)]);
       }
@@ -251,7 +262,6 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
         phase={phase}
         catalogue={essayables}
         onCancel={props.onQuit}
-        onCardValidated={v1.onCardValidated}
         onSkipRotation={() => {
           live.current.probe = null;
           finishCalibration();
@@ -279,17 +289,7 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
 
       {cal !== null && (
         <p>
-          <button
-            type="button"
-            onClick={() => {
-              localStorage.removeItem(STORAGE_KEY);
-              live.current.cal = null;
-              live.current.irisSamples = null;
-              setCal(null);
-              setNotices([]);
-              freeze(props.mode === 'store' ? 'mesure-monture' : 'mesure-carte');
-            }}
-          >
+          <button type="button" onClick={restart}>
             Refaire la calibration
           </button>
         </p>
