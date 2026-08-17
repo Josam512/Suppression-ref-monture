@@ -32,6 +32,8 @@ import { createLive, type Live } from './liveState.js';
 import { paintScene } from './renderScene.js';
 import { useCatalogue } from './catalogue.js';
 import { useV1Calibration } from './useV1Calibration.js';
+import type { CameraProfile } from '../core/cameraProfile.js';
+import { loadCameraProfile, saveCameraProfile } from './cameraStorage.js';
 import { useCameraLoop } from './useCameraLoop.js';
 import { useSprites } from './useSprites.js';
 
@@ -57,6 +59,12 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>({ kind: 'loading', ratio: 0 });
   const [cal, setCal] = useState<UserCalibration | null>(loadStored);
+  const cameraProfile = useRef<CameraProfile | null>(loadCameraProfile());
+
+  const persistCamera = useCallback((next: CameraProfile) => {
+    cameraProfile.current = next;
+    saveCameraProfile(next);
+  }, []);
   const [notices, setNotices] = useState<string[]>([]);
 
   const entries = catalogue.status === 'ready' ? catalogue.entries : [];
@@ -117,6 +125,8 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
     },
     onRotationStart: () =>
       setPhase({ kind: 'mesure-rotation', ratio: 0, degrees: { left: 0, right: 0 } }),
+    cameraProfile: cameraProfile.current,
+    onCameraProfile: persistCamera,
   });
   const finishCalibration = v1.finish;
 
