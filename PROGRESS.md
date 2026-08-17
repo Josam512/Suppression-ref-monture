@@ -845,7 +845,33 @@ puisque l'a priori était « imposé par la fenêtre de travail ».
 > (600 mm), que le §4 impose comme parade n°1 au biais B4. L'application peut désormais le
 > DÉTECTER et dire « reculez » sur une mesure, là où elle ne pouvait que l'espérer.
 
-**Contrôles :** 139 tests Vitest · `tsc --noEmit` en `strict` · banc navigateur vert (23 contrôles).
+### La mesure entre enfin dans l'APPLICATION, pas seulement dans l'atelier
+
+Tout ce qui précède ne tournait que dans l'outil d'atelier. L'application, elle, continuait
+de calibrer avec les 78 cm supposés — c'est-à-dire avec l'erreur qu'on venait de démontrer.
+C'est branché :
+
+| Maillon | Avant | Maintenant |
+|---|---|---|
+| Ce que le client pointe | deux poignées | deux poignées — **inchangé** |
+| Ce qu'on en fait | une largeur en pixels | une **graine** de quadrilatère, accrochée sur les vrais bords |
+| Pendant la rotation | 2 images gardées pour la silhouette | + la carte **suivie** de tranche en tranche, 4 coins gardés par vue |
+| Distance | 780 mm supposés | **mesurée**, quand le suivi aboutit |
+
+⚠️ Le geste du client **ne change pas d'un pouce**. Il pose deux poignées comme avant ; les
+proportions ISO donnent le rectangle, et `core/cardEdges.ts` l'accroche au dixième de pixel.
+Il n'a pas à être précis — c'est le seul niveau d'exigence acceptable à distance.
+
+⚠️ **Rien n'est bloquant.** Accrochage raté, carte perdue de vue, focale trop dispersée :
+`cardSweep` refuse de lui-même et la chaîne retombe exactement sur son comportement
+précédent, avec sa marge honnête. Un client qui n'y arrive pas doit pouvoir essayer des
+lunettes quand même (§0.0.2).
+
+⚠️ Aucune image du balayage n'est conservée pour ça : le suivi est fait à la volée et seuls
+les quatre coins sont gardés. Huit images de 1280×720 coûteraient 30 Mo pour rien.
+
+**Contrôles :** 139 tests Vitest · `tsc --noEmit` en `strict` · `npm run build` ·
+banc navigateur vert (23 contrôles).
 
 ## Journal
 

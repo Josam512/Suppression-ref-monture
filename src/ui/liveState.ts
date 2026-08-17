@@ -10,6 +10,7 @@
 
 import type { UserCalibration } from '../core/calibration.js';
 import type { FrameSpec } from '../core/frameSpec.js';
+import type { CardQuad } from '../core/cardPose.js';
 import type { NormalizedLandmark } from '../core/geom.js';
 import type { ImageBuffer } from '../core/silhouette.js';
 import type { SizeVerdict } from '../core/verdict.js';
@@ -22,6 +23,12 @@ export type SpritesState = ReturnType<typeof useSprites>;
 /** Ce que la carte a laissé derrière elle, en attendant la rotation. */
 export interface PendingCard {
   cardWidthPx: number;
+  /**
+   * Les quatre coins accrochés sur les vrais bords, ou null si l'accrochage a
+   * échoué. Leur présence — et non un mode — décide si la distance sera
+   * MESURÉE ou supposée (§11.4, §14.5).
+   */
+  quad: CardQuad | null;
   lm: readonly NormalizedLandmark[];
   frontal: ImageBuffer;
   w: number;

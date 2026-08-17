@@ -19,6 +19,7 @@
 import { isUsableProbeView, MAX_PROBE_YAW_RAD, MIN_PROBE_YAW_RAD, type RotatedView } from '../core/parallax.js';
 import type { ImageBuffer } from '../core/silhouette.js';
 import type { NormalizedLandmark } from '../core/geom.js';
+import type { CardQuad } from '../core/cardPose.js';
 
 /** Nombre de tranches d'angle PAR CÔTÉ. */
 export const BANDS_PER_SIDE = 4;
@@ -31,8 +32,25 @@ export class RotationProbe {
   private bestNegative = 0;
   private bestPositive = 0;
 
-  /** @param capture rend l'image courante, ou null si elle n'est pas lisible. */
-  constructor(private readonly capture: () => ImageBuffer | null) {
+  /**
+   * Cadres de la carte relevés pendant le balayage — la matière de la focale.
+   *
+   * ⚠️ On ne garde QUE les quatre coins, pas l'image : le suivi est fait à la
+   * volée et le tampon est relâché aussitôt. Conserver huit images de
+   * 1280×720 coûterait 30 Mo pour rien.
+   */
+  private readonly quadsFound: CardQuad[] = [];
+
+  /**
+   * @param capture rend l'image courante, ou null si elle n'est pas lisible.
+   * @param trackQuad accroche la carte sur cette image, ou rend null si elle
+   *        n'y est plus. Facultatif : sans lui, le balayage ne sert qu'à la
+   *        profondeur, et la distance reste supposée.
+   */
+  constructor(
+    private readonly capture: () => ImageBuffer | null,
+    private readonly trackQuad: ((buf: ImageBuffer) => CardQuad | null) | null = null,
+  ) {
     this.slots = Array.from({ length: 2 * BANDS_PER_SIDE }, () => null);
   }
 
@@ -75,7 +93,19 @@ export class RotationProbe {
     const band = RotationProbe.bandOf(yawRad);
     if (band < 0) return;
 
-    if (this.slots[band] === null) this.slots[band] = view;
+    if (this.slots[band] === null) {
+      this.slots[band] = view;
+
+      // Une tranche neuve : c'est le bon moment pour relever la carte, puisque
+      // ces vues sont justement celles qui sont bien étalées en angle.
+      if (this.trackQuad !== null) {
+        const buf = this.capture();
+        if (buf !== null) {
+          const q = this.trackQuad(buf);
+          if (q !== null) this.quadsFound.push(q);
+        }
+      }
+    }
 
     // Une seule image par côté, celle de l'angle le plus franc : le masque de
     // mouvement est d'autant plus net que la tête a bougé.
@@ -101,6 +131,11 @@ export class RotationProbe {
     return kept.length > 0 ? kept : null;
   }
 
+  /** Les cadres de carte relevés pendant le balayage. */
+  quads(): readonly CardQuad[] {
+    return this.quadsFound;
+  }
+
   /** Les deux images, pour le masque de mouvement de la silhouette. */
   buffers(): ImageBuffer[] {
     return [this.negativeImage, this.positiveImage].filter((b): b is ImageBuffer => b !== null);
@@ -117,5 +152,6 @@ export class RotationProbe {
     this.positiveImage = null;
     this.bestNegative = 0;
     this.bestPositive = 0;
+    this.quadsFound.length = 0;
   }
 }

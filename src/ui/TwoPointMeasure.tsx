@@ -22,6 +22,12 @@ export interface TwoPointMeasureProps {
   guideY?: number;
   /** Largeur mesurée, en pixels image, à chaque déplacement. */
   onChange(widthPx: number): void;
+  /**
+   * Les deux poignées, en pixels image. Elles ne servent pas qu'à une largeur :
+   * ce sont les deux extrémités du bord long de la carte, d'où l'on déduit le
+   * quadrilatère complet, donc la focale et la distance (`core/cardPose.ts`).
+   */
+  onEdges?(a: { x: number; y: number }, b: { x: number; y: number }): void;
   /** `null` = mesure acceptable ; sinon, la raison du refus, affichée à l'écran. */
   blocker?: string | null;
 }
@@ -39,10 +45,12 @@ export function TwoPointMeasure(props: TwoPointMeasureProps): JSX.Element {
 
   const blocked = props.blocker != null;
   const onChange = props.onChange;
+  const onEdges = props.onEdges;
 
   useEffect(() => {
     onChange(Math.abs(right - left));
-  }, [left, right, onChange]);
+    onEdges?.({ x: Math.min(left, right), y: guideY }, { x: Math.max(left, right), y: guideY });
+  }, [left, right, guideY, onChange, onEdges]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
