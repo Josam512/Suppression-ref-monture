@@ -3,8 +3,8 @@
  *
  * Orchestre les deux mesures que le §4 laissait en suspens, et RIEN d'autre :
  *
- *   1. la profondeur front ↔ tempes (`core/parallax.ts`), qui supprime le biais
- *      systématique B4 au lieu de le supposer nul ;
+ *   1. la profondeur front ↔ tempes et la distance caméra (`core/depthFit.ts`),
+ *      qui suppriment le biais systématique B4 au lieu de le supposer nul ;
  *   2. l'écart temporal (`core/temporalWidth.ts`), qui remplace la constante
  *      `FACE_WIDTH_CORRECTION_MM` par une mesure faite sur CE client.
  *
@@ -18,13 +18,9 @@
  * que sa marge est plus large.
  */
 
+import { fitDepthAndDistance } from './depthFit.js';
 import { CalibrationError } from './geom.js';
-import {
-  depthOffsetMm,
-  parallaxFactor,
-  parallaxResidualRelError,
-  type RotatedView,
-} from './parallax.js';
+import { type RotatedView } from './parallax.js';
 import {
   measureTemporalWidth,
   type TemporalInput,
@@ -34,17 +30,30 @@ import {
 /** Ce qu'il faut pour tenter la silhouette : l'image figée et ses repères. */
 export type TemporalScene = Omit<TemporalInput, 'pxPerMm' | 'scaleRelError'>;
 
+/**
+ * Distance de travail attendue, et son incertitude — **imposée, pas supposée**.
+ *
+ * ⚠️ Ce n'est PAS un retour du champ de vision supposé. C'est la fenêtre que
+ * l'application fait respecter : en deçà de 60 cm elle refuse (parade B4 n°1),
+ * et au-delà d'environ 1 m la carte devient trop petite en pixels pour être
+ * pointée utilement. La distance réelle vit donc dans cette fourchette parce
+ * qu'on l'y contraint, et non parce qu'on la devine.
+ *
+ * Elle sert d'a priori que la mesure par rotation vient corriger — quand cette
+ * mesure vaut mieux que l'a priori, ce qui n'est pas toujours le cas.
+ */
+export const DISTANCE_PRIOR_MM = 780;
+export const DISTANCE_PRIOR_REL_ERROR = 0.17; // couvre ~600–1000 mm
+
 export interface RefinementInput {
   /** Échelle lue sur la carte, AU PLAN DE LA CARTE (px par mm). */
   pxPerMmCard: number;
-  /** Distance caméra estimée, en mm. N'entre que dans un terme du second ordre. */
-  distanceMm: number;
   /** Largeur de visage naïve, issue de la carte sans correction. */
   naiveFaceWidthMm: number;
   /** Incertitude de pointage des deux bords de la carte. */
   clickRelError: number;
-  /** Une vue tournée à gauche et une à droite, ou null si non collectées. */
-  views: readonly [RotatedView, RotatedView] | null;
+  /** Les vues tournées collectées pendant la rotation, dans l'ordre. */
+  views: readonly RotatedView[] | null;
   /** L'image de face figée, pour chercher les bords de la tête. */
   scene: TemporalScene | null;
 }
@@ -54,6 +63,8 @@ export interface Refinement {
   parallaxFactor: number;
   /** Profondeur mesurée, en mm, ou null si la rotation n'a pas abouti. */
   depthMm: number | null;
+  /** Distance retenue, en mm : mesure et a priori combinés. */
+  distanceMm: number;
   /** Incertitude d'échelle totale APRÈS correction. */
   scaleRelError: number;
   /** Vrai si la parallaxe a réellement été mesurée sur ce client. */
@@ -73,42 +84,89 @@ export interface Refinement {
  */
 export const UNMEASURED_PARALLAX_REL_ERROR = 0.025;
 
+/** Combinaison par pondération inverse des variances. */
+function fuse(
+  a: { value: number; rel: number },
+  b: { value: number; rel: number },
+): { value: number; rel: number } {
+  const wa = 1 / (a.value * a.rel) ** 2;
+  const wb = 1 / (b.value * b.rel) ** 2;
+  if (!Number.isFinite(wa) || wa <= 0) return b;
+  if (!Number.isFinite(wb) || wb <= 0) return a;
+  const value = (wa * a.value + wb * b.value) / (wa + wb);
+  return { value, rel: Math.sqrt(1 / (wa + wb)) / value };
+}
+
+interface Parallax {
+  factor: number;
+  depthMm: number | null;
+  distanceMm: number;
+  scaleRelError: number;
+  note: string;
+}
+
+function measureParallax(input: RefinementInput): Parallax {
+  const prior = { value: DISTANCE_PRIOR_MM, rel: DISTANCE_PRIOR_REL_ERROR };
+
+  if (input.views === null || input.views.length === 0) {
+    return {
+      factor: 1,
+      depthMm: null,
+      distanceMm: prior.value,
+      scaleRelError: UNMEASURED_PARALLAX_REL_ERROR,
+      note:
+        `Rotation de tête non effectuée : le biais de parallaxe de la carte n'est pas mesuré, ` +
+        `et il compte pour ${(UNMEASURED_PARALLAX_REL_ERROR * 100).toFixed(1)} % dans votre marge.`,
+    };
+  }
+
+  const fit = fitDepthAndDistance(input.views, input.naiveFaceWidthMm);
+
+  // 🔴 La distance EST mesurée — mais elle est portée par un effet perspectif du
+  // second ordre, et le bruit des repères la dégrade massivement. Au banc,
+  // ±0,5 px de bruit donnent ±300 mm d'écart-type sur 700. On la fusionne donc
+  // avec la fenêtre de travail imposée, chacune pesée par son incertitude : la
+  // mesure prend le dessus si elle est bonne, s'efface si elle ne l'est pas.
+  // C'est le contraire d'un choix a priori — c'est la donnée qui décide.
+  const distance = fuse({ value: fit.distanceMm, rel: fit.distanceRelError }, prior);
+
+  const delta = fit.depthMm / distance.value;
+  const deltaRel = Math.hypot(fit.depthRelError, distance.rel);
+  const factor = 1 / (1 - delta);
+
+  return {
+    factor,
+    depthMm: fit.depthMm,
+    distanceMm: distance.value,
+    // d(facteur)/facteur ≈ δ × (incertitude relative sur δ).
+    scaleRelError: Math.hypot(input.clickRelError, delta * deltaRel),
+    note:
+      `Profondeur front ↔ tempes mesurée : ${fit.depthMm.toFixed(0)} mm sur ${fit.views} vues. ` +
+      `Distance retenue : ${(distance.value / 10).toFixed(0)} cm ` +
+      `(mesurée ${(fit.distanceMm / 10).toFixed(0)} cm à ±${(fit.distanceRelError * 100).toFixed(0)} %). ` +
+      `Le biais de parallaxe de la carte, ${((factor - 1) * 100).toFixed(1)} %, est corrigé ` +
+      `au lieu d'être supposé nul.`,
+  };
+}
+
 export function refineCard(input: RefinementInput): Refinement {
   const notes: string[] = [];
 
-  let depthMm: number | null = null;
-  let factor = 1;
-  let scaleRelError = UNMEASURED_PARALLAX_REL_ERROR;
-
-  if (input.views !== null) {
-    try {
-      const [a, b] = input.views;
-      depthMm = depthOffsetMm(a, b, input.naiveFaceWidthMm, input.distanceMm);
-      factor = parallaxFactor(depthMm, input.distanceMm);
-      scaleRelError = Math.hypot(
-        input.clickRelError,
-        parallaxResidualRelError(depthMm, input.distanceMm),
-      );
-      notes.push(
-        `Profondeur front ↔ tempes mesurée : ${depthMm.toFixed(0)} mm. ` +
-          `Le biais de parallaxe de la carte (${((factor - 1) * 100).toFixed(1)} %) est corrigé, ` +
-          `il n'est plus supposé nul.`,
-      );
-    } catch (err) {
-      depthMm = null;
-      factor = 1;
-      scaleRelError = UNMEASURED_PARALLAX_REL_ERROR;
-      notes.push(
+  let p: Parallax;
+  try {
+    p = measureParallax(input);
+  } catch (err) {
+    p = {
+      factor: 1,
+      depthMm: null,
+      distanceMm: DISTANCE_PRIOR_MM,
+      scaleRelError: UNMEASURED_PARALLAX_REL_ERROR,
+      note:
         (err instanceof CalibrationError ? err.message : String(err)) +
-          ` La mesure reste utilisable, avec une marge plus large.`,
-      );
-    }
-  } else {
-    notes.push(
-      `Rotation de tête non effectuée : le biais de parallaxe de la carte n'est pas mesuré, ` +
-        `et il compte pour ${(UNMEASURED_PARALLAX_REL_ERROR * 100).toFixed(1)} % dans votre marge.`,
-    );
+        ` La mesure reste utilisable, avec une marge plus large.`,
+    };
   }
+  notes.push(p.note);
 
   let temporal: TemporalMeasurement | null = null;
   if (input.scene !== null) {
@@ -117,8 +175,8 @@ export function refineCard(input: RefinementInput): Refinement {
       // ⭐ L'échelle des tempes, pas celle de la carte : c'est tout l'objet du
       // correctif B4. Diviser par le facteur, puisque le facteur multiplie les
       // longueurs, donc divise les échelles.
-      pxPerMm: input.pxPerMmCard / factor,
-      scaleRelError,
+      pxPerMm: input.pxPerMmCard / p.factor,
+      scaleRelError: p.scaleRelError,
     });
     notes.push(
       temporal.measured
@@ -130,10 +188,11 @@ export function refineCard(input: RefinementInput): Refinement {
   }
 
   return {
-    parallaxFactor: factor,
-    depthMm,
-    scaleRelError,
-    parallaxMeasured: depthMm !== null,
+    parallaxFactor: p.factor,
+    depthMm: p.depthMm,
+    distanceMm: p.distanceMm,
+    scaleRelError: p.scaleRelError,
+    parallaxMeasured: p.depthMm !== null,
     temporal,
     notes,
   };

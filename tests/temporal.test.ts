@@ -30,6 +30,7 @@ import {
   parallaxResidualRelError,
   type RotatedView,
 } from '../src/core/parallax.js';
+import { fitDepthAndDistance } from '../src/core/depthFit.js';
 import { findHeadEdge, motionMask } from '../src/core/silhouette.js';
 import { measureTemporalWidth, MAX_TEMPLE_MARGIN_MM } from '../src/core/temporalWidth.js';
 import { comparisonWidth } from '../src/core/verdict.js';
@@ -51,6 +52,16 @@ function view(yawDeg: number, over: Partial<CameraOptions> = {}): RotatedView {
   const cam = camera(yawDeg, over);
   return { lm: projectHead(ADULTE, cam).lm, yawRad: cam.yawRad, rollRad: 0, w: W, h: H };
 }
+
+/**
+ * Le BALAYAGE que le client produit en tournant la tête : plusieurs angles de
+ * chaque côté. Deux extrêmes ne suffisent pas — la profondeur et la distance
+ * dépendent de l'angle différemment, et deux points ne séparent pas deux
+ * courbes qui se ressemblent.
+ */
+const DEGRES = [-30, -25, -20, -15, 15, 20, 25, 30];
+const BALAYAGE = DEGRES.map((d) => view(d));
+const BALAYAGE_75 = DEGRES.map((d) => view(d, { hfovDeg: 75 }));
 
 /** Largeur vraie du segment 234↔454, telle que la tête de test la porte. */
 const VRAIE_LARGEUR_REPERES = 2 * ADULTE.templeHalfMm;
@@ -89,6 +100,52 @@ describe('parallaxe mesurée par rotation de tête (B4, parade n°2)', () => {
   });
 });
 
+describe('la distance est MESURÉE, plus supposée', () => {
+  const VRAIE = 2 * ADULTE.templeHalfMm;
+
+  it('retrouve la profondeur ET la distance du plan des tempes', () => {
+    const f = fitDepthAndDistance(BALAYAGE, VRAIE);
+    expect(f.depthMm).toBeCloseTo(ADULTE.foreheadAheadMm, 0);
+    // La distance de la caméra au plan des TEMPES, jamais annoncée nulle part
+    // à la sonde : elle sort de la seule courbure perspective des vues.
+    expect(f.distanceMm).toBeGreaterThan(DISTANCE_MM * 0.85);
+    expect(f.distanceMm).toBeLessThan(DISTANCE_MM * 1.15);
+  });
+
+  it('🔴 aucune dépendance au champ de vision de la caméra', () => {
+    // Le HFOV supposé de 60° servait à estimer la distance. Il n'entre plus
+    // nulle part : une caméra à 75° doit rendre EXACTEMENT le même résultat.
+    const a = fitDepthAndDistance(BALAYAGE, VRAIE);
+    const b = fitDepthAndDistance(BALAYAGE_75, VRAIE);
+    expect(b.depthMm).toBeCloseTo(a.depthMm, 6);
+    expect(b.distanceMm).toBeCloseTo(a.distanceMm, 6);
+  });
+
+  it('refuse un balayage trop étroit, où les deux inconnues se confondent', () => {
+    const plat = [-20, -19.5, 19.5, 20].map((d) => view(d));
+    expect(() => fitDepthAndDistance(plat, VRAIE)).toThrow(/même angle|balayer/i);
+  });
+
+  it('refuse trop peu de vues', () => {
+    expect(() => fitDepthAndDistance([view(-20), view(20)], VRAIE)).toThrow(/vue\(s\) exploitable/);
+  });
+
+  it('🔴 la sonde ANNONCE la faiblesse de sa mesure de distance', () => {
+    // C'est le résultat qui a décidé la conception : sur un balayage parfait,
+    // la distance sort juste ; sous un bruit de repères réaliste, elle part
+    // à ±35 %. La régression doit le DIRE, pour que l'aval puisse la pondérer.
+    const brouille = BALAYAGE.map((v, i) => ({
+      ...v,
+      lm: v.lm.map((p, k) => ({
+        x: p.x + (((i * 37 + k * 13) % 7) - 3) * (0.4 / W),
+        y: p.y,
+      })),
+    }));
+    const f = fitDepthAndDistance(brouille, VRAIE);
+    expect(f.distanceRelError).toBeGreaterThan(f.depthRelError);
+  });
+});
+
 describe('la carte seule est BIAISÉE — et la rotation le corrige', () => {
   const cam = camera(0);
   const { lm } = projectHead(ADULTE, cam);
@@ -109,7 +166,7 @@ describe('la carte seule est BIAISÉE — et la rotation le corrige', () => {
       lm,
       W,
       H,
-      [view(-20), view(20)],
+      BALAYAGE,
       null,
     );
     expect(refinement.parallaxMeasured).toBe(true);
@@ -138,7 +195,7 @@ describe('la carte seule est BIAISÉE — et la rotation le corrige', () => {
       lm75,
       W,
       H,
-      [view(-20, { hfovDeg: 75 }), view(20, { hfovDeg: 75 })],
+      BALAYAGE_75,
       null,
     );
     expect(Math.abs(cal.faceWidthMm - VRAIE_LARGEUR_REPERES) / VRAIE_LARGEUR_REPERES).toBeLessThan(
@@ -165,7 +222,7 @@ describe('écart temporal lu dans les pixels', () => {
   const motion = motionMask(frontal, [sceneOf({ shiftPx: 6 }), sceneOf({ shiftPx: -6 })]);
 
   it('🔴 INVARIANT : la largeur aux tempes est retrouvée, pas celle des repères', () => {
-    const { cal } = calibrateWithCardMeasured(cardPx, W, lm, W, H, [view(-20), view(20)], {
+    const { cal } = calibrateWithCardMeasured(cardPx, W, lm, W, H, BALAYAGE, {
       frontal,
       motion,
       lm,
@@ -182,7 +239,7 @@ describe('écart temporal lu dans les pixels', () => {
   });
 
   it('c’est l’écart temporal qui sert de référence à la légende', () => {
-    const { cal } = calibrateWithCardMeasured(cardPx, W, lm, W, H, [view(-20), view(20)], {
+    const { cal } = calibrateWithCardMeasured(cardPx, W, lm, W, H, BALAYAGE, {
       frontal,
       motion,
       lm,
@@ -292,7 +349,7 @@ describe('écart temporal lu dans les pixels', () => {
   });
 
   it('l’incertitude annoncée reste sous celle de la carte non corrigée', () => {
-    const { cal } = calibrateWithCardMeasured(cardPx, W, lm, W, H, [view(-20), view(20)], {
+    const { cal } = calibrateWithCardMeasured(cardPx, W, lm, W, H, BALAYAGE, {
       frontal,
       motion,
       lm,

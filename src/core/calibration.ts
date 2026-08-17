@@ -10,7 +10,7 @@ import { at, CalibrationError, dist, px, type NormalizedLandmark } from './geom.
 import { FACE_L, FACE_R } from './faceMetrics.js';
 import type { FrameSpec } from './frameSpec.js';
 import { refineCard, type Refinement, type TemporalScene } from './cardRefinement.js';
-import { CARD_WIDTH_MM, estimateDistanceMm } from './cardOptics.js';
+import { CARD_WIDTH_MM } from './cardOptics.js';
 import type { RotatedView } from './parallax.js';
 
 /**
@@ -216,14 +216,14 @@ export function calibrateWithCardMeasured(
   lm: readonly NormalizedLandmark[],
   w: number,
   h: number,
-  views: readonly [RotatedView, RotatedView] | null,
+  views: readonly RotatedView[] | null,
   scene: TemporalScene | null,
 ): MeasuredCardCalibration {
+  void imageWidthPx; // ⭐ plus aucune estimation de distance ici : elle est MESURÉE.
   const naive = calibrateWithCard(cardWidthPx, lm, w, h);
 
   const refinement = refineCard({
     pxPerMmCard: cardWidthPx / CARD_WIDTH_MM,
-    distanceMm: estimateDistanceMm(cardWidthPx, imageWidthPx),
     naiveFaceWidthMm: naive.faceWidthMm,
     clickRelError: CARD_CLICK_REL_ERROR,
     views,
