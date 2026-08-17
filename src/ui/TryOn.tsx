@@ -21,16 +21,15 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 
 import { calibrateWithWornFrame, type UserCalibration } from '../core/calibration.js';
 import { crossCheckWithIris } from '../core/crossCheck.js';
-import { frameMetrics, irisWidthPx, rollRadOf } from '../core/faceMetrics.js';
+import { irisWidthPx, rollRadOf } from '../core/faceMetrics.js';
 import type { FrameSpec } from '../core/frameSpec.js';
 import { CalibrationError, type NormalizedLandmark } from '../core/geom.js';
-import { verdict } from '../core/verdict.js';
-import { drawFrame, OVERLAY_PADDING_MM } from '../render/composite.js';
+import { OVERLAY_PADDING_MM } from '../render/composite.js';
 import { drawOverlay } from '../render/overlay.js';
-import { faceOutlinePath } from '../tracking/landmarker.js';
 import { CalibrationPanel, type Phase } from './CalibrationPanel.js';
 import { FramePicker } from './FramePicker.js';
 import { createLive, type Live } from './liveState.js';
+import { paintScene } from './renderScene.js';
 import { useCatalogue } from './catalogue.js';
 import { useV1Calibration } from './useV1Calibration.js';
 import { useCameraLoop } from './useCameraLoop.js';
@@ -68,6 +67,12 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
   const selected = essayables.find((s) => s.slug === selectedSlug) ?? essayables[0] ?? null;
   const sprites = useSprites(selected);
 
+  // ⭐ V2 — le modèle PHYSIQUEMENT PORTÉ, désigné par l'opticien à l'étalonnage.
+  // Son sprite sert de masque au recoloriage 2,5 D : on repeint la monture
+  // réelle plutôt que d'en poser une par-dessus (§11.6, liseré).
+  const [wornSpec, setWornSpec] = useState<FrameSpec | null>(null);
+  const wornSprites = useSprites(wornSpec);
+
   // Le mode ne descend jamais dans core/ ni render/ : c'est une VALEUR qui descend.
   const overlayPaddingMm = props.mode === 'store' ? OVERLAY_PADDING_MM : 0;
 
@@ -76,6 +81,7 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
   live.current.spec = selected;
   live.current.sprites = sprites;
   live.current.overlayPaddingMm = overlayPaddingMm;
+  live.current.wornSprite = wornSprites.status === 'ready' ? wornSprites.sprites.front : null;
 
   const persist = useCallback((next: UserCalibration) => {
     live.current.cal = next;
@@ -152,18 +158,9 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
         }
       }
 
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.clearRect(0, 0, w, h);
+      paintScene(ctx, s, lm, yawRad, videoRef.current);
 
-      if (s.cal !== null && s.sprites.status === 'ready') {
-        const m = frameMetrics(lm, w, h, s.cal, yawRad);
-        drawFrame(ctx, s.sprites.sprites, m, faceOutlinePath(lm, w, h), {
-          overlayPaddingMm: s.overlayPaddingMm,
-        });
-        s.verdict = verdict(lm, s.cal, s.sprites.spec, w, h, yawRad);
-      }
-
-      drawOverlay(ctx, { verdict: s.verdict, consecutiveFailures: 0, hint: null });
+      drawOverlay(ctx, { verdict: s.verdict, consecutiveFailures: 0, hint: s.recolorReason });
     },
     [finishCalibration],
   );
@@ -197,14 +194,19 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
 
   /** V2 — la monture physiquement portée sert d'étalon (§11.3). */
   const onWornFrameValidated = useCallback(
-    (widthPx: number, wornSpec: FrameSpec) => {
+    (widthPx: number, worn: FrameSpec) => {
       const canvas = canvasRef.current;
       const lm = live.current.lastLandmarks;
       if (canvas === null) return;
       try {
         if (lm === null) throw new CalibrationError('Visage perdu pendant l’étalonnage.');
-        persist(calibrateWithWornFrame(widthPx, wornSpec, lm, canvas.width, canvas.height));
-        setNotices([`Étalonné sur « ${wornSpec.slug} » — précision 2 %.`]);
+        persist(calibrateWithWornFrame(widthPx, worn, lm, canvas.width, canvas.height));
+        setWornSpec(worn);
+        setNotices([
+          `Étalonné sur « ${worn.slug} » — précision 2 %.`,
+          `Choisissez un autre coloris : c'est la monture que vous portez qui sera repeinte, ` +
+            `avec sa lumière, ses reflets et sa perspective réels.`,
+        ]);
       } catch (err) {
         setNotices([err instanceof Error ? err.message : String(err)]);
       }

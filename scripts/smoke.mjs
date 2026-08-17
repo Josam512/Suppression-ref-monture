@@ -164,6 +164,20 @@ try {
     !/Portez-vous des lunettes/.test(texteRevenant) && !/carte bancaire/.test(texteRevenant),
   );
 
+  // L'atelier de recoloriage V2 doit se charger : c'est lui qui traitera la
+  // vraie vidéo de magasin. Un module cassé ne doit pas se découvrir ce jour-là.
+  const atelier = await ctx.newPage();
+  const atelierErrors = [];
+  atelier.on('pageerror', (e) => atelierErrors.push(e.message));
+  await atelier.goto(`${BASE}/tests/recolor-video.html`, { waitUntil: 'load' });
+  await atelier.waitForTimeout(1500);
+  check(
+    'l’atelier de recoloriage V2 se charge',
+    (await atelier.evaluate(() => typeof window.__RECOLOR__ === 'function')) &&
+      atelierErrors.length === 0,
+    atelierErrors.join(' | '),
+  );
+
   const prep = await ctx.newPage();
   const prepErrors = [];
   prep.on('pageerror', (e) => prepErrors.push(e.message));
