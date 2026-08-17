@@ -19,7 +19,8 @@ import {
   calibrateWithCard,
   calibrateWithWornFrame,
   estimateDistanceMm,
-  isTooCloseForCard,
+  parallaxRelErrorAt,
+  parallaxRelErrorFromCard,
   scaleFromIris,
   WORN_FRAME_REL_ERROR,
 } from '../src/core/calibration.js';
@@ -128,13 +129,36 @@ describe('Échelle 2 — le visage réel', () => {
     expect(() => assertIrisUsable(true)).toThrow(/carte bancaire/i);
   });
 
-  // ⭐ B4, parade n°1 — trop près, la parallaxe devient dominante.
-  it('B4 : une carte trop grande à l\'écran signale que le client est trop près', () => {
-    const far = 150; // px
-    const near = 600; // px
+  /**
+   * ⭐ B4 — la parallaxe se CHIFFRE, elle ne se renvoie plus au client.
+   *
+   * Ce test remplace « une carte trop grande signale que le client est trop
+   * près », qui verrouillait un blocage : sous 60 cm, l'IHM affichait
+   * « reculez » et désactivait la validation. C'était un problème de mesure
+   * converti en contrainte de tournage — l'erreur que le journal du projet
+   * retient déjà. Être près augmente un biais connu ; un biais connu se corrige
+   * ou se chiffre.
+   */
+  it('B4 : plus on est près, plus la marge de parallaxe est grande — et rien ne bloque', () => {
+    const far = 150; // px : carte petite à l'écran donc client loin
+    const near = 600; // px : carte grande donc client près
     expect(estimateDistanceMm(far, W)).toBeGreaterThan(estimateDistanceMm(near, W));
-    expect(isTooCloseForCard(near, W)).toBe(true);
-    expect(isTooCloseForCard(far, W)).toBe(false);
+
+    // La grandeur rendue est une MARGE, jamais un refus.
+    expect(parallaxRelErrorFromCard(near, W)).toBeGreaterThan(parallaxRelErrorFromCard(far, W));
+    for (const px of [100, 200, 400, 600, 900]) {
+      const r = parallaxRelErrorFromCard(px, W);
+      expect(Number.isFinite(r), `px=${px}`).toBe(true);
+      expect(r, `px=${px}`).toBeGreaterThan(0);
+    }
+  });
+
+  it('B4 : la marge suit bien Δz/z, la loi physique et rien d’autre', () => {
+    expect(parallaxRelErrorAt(1000, 50)).toBeCloseTo(0.05, 9);
+    expect(parallaxRelErrorAt(500, 50)).toBeCloseTo(0.10, 9);
+    // Distance absurde (plus proche que la profondeur elle-meme) → marge maximale,
+    // jamais un nombre rassurant.
+    expect(parallaxRelErrorAt(20, 54)).toBe(1);
   });
 
   it('T8 : la monture portée est annoncée à 2 %, pas à 1 %', () => {

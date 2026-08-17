@@ -6,7 +6,11 @@
 
 import { useState } from 'react';
 import type { Pt } from '../core/geom.js';
-import { CARD_MIN_DISTANCE_MM, estimateDistanceMm, isTooCloseForCard } from '../core/calibration.js';
+import {
+  ISO_ID1_OBJECTS,
+  estimateDistanceMm,
+  parallaxRelErrorFromCard,
+} from '../core/calibration.js';
 import { TwoPointMeasure } from './TwoPointMeasure.js';
 import { CARD_H_MM, CARD_W_MM, type CardQuad } from '../core/cardPose.js';
 
@@ -42,7 +46,9 @@ export function CardCalibration(props: CardCalibrationProps): JSX.Element {
         })();
 
   const imageWidth = props.frozen.width;
-  const tooClose = widthPx > 0 && isTooCloseForCard(widthPx, imageWidth);
+  // ⭐ Plus de « trop près » : on CHIFFRE la marge au lieu de bloquer le client
+  // (core/cardOptics.ts, parallaxRelErrorAt). Rien n'est refusé.
+  const parallaxPct = widthPx > 0 ? 100 * parallaxRelErrorFromCard(widthPx, imageWidth) : null;
   const distanceCm = widthPx > 0 ? estimateDistanceMm(widthPx, imageWidth) / 10 : null;
 
   return (
@@ -76,24 +82,30 @@ export function CardCalibration(props: CardCalibrationProps): JSX.Element {
         frozen={props.frozen}
         onChange={setWidthPx}
         onEdges={(a, b) => setEdges({ a, b })}
-        blocker={tooClose ? 'trop près' : null}
+        blocker={null}
       />
 
       <p>
+        Vous pouvez utiliser {ISO_ID1_OBJECTS[0]}, {ISO_ID1_OBJECTS[1]}, {ISO_ID1_OBJECTS[2]} ou{' '}
+        {ISO_ID1_OBJECTS[3]} : toutes font exactement le même format normalisé.{' '}
+        <em>La carte Vitale est la plus sûre — elle ne porte aucun numéro de paiement.</em>
+      </p>
+
+      <p>
         Distance estimée : {distanceCm === null ? '—' : `${distanceCm.toFixed(0)} cm`}
-        {tooClose && (
-          <strong style={{ color: '#ff6b6b' }}>
+        {parallaxPct !== null && (
+          <>
             {' '}
-            — reculez, il faut au moins {CARD_MIN_DISTANCE_MM / 10} cm. Trop près, la carte posée
-            sur le front est vue plus grande que les tempes, et la mesure serait faussée sans que
-            rien ne le signale.
-          </strong>
+            — à cette distance la carte, posée sur le front, est vue environ{' '}
+            <strong>{parallaxPct.toFixed(0)} %</strong> plus grande que vos tempes. C'est corrigé,
+            et l'étape de rotation qui suit le mesure au lieu de le supposer.
+          </>
         )}
       </p>
 
       <button
         type="button"
-        disabled={tooClose || widthPx <= 0 || quad === null}
+        disabled={widthPx <= 0 || quad === null}
         onClick={() => quad !== null && props.onValidate(widthPx, quad)}
       >
         Valider — vous pourrez ranger votre carte

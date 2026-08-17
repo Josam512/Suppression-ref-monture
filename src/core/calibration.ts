@@ -17,13 +17,9 @@ import type { RotatedView } from './parallax.js';
  * Ré-exports de commodité : la carte et sa distance vivent dans
  * `core/cardOptics.ts` (optique pure), mais tout l'aval les importe depuis ici.
  */
-export {
-  ASSUMED_HFOV_DEG,
-  CARD_MIN_DISTANCE_MM,
-  CARD_WIDTH_MM,
-  estimateDistanceMm,
-  isTooCloseForCard,
-} from './cardOptics.js';
+export { ASSUMED_HFOV_DEG, CARD_HEIGHT_MM, CARD_TO_TEMPLE_DEPTH_MM } from './cardOptics.js';
+export { CARD_WIDTH_MM, ISO_ID1_OBJECTS, estimateDistanceMm } from './cardOptics.js';
+export { parallaxRelErrorAt, parallaxRelErrorFromCard } from './cardOptics.js';
 
 export type CalSource = 'iris' | 'card' | 'worn-frame';
 
