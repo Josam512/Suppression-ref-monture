@@ -42,8 +42,8 @@ L'écran d'accueil propose explicitement les deux, avec leur public, leur étalo
 | ⭐ V2+ | Recoloriage 2,5 D de la monture réelle | ✅ chaîne prouvée ; qualité à juger sur vidéo réelle |
 | V2-3 | Pointage en 2 clics de la monture portée | ✅ |
 
-**Contrôles automatiques :** 101 tests Vitest · `tsc --noEmit` en `strict` sans erreur ·
-`npm run build` OK · `npm run smoke` : 21 contrôles verts, dont la preuve métrologique ci-dessous.
+**Contrôles automatiques :** 103 tests Vitest · `tsc --noEmit` en `strict` sans erreur ·
+`npm run build` OK · `npm run smoke` : 22 contrôles verts, dont la preuve métrologique ci-dessous.
 
 ## La preuve que l'image est juste
 
@@ -388,6 +388,41 @@ verres, la peau n'est pas touchée.
 > Commande prête : `node scripts/recolor-video.mjs <video> <slug-porté> <slug-voulu> <faceWidthMm>`.
 > Une simple photo suffit aussi : `node scripts/still-to-video.mjs <photo> essai.webm 2`.
 
+### 🔴 Le porteur de lunettes — un trou relevé par l'humain, pas par les tests
+
+> « pourquoi tu fais toujours un test avec une photo d'un gars qui porte déjà des
+> lunettes, en lui rajoutant une lunette sur le visage »
+
+La remarque portait sur les images de vérification, mais elle désignait un vrai
+défaut de la V1. La ligne où l'on cherche le bord de la tête passe **à hauteur des
+coins externes des yeux** — c'est-à-dire exactement là où passent les **branches**
+d'une monture déjà portée. Rien ne le détectait : on aurait mesuré la monture du
+client et on lui aurait annoncé sa tête, au millimètre.
+
+Trois erreurs se cumulaient d'ailleurs chez un porteur qui garde ses lunettes :
+
+| Ce qui casse | Ampleur |
+|---|---|
+| Le bord de tête trouvé est le bord de la monture | quelques mm par côté, **dans le sens qui élargit** |
+| L'iris du contrôle de cohérence est minifié ou grossi par les verres | ~10 %, soit 2 à 3 fois le plancher biologique (§4, S2) |
+| L'essayage lui-même est illisible : monture réelle sous monture virtuelle | rédhibitoire |
+
+**Le correctif est une mesure, pas une supposition.** On mesure la largeur de la
+tête à **deux hauteurs** : à hauteur des yeux, et 14 mm plus haut, sur la tempe nue.
+En descendant du front vers la pommette une tête se rétrécit ou reste égale — elle
+ne s'élargit pas. Un élargissement franc à hauteur des yeux ne peut donc pas venir
+de l'anatomie : quelque chose dépasse. Au-delà de 4 mm, la mesure est **refusée**
+avec « retirez-les — sinon je mesurerais votre monture, pas votre visage ».
+
+> ⚠️ Le test est volontairement **à sens unique**. Des cheveux sur la ligne haute
+> l'élargiraient, ce qui rapproche l'écart de zéro : le contrôle se tait alors au
+> lieu de crier à tort. Il rate des cas, il n'en invente pas. Une contre-épreuve
+> vérifie qu'un visage nu passe toujours — sans elle, un refus systématique
+> satisferait le premier test.
+
+Et la consigne « **Retirez vos lunettes** » est désormais la première ligne de
+l'écran de calibration, avant même la carte.
+
 ### Deux défauts trouvés en route, tous deux invisibles là où on regardait
 
 | Défaut | Pourquoi il ne se voyait pas | Correctif |
@@ -395,7 +430,7 @@ verres, la peau n'est pas touchée.
 | `putImageData` **remplace** les pixels au lieu de les composer : le recoloriage découpait un rectangle noir autour de la monture | dans l'application, le canvas est transparent au-dessus du `<video>` — le trou tombait sur du vide. **Le mode d'échec exact de `destination-out`, une deuxième fois** | composition par `drawImage` sur un calque isolé |
 | La règle des 300 lignes du §3 n'était vérifiée par **rien** | sept fichiers l'avaient franchie ou l'approchaient sans que rien ne le signale | barrage `i` du hook + test `guards.test.ts` |
 
-**Contrôles :** 101 tests Vitest · `tsc --noEmit` en `strict` · `npm run build` · `npm run smoke`
+**Contrôles :** 103 tests Vitest · `tsc --noEmit` en `strict` · `npm run build` · `npm run smoke`
 21 contrôles verts, dont la preuve métrologique du rendu inchangée à 131,82 mm pour 132,00 attendus.
 
 ## Journal

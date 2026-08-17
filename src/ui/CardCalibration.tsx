@@ -24,6 +24,25 @@ export function CardCalibration(props: CardCalibrationProps): JSX.Element {
   return (
     <section>
       <h2>Mesure avec une carte bancaire</h2>
+
+      {/*
+        ⚠️ Première consigne, avant toute autre. Un client qui garde ses lunettes
+        casse la mesure de TROIS façons à la fois : ses branches passent
+        exactement sur la ligne où l'on cherche le bord de sa tête, ses verres
+        modifient de 10 % la taille apparente de son iris (§4, correctif S2), et
+        l'essayage lui-même devient illisible avec une monture réelle sous la
+        monture virtuelle. Le code sait détecter le premier cas et le refuse —
+        mais il vaut mieux l'éviter que le rattraper.
+      */}
+      <p style={{ fontWeight: 700 }}>
+        Retirez vos lunettes, si vous en portez.
+        <span style={{ fontWeight: 400, opacity: 0.75 }}>
+          {' '}
+          Leurs branches passent à l’endroit exact où votre tête est mesurée : je mesurerais votre
+          monture au lieu de votre visage.
+        </span>
+      </p>
+
       <p>
         Posez une carte bancaire <strong>à plat sur votre front</strong>, bord horizontal, et
         regardez droit devant vous. Amenez les deux poignées sur les bords de la carte.
