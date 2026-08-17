@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Atelier — chaîne V1 sur une vraie vidéo</title>
+    <style>body{font-family:system-ui,sans-serif;margin:24px;background:#111;color:#eee}video{display:none}canvas{max-width:100%}</style>
+  </head>
+  <body>
+    <h1>Chaîne V1 sur une vraie vidéo</h1>
+    <p>Outil d'atelier (CLAUDE.md §0.0.2). Ne fait pas partie de l'application.</p>
+    <div id="etat">prêt</div>
+    <script type="module">
+      import '/tests/v1-on-video.ts';
+      document.getElementById('etat').textContent = 'module chargé';
+    </script>
+  </body>
+</html>

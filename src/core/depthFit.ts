@@ -87,6 +87,59 @@ function solve2x2(
   };
 }
 
+interface Row {
+  u: number;
+  w: number;
+  g: number;
+}
+
+/**
+ * Dispersion des deux coefficients quand on retire une vue à la fois.
+ *
+ * Le jackknife ne suppose rien sur la loi des erreurs — il mesure la sensibilité
+ * réelle de l'ajustement à ses propres données. C'est ce qu'il fallait : sur la
+ * première vraie vidéo, une seule vue de différence faisait tripler la
+ * profondeur, et aucune formule de résidus ne le voyait venir.
+ */
+function jackknife(rows: readonly Row[], halfWidthMm: number): { depthSd: number; leverSd: number } {
+  const depths: number[] = [];
+  const levers: number[] = [];
+
+  for (let skip = 0; skip < rows.length; skip++) {
+    let suu = 0;
+    let suv = 0;
+    let svv = 0;
+    let sug = 0;
+    let svg = 0;
+    for (let i = 0; i < rows.length; i++) {
+      if (i === skip) continue;
+      const r = rows[i];
+      if (r === undefined) continue;
+      suu += r.u * r.u;
+      suv += r.u * r.w;
+      svv += r.w * r.w;
+      sug += r.u * r.g;
+      svg += r.w * r.g;
+    }
+    const s = solve2x2(suu, suv, svv, sug, svg);
+    if (s === null) continue;
+    depths.push(Math.abs(s.a));
+    levers.push(Math.abs(s.b));
+  }
+
+  const sd = (xs: readonly number[]): number => {
+    if (xs.length < 2) return Infinity;
+    const m = xs.reduce((a, b) => a + b, 0) / xs.length;
+    const v = xs.reduce((a, b) => a + (b - m) ** 2, 0) / (xs.length - 1);
+    // Facteur du jackknife : la dispersion des « leave-one-out » sous-estime
+    // celle de l'estimateur d'un facteur √(n−1).
+    return Math.sqrt(v * (xs.length - 1));
+  };
+
+  void halfWidthMm;
+  return { depthSd: sd(depths), leverSd: sd(levers) };
+}
+
 /**
  * Ajuste `g(θ) = A·sinθ + B·sinθ·cosθ` sur toutes les vues, puis en tire
  * la profondeur et la distance.
@@ -129,7 +182,7 @@ export function fitDepthAndDistance(
   let sug = 0;
   let svg = 0;
 
-  const rows: Array<{ u: number; w: number; g: number }> = [];
+  const rows: Row[] = [];
   for (const v of usable) {
     const s = Math.sin(v.yawRad);
     const u = s;
@@ -168,19 +221,22 @@ export function fitDepthAndDistance(
   const lever = half * half + depthMm * depthMm;
   const distanceMm = Math.abs(sol.b) > 0 ? lever / Math.abs(sol.b) : Infinity;
 
-  // Incertitudes issues des RÉSIDUS de la régression elle-même, jamais d'une
-  // valeur de catalogue : c'est ce qui permet à l'aval de savoir combien peser
-  // cette mesure, et de la reléguer d'office quand la rotation s'est mal passée.
-  const dof = Math.max(1, rows.length - 2);
-  let rss = 0;
-  for (const r of rows) rss += (r.g - (sol.a * r.u + sol.b * r.w)) ** 2;
-  const sigma2 = rss / dof;
-  const det = suu * svv - suv * suv;
-  const depthRelError = Math.min(1, Math.sqrt((sigma2 * svv) / det) / Math.max(depthMm, 1e-6));
-  const distanceRelError = Math.min(
-    1,
-    Math.sqrt((sigma2 * suu) / det) / Math.max(Math.abs(sol.b), 1e-9),
-  );
+  // 🔴 Incertitude par JACKKNIFE, et non par les résidus.
+  //
+  // La formule des résidus suppose des erreurs indépendantes d'une vue à
+  // l'autre. Sur une vraie vidéo elles ne le sont pas du tout : le détecteur se
+  // trompe de la même façon sur toutes les images d'une même phase de rotation,
+  // le flou de bougé est corrélé, le roll dérive lentement. Résultat mesuré sur
+  // la première vraie prise : les résidus annonçaient une profondeur sûre, et
+  // la valeur passait de 15 mm à 44 mm selon l'image frontale retenue.
+  //
+  // On refait donc l'ajustement en retirant chaque vue à tour de rôle, et on
+  // prend la DISPERSION des résultats. C'est plus lent — une trentaine de
+  // systèmes 2×2 — et c'est la seule mesure d'incertitude que la première
+  // confrontation au réel n'a pas démentie.
+  const jack = jackknife(rows, half);
+  const depthRelError = Math.min(1, jack.depthSd / Math.max(depthMm, 1e-6));
+  const distanceRelError = Math.min(1, jack.leverSd / Math.max(Math.abs(sol.b), 1e-9));
 
   if (depthMm < DEPTH_MIN_MM || depthMm > DEPTH_MAX_MM) {
     throw new CalibrationError(
@@ -188,18 +244,22 @@ export function fitDepthAndDistance(
         `(${DEPTH_MIN_MM}–${DEPTH_MAX_MM} mm). Le visage a probablement été perdu en route.`,
     );
   }
-  if (distanceMm < DISTANCE_MIN_MM || distanceMm > DISTANCE_MAX_MM) {
-    throw new CalibrationError(
-      `Distance mesurée : ${(distanceMm / 10).toFixed(0)} cm, hors de tout plausible. ` +
-        `Refaites la rotation en gardant la tête dans le cadre.`,
-    );
-  }
+  // ⚠️ Une distance hors plage n'est PAS une panne : c'est le cas NOMINAL sur
+  // une vraie vidéo. Le banc l'avait annoncé — ±300 mm d'écart-type sur 700
+  // dès 0,5 px de bruit — et la première vraie prise l'a confirmé en rendant
+  // 4 cm. La profondeur, elle, reste bonne.
+  //
+  // On ne jette donc pas la mesure : on marque la distance comme inutilisable
+  // (`relError = 1`), et la fusion en aval lui donnera un poids nul. Lever ici
+  // faisait perdre AUSSI la profondeur, et la correction de parallaxe avec elle.
+  const distanceUsable =
+    Number.isFinite(distanceMm) && distanceMm >= DISTANCE_MIN_MM && distanceMm <= DISTANCE_MAX_MM;
 
   return {
     depthMm,
     depthRelError,
-    distanceMm,
-    distanceRelError,
+    distanceMm: distanceUsable ? distanceMm : NaN,
+    distanceRelError: distanceUsable ? distanceRelError : 1,
     views: usable.length,
     yawSpreadRad,
   };

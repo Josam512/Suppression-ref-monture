@@ -192,23 +192,28 @@ export function findHeadEdge(s: EdgeSearch): EdgeResult {
     return { x: stop, confident: false, reason: 'aucun bord de tête net sur cette ligne' };
   }
 
-  // — Confirmation par le mouvement : ce bord a-t-il bougé avec la tête ?
+  // — Confirmation par le mouvement : CE bord a-t-il bougé avec la tête ?
+  //
+  // ⚠️ La question n'est pas « ce bord est-il le pixel mobile le plus
+  // extérieur ». Une première version le demandait, et elle refusait toute
+  // vraie prise de vue : pendant une rotation à main levée, la tête TRANSLATE
+  // aussi, si bien que la zone balayée déborde largement la silhouette d'une
+  // image donnée. Le masque est alors bien plus large que la tête, sans que
+  // rien ne soit faux.
+  //
+  // Ce qu'on veut savoir est plus modeste et plus juste : ce bord appartient-il
+  // à quelque chose qui a bougé ? Un montant de porte, lui, n'aura pas bougé.
   if (s.motion !== null) {
-    let motionEdge: number | null = null;
-    for (let x = border; dir > 0 ? x >= stop : x <= stop; x -= dir) {
-      if (s.motion[y * buf.width + x] === 1) {
-        motionEdge = x;
-        break;
-      }
+    let moved = false;
+    for (let k = -MOTION_AGREEMENT_PX; k <= MOTION_AGREEMENT_PX && !moved; k++) {
+      const x = edge + k;
+      if (x >= 0 && x < buf.width && s.motion[y * buf.width + x] === 1) moved = true;
     }
-    if (motionEdge === null) {
-      return { x: edge, confident: false, reason: 'rien n’a bougé de ce côté pendant la rotation' };
-    }
-    if (Math.abs(motionEdge - edge) > MOTION_AGREEMENT_PX) {
+    if (!moved) {
       return {
         x: edge,
         confident: false,
-        reason: 'le bord trouvé n’est pas celui qui a bougé — objet ou ombre dans le champ',
+        reason: 'ce bord n’a pas bougé pendant la rotation — objet ou ombre, pas votre tête',
       };
     }
   }
