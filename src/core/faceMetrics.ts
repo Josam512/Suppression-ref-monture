@@ -53,6 +53,21 @@ export function faceWidthPx(lm: readonly NormalizedLandmark[], w: number, h: num
   return dist(px(at(lm, FACE_L), w, h), px(at(lm, FACE_R), w, h));
 }
 
+/**
+ * Inclinaison de la tête seule, sans calibration.
+ *
+ * Exportée parce que la COLLECTE des vues tournées (§4, parade B4 n°2) doit
+ * juger de l'inclinaison avant qu'aucune échelle n'existe. Fabriquer une
+ * calibration bidon juste pour appeler `frameMetrics` mettrait dans le code un
+ * objet qui ressemble à une mesure sans en être une — exactement ce que ce
+ * projet cherche à éviter.
+ */
+export function rollRadOf(lm: readonly NormalizedLandmark[], w: number, h: number): number {
+  const eL = px(at(lm, EYE_L), w, h);
+  const eR = px(at(lm, EYE_R), w, h);
+  return Math.atan2(eR.y - eL.y, eR.x - eL.x);
+}
+
 export function frameMetrics(
   lm: readonly NormalizedLandmark[],
   w: number,
@@ -81,12 +96,9 @@ export function frameMetrics(
   // Cette échelle est ISOTROPE : elle vaut pour les X comme pour les Y.
   const livePxPerMm = faceWidthPxFrontal / cal.faceWidthMm;
 
-  const eL = px(at(lm, EYE_L), w, h);
-  const eR = px(at(lm, EYE_R), w, h);
-
   return {
     livePxPerMm,
-    rollRad: Math.atan2(eR.y - eL.y, eR.x - eL.x),
+    rollRad: rollRadOf(lm, w, h),
     yawRad,
     anchor: px(at(lm, SELLION), w, h),
   };

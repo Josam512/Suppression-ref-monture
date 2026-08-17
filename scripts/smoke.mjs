@@ -123,7 +123,15 @@ try {
   });
   check('détection perdue → la boucle affiche quand même l’échec (§1 bug #3)', painted);
 
-  check('V1 annonce clairement sa version', (await page.locator('body').innerText()).includes('V1 — Vente en ligne'));
+  const texteV1 = await page.locator('body').innerText();
+  check('V1 annonce clairement sa version', texteV1.includes('V1 — Vente en ligne'));
+
+  // ⭐ Arbitrage humain 2026-08-17 : la carte est OBLIGATOIRE au démarrage.
+  // L'ancienne question sur les lunettes ouvrait la voie iris ; elle n'existe plus.
+  check(
+    'V1 : la carte est demandée d’emblée, sans passer par l’iris',
+    /carte bancaire/i.test(texteV1) && !/Portez-vous des lunettes/i.test(texteV1),
+  );
 
   // La V2 doit s'ouvrir aussi, et annoncer sa dilatation de sprite.
   const store = await ctx.newPage();

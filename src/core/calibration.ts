@@ -9,15 +9,52 @@
 import { at, CalibrationError, dist, px, type NormalizedLandmark } from './geom.js';
 import { FACE_L, FACE_R } from './faceMetrics.js';
 import type { FrameSpec } from './frameSpec.js';
+import { refineCard, type Refinement, type TemporalScene } from './cardRefinement.js';
+import { CARD_WIDTH_MM, estimateDistanceMm } from './cardOptics.js';
+import type { RotatedView } from './parallax.js';
+
+/**
+ * Ré-exports de commodité : la carte et sa distance vivent dans
+ * `core/cardOptics.ts` (optique pure), mais tout l'aval les importe depuis ici.
+ */
+export {
+  ASSUMED_HFOV_DEG,
+  CARD_MIN_DISTANCE_MM,
+  CARD_WIDTH_MM,
+  estimateDistanceMm,
+  isTooCloseForCard,
+} from './cardOptics.js';
 
 export type CalSource = 'iris' | 'card' | 'worn-frame';
 
 export interface UserCalibration {
+  /**
+   * Largeur RÉELLE du segment 234↔454, en mm. C'est elle, et elle seule, qui
+   * pilote l'échelle de rendu dans `frameMetrics` : elle doit rester la
+   * grandeur homologue de `faceWidthPx`, jamais l'écart temporal.
+   */
   faceWidthMm: number;
   source: CalSource;
   /** iris 0.043 | carte 0.025 (B4) | monture portée 0.02 (T8) */
   relError: number;
   measuredAt: number;
+
+  /**
+   * ⭐ Écart temporal MESURÉ sur ce client — la largeur de sa tête à hauteur
+   * des yeux, là où passe la face d'une monture (`core/temporalWidth.ts`).
+   *
+   * ⚠️ Champ AJOUTÉ au contrat sur arbitrage humain du 2026-08-17 : « pour la
+   * v1 on dira carte obligatoire une fois au début et tu te débrouilles pour la
+   * mesure de l'écart temporal ». Il supplante `FACE_WIDTH_CORRECTION_MM`, qui
+   * demandait à une constante unique de représenter un écart de ~20 mm variant
+   * d'au moins ±4 mm d'un visage à l'autre.
+   *
+   * Absent quand la mesure n'a pas abouti : dans ce cas, et dans ce cas
+   * seulement, la constante reprend la main.
+   */
+  temporalWidthMm?: number;
+  /** Incertitude relative propre à l'écart temporal. Absente avec lui. */
+  temporalRelError?: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -111,8 +148,6 @@ export function calibrateWithIris(
 // Niveau 2 — la carte bancaire (déclenchée en zone grise)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const CARD_WIDTH_MM = 85.6; // norme ISO/IEC 7810 ID-1
-
 /**
  * ⚠️ Correctif B4 — 2,5 %, PAS 1,5 %.
  *
@@ -125,29 +160,6 @@ export const CARD_WIDTH_MM = 85.6; // norme ISO/IEC 7810 ID-1
  * pas une précision qu'on n'a pas vérifiée.
  */
 export const CARD_REL_ERROR = 0.025;
-
-export const CARD_MIN_DISTANCE_MM = 600; // en deçà, la parallaxe devient dominante
-
-/**
- * Champ de vision horizontal supposé d'une webcam grand public.
- *
- * ⚠️ N'entre PAS dans la chaîne de mesure. Sert uniquement à afficher
- * « reculez un peu » : une estimation grossière suffit pour cela, et une
- * erreur de 20 % sur cette valeur ne fausse aucune mesure en millimètres.
- */
-const ASSUMED_HFOV_DEG = 60;
-
-/** Distance caméra→carte, approximative, à usage d'IHM seulement (parade B4 n°1). */
-export function estimateDistanceMm(cardWidthPx: number, imageWidthPx: number): number {
-  if (cardWidthPx <= 0) return Infinity;
-  const focalPx = imageWidthPx / 2 / Math.tan((ASSUMED_HFOV_DEG / 2) * (Math.PI / 180));
-  return (focalPx * CARD_WIDTH_MM) / cardWidthPx;
-}
-
-/** Vrai si le client est trop près pour que la parallaxe reste tolérable. */
-export function isTooCloseForCard(cardWidthPx: number, imageWidthPx: number): boolean {
-  return estimateDistanceMm(cardWidthPx, imageWidthPx) < CARD_MIN_DISTANCE_MM;
-}
 
 /**
  * La carte ne sert PAS à mesurer la carte : elle sert à mesurer le VISAGE.
@@ -165,6 +177,86 @@ export function calibrateWithCard(
 
   assertPlausibleFaceWidth(faceWidthMm, 'card');
   return { faceWidthMm, source: 'card', relError: CARD_REL_ERROR, measuredAt: Date.now() };
+}
+
+/**
+ * Incertitude de pointage des DEUX bords de la carte sur l'image figée.
+ *
+ * Deux poignées posées à ~3 px près sur une carte qui en fait 300 : c'est le
+ * seul terme irréductible de la calibration carte, une fois la parallaxe
+ * mesurée. Le reste — les 2,5 % annoncés jusqu'ici — était du biais, pas du
+ * bruit, et un biais ne se moyenne pas.
+ */
+export const CARD_CLICK_REL_ERROR = 0.01;
+
+/** Tout ce que la mesure a produit, au-delà de la calibration elle-même. */
+export interface MeasuredCardCalibration {
+  cal: UserCalibration;
+  refinement: Refinement;
+}
+
+/**
+ * ⭐ V1 — la carte, une seule fois, complétée par la rotation de tête.
+ *
+ * Cette fonction est ADDITIVE : `calibrateWithCard` reste inchangée et reste le
+ * chemin nominal du §4. Celle-ci fait trois choses de plus, toutes mesurées :
+ *
+ *   1. elle corrige le biais de parallaxe B4 au lieu de le supposer nul ;
+ *   2. elle mesure l'écart temporal du client au lieu d'appliquer une constante ;
+ *   3. elle recalcule `relError` à partir de ce qui a réellement été mesuré,
+ *      au lieu de réciter une valeur de catalogue.
+ *
+ * Aucune de ces trois étapes n'est obligatoire : chacune peut échouer, et la
+ * calibration reste alors exactement celle du §4, ni meilleure ni pire, mais
+ * annoncée pour ce qu'elle est.
+ */
+export function calibrateWithCardMeasured(
+  cardWidthPx: number,
+  imageWidthPx: number,
+  lm: readonly NormalizedLandmark[],
+  w: number,
+  h: number,
+  views: readonly [RotatedView, RotatedView] | null,
+  scene: TemporalScene | null,
+): MeasuredCardCalibration {
+  const naive = calibrateWithCard(cardWidthPx, lm, w, h);
+
+  const refinement = refineCard({
+    pxPerMmCard: cardWidthPx / CARD_WIDTH_MM,
+    distanceMm: estimateDistanceMm(cardWidthPx, imageWidthPx),
+    naiveFaceWidthMm: naive.faceWidthMm,
+    clickRelError: CARD_CLICK_REL_ERROR,
+    views,
+    scene,
+  });
+
+  const faceWidthMm = naive.faceWidthMm * refinement.parallaxFactor;
+  assertPlausibleFaceWidth(faceWidthMm, 'card');
+
+  const cal: UserCalibration = {
+    faceWidthMm,
+    source: 'card',
+    relError: refinement.scaleRelError,
+    measuredAt: Date.now(),
+  };
+
+  // L'écart temporal est une largeur de visage : il passe le même détecteur de
+  // panne que les autres. S'il le rate, on ne le publie pas — on ne le corrige
+  // surtout pas pour qu'il rentre.
+  const temporal = refinement.temporal;
+  if (temporal !== null && temporal.measured) {
+    try {
+      assertPlausibleFaceWidth(temporal.widthMm, 'card');
+      cal.temporalWidthMm = temporal.widthMm;
+      cal.temporalRelError = temporal.relError;
+    } catch (err) {
+      refinement.notes.push(
+        `Écart temporal écarté : ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  return { cal, refinement };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
