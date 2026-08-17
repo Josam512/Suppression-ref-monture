@@ -506,6 +506,69 @@ dans la mesure. La carte ISO 7810 a **0,1 %** d'incertitude normative contre
 supprimant les biais autour d'un étalon déjà parfait — c'est ce que fait la
 mesure de parallaxe — pas en cherchant un meilleur étalon biologique.
 
+## 🔴 Première vraie vidéo d'un vrai sujet — 2026-08-17
+
+Un sujet sans lunettes, carte à plat sur le front, rotation de tête. 11,4 s,
+720×1280, filmée **au téléphone tenu à la main**. Codec HEVC : Chromium ne le
+décode pas, transcodage en VP9 par un ffmpeg embarqué (`imageio-ffmpeg`).
+
+**Ce que la vidéo contient**, relevé par `scripts/v1-on-video.mjs` :
+
+| | |
+|---|---|
+| visage détecté | **148 images sur 172 (86 %)** |
+| yaw balayé | −69° à +62° |
+| roll médian | 4,5° |
+| carte, contrôle de forme | rapport 1,570 pour 1,586 attendu → **−1,0 %**, carte quasi parallèle |
+| largeur des repères 234↔454 | **129,6 mm** |
+
+**Et les deux mesures qui ont REFUSÉ de conclure :**
+
+| Mesure | Résultat | Cause nommée |
+|---|---|---|
+| Parallaxe (profondeur front↔tempes) | **refusée** | instable à ±100 % |
+| Écart temporal | **refusée** | débord de 83 mm : cheveux et fond chargé |
+
+### Ce que ces refus valent
+
+C'est le comportement pour lequel tout le projet est bâti : **rien n'a produit
+un chiffre faux d'allure normale.** Chaque maillon incertain s'est arrêté en
+nommant sa cause. Première confrontation au réel, aucune valeur inventée.
+
+### 🔴 Le défaut que seule la vraie vidéo pouvait révéler
+
+La profondeur sortait à **14,6 mm sur une image frontale et 43,8 mm sur une
+autre — même vidéo, mêmes vues, une seule vue d'écart dans le filtre**. Or
+l'incertitude calculée sur les **résidus** de la régression, elle, annonçait une
+mesure sûre.
+
+La formule des résidus suppose des erreurs indépendantes d'une vue à l'autre.
+Sur une vraie vidéo elles ne le sont pas du tout : le détecteur se trompe de la
+même façon sur toutes les images d'une même phase de rotation, le flou de bougé
+est corrélé, le roll dérive lentement. L'incertitude est donc calculée par
+**jackknife** — on refait l'ajustement en retirant chaque vue à tour de rôle et
+on prend la dispersion. Elle annonce ±100 %, ce qui est la vérité.
+
+Et une correction de parallaxe appliquée avec ±100 % d'incertitude **ajoute
+autant d'erreur qu'elle en retire, sous couvert de correction**. Au-delà de
+50 %, la correction est donc refusée : `MAX_DEPTH_REL_ERROR`.
+
+### Pourquoi cette prise-là ne pouvait pas marcher — et ce que ça dit du produit
+
+1. **Caméra tenue à la main.** Elle casse les deux mesures à la fois : le « yaw »
+   mesuré mélange rotation de tête et mouvement de caméra, et le masque de
+   mouvement devient inutile puisque le fond bouge aussi. ⚠️ **Ce n'est PAS le
+   cas nominal du produit** : la V1 tourne sur une webcam d'ordinateur, fixe par
+   construction. Le téléphone à la main est le pire cas, pas le cas d'usage.
+2. **Fond chargé à hauteur des yeux** : fenêtre, chevalet, stores. Le bord
+   tête/fond n'y est pas trouvable.
+3. **Tête au bord du cadre** sur la première image frontale : 26 px de marge à
+   droite. Le contrôle « cadrage trop serré » l'a vu et refusé.
+
+**Ce qu'il faut pour la prochaine prise :** appareil **posé**, mur uni derrière,
+tête **centrée** avec de la marge des deux côtés, cheveux dégagés des tempes,
+puis rotation lente. Trente secondes, et les trois mesures deviennent testables.
+
 ### Deux défauts trouvés en route, tous deux invisibles là où on regardait
 
 | Défaut | Pourquoi il ne se voyait pas | Correctif |

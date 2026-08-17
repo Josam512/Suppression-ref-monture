@@ -84,11 +84,22 @@ export interface Refinement {
  */
 export const UNMEASURED_PARALLAX_REL_ERROR = 0.025;
 
+/**
+ * Au-delà, la profondeur mesurée est trop instable pour servir.
+ *
+ * ⚠️ Seuil posé APRÈS la première confrontation au réel, pas avant. Une
+ * correction de parallaxe vaut ~4 % ; l'appliquer avec 50 % d'incertitude
+ * laisse un résidu de 2 %, soit le biais qu'on prétendait supprimer. Au-delà,
+ * la correction ne corrige plus rien — elle déplace l'erreur.
+ */
+export const MAX_DEPTH_REL_ERROR = 0.5;
+
 /** Combinaison par pondération inverse des variances. */
 function fuse(
   a: { value: number; rel: number },
   b: { value: number; rel: number },
 ): { value: number; rel: number } {
+  if (!Number.isFinite(a.value) || a.rel >= 1) return b;
   const wa = 1 / (a.value * a.rel) ** 2;
   const wb = 1 / (b.value * b.rel) ** 2;
   if (!Number.isFinite(wa) || wa <= 0) return b;
@@ -121,6 +132,27 @@ function measureParallax(input: RefinementInput): Parallax {
   }
 
   const fit = fitDepthAndDistance(input.views, input.naiveFaceWidthMm);
+
+  // 🔴 Une profondeur mesurée mais INSTABLE ne vaut pas mieux que pas de mesure.
+  //
+  // Corriger de δ avec une incertitude relative de 100 % sur δ ajoute autant
+  // d'erreur qu'on en retire — et l'ajoute sous couvert d'une correction, donc
+  // sans que rien ne le signale. La première vraie vidéo est tombée exactement
+  // là : le jackknife annonçait ±100 % sur la profondeur, et la valeur passait
+  // de 15 à 44 mm selon l'image frontale retenue.
+  if (fit.depthRelError > MAX_DEPTH_REL_ERROR) {
+    return {
+      factor: 1,
+      depthMm: null,
+      distanceMm: prior.value,
+      scaleRelError: UNMEASURED_PARALLAX_REL_ERROR,
+      note:
+        `Rotation exploitée sur ${fit.views} vues, mais la profondeur en ressort instable ` +
+        `(±${(fit.depthRelError * 100).toFixed(0)} %) : je ne corrige pas la parallaxe plutôt que ` +
+        `de la corriger au hasard. Refaites la rotation plus lentement, tête bien droite, ` +
+        `caméra posée et immobile.`,
+    };
+  }
 
   // 🔴 La distance EST mesurée — mais elle est portée par un effet perspectif du
   // second ordre, et le bruit des repères la dégrade massivement. Au banc,
