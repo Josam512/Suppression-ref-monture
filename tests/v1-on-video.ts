@@ -22,6 +22,9 @@ import { rollRadOf } from '../src/core/faceMetrics.js';
 import type { NormalizedLandmark } from '../src/core/geom.js';
 import { type RotatedView } from '../src/core/parallax.js';
 import { motionMask, type ImageBuffer } from '../src/core/silhouette.js';
+import { refineQuad } from '../src/core/cardEdges.js';
+import { cameraFromSweep, measureDistance, type SweepCamera } from '../src/core/cardSweep.js';
+import type { CardQuad } from '../src/core/cardPose.js';
 import { createLandmarker, yawFromMatrix } from '../src/tracking/landmarker.js';
 
 const STEP_S = 1 / 15;
@@ -317,11 +320,33 @@ export async function runV1(
   videoUrl: string,
   cardPx: { x1: number; y1: number; x2: number; y2: number },
   frontalT: number,
+  /** Les quatre coins, si l'humain les a pointés. À défaut, déduits des deux bords. */
+  corners?: CardQuad,
 ): Promise<V1Result> {
   const l = await load(videoUrl);
   const frontal = l.frames.reduce((a, b) => (Math.abs(b.t - frontalT) < Math.abs(a.t - frontalT) ? b : a));
 
   const cardWidthPx = Math.hypot(cardPx.x2 - cardPx.x1, cardPx.y2 - cardPx.y1);
+
+  // À défaut de quatre coins pointés, on part du rectangle que les deux bords
+  // impliquent, aux proportions ISO — et l'accrochage sur les bords fait le
+  // reste. C'est exactement le « un doigt sur un coin » : le cadre de départ n'a
+  // pas besoin d'être juste, il a besoin d'être proche.
+  const cardQuad: CardQuad =
+    corners ??
+    (() => {
+      const ux = (cardPx.x2 - cardPx.x1) / cardWidthPx;
+      const uy = (cardPx.y2 - cardPx.y1) / cardWidthPx;
+      const hh = (cardWidthPx * 53.98) / 85.6 / 2;
+      const nx = -uy * hh;
+      const ny = ux * hh;
+      return [
+        { x: cardPx.x1 - nx, y: cardPx.y1 - ny },
+        { x: cardPx.x2 - nx, y: cardPx.y2 - ny },
+        { x: cardPx.x2 + nx, y: cardPx.y2 + ny },
+        { x: cardPx.x1 + nx, y: cardPx.y1 + ny },
+      ] as CardQuad;
+    })();
 
   // Le balayage : toutes les vues exploitables, dans l'ordre du temps.
   const views: RotatedView[] = l.frames.map((f) => ({
@@ -331,6 +356,40 @@ export async function runV1(
     w: l.w,
     h: l.h,
   }));
+
+  // ⭐ La carte suivie pendant TOUT le balayage : un cadre pointé, les autres
+  // accrochés sur les bords d'une image à la suivante (`core/cardEdges.ts`).
+  let sweep: SweepCamera | null = null;
+  let measured: { cardDistanceMm: number; relError: number } | null = null;
+  try {
+    const quads: CardQuad[] = [];
+    let seed: CardQuad | null = refineQuad(await buffer(l, frontal.t), cardQuad);
+    let frontalQuad: CardQuad = seed;
+
+    for (const f of l.frames) {
+      if (seed === null) break;
+      try {
+        const q = refineQuad(await buffer(l, f.t), seed, 25); // la tête bouge entre deux images
+        quads.push(q);
+        seed = q; // suivi : l'image précédente amorce la suivante
+        if (Math.abs(f.t - frontal.t) < 1e-6) frontalQuad = q;
+      } catch {
+        // Carte perdue sur cette image : on garde la graine et on continue.
+      }
+    }
+
+    sweep = cameraFromSweep(quads, l.w, l.h);
+    const d = measureDistance(frontalQuad, sweep, l.w, l.h);
+    measured = { cardDistanceMm: d.cardDistanceMm, relError: d.relError };
+    console.log(
+      `   CARTE — ${quads.length} cadres suivis sur ${l.frames.length} images, ` +
+        `${sweep.views} exploitables → focale ${sweep.focalPx.toFixed(0)} px ` +
+        `(${(sweep.focalPx / l.w).toFixed(2)} × la largeur d'image, ±${(sweep.focalRelError * 100).toFixed(1)} %) ` +
+        `→ distance MESURÉE ${(d.cardDistanceMm / 10).toFixed(1)} cm`,
+    );
+  } catch (e) {
+    console.log(`   CARTE — distance non mesurée : ${(e as Error).message}`);
+  }
 
   const audit = auditYaw(l.frames, l.w, l.h);
   console.log(
@@ -353,6 +412,7 @@ export async function runV1(
     l.h,
     views,
     { frontal: frontalBuf, motion, lm: frontal.lm, w: l.w, h: l.h },
+    measured,
   );
 
   const naive = (cardWidthPx: number): number => cardWidthPx;
@@ -379,6 +439,7 @@ declare global {
       url: string,
       card: { x1: number; y1: number; x2: number; y2: number },
       frontalT: number,
+      corners?: CardQuad,
     ) => Promise<V1Result>;
   }
 }

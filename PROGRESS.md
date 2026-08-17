@@ -774,13 +774,47 @@ ne touchera jamais. Cinquante vues ramènent la distance à **±4 %**, soit quat
 que la constante. La rotation cesse d'être un moyen de mesurer une profondeur : elle
 devient la source de la calibration caméra.
 
-### Ce qui reste à faire pour que ça entre dans la chaîne
+### La chaîne est branchée — et voici où elle bute sur le réel
 
-1. **Suivre les quatre coins de la carte pendant la rotation.** Le client en pointe un
-   seul cadre ; les 49 autres doivent être suivis automatiquement. C'est le vrai travail
-   restant, et il n'est pas fait.
-2. Remplacer `NOMINAL_DISTANCE_MM` (780 ± 17 %) par la distance mesurée, partout.
-3. Alors seulement, le dernier tronçon anatomique tombe.
+`core/cardEdges.ts` retrouve les coins tout seul, exactement comme demandé : « si le
+client met son doigt sur un coin, tu peux déduire où est l'autre ». Chaque côté est
+échantillonné, chaque point accroché sur le maximum de gradient le long de la normale,
+puis une droite est ajustée et les droites consécutives intersectées.
+
+Sur une image de synthèse aux coins connus au sous-pixel : **0,05 px d'erreur**, et un
+seul coin juste sur quatre suffit à récupérer les trois autres.
+
+**Deux défauts trouvés en route, tous deux invisibles sans vérité terrain :**
+
+| Défaut | Symptôme | Correctif |
+|---|---|---|
+| Convention de centre de pixel : le pixel `i` a sa valeur en `i + 0,5`, pas en `i` | les quatre coins ressortaient à **0,7 px** de la vérité, de façon parfaitement stable quelle que soit la qualité de l'image | un `−0,5` dans l'interpolation → **0,05 px**, quatorze fois mieux |
+| Rejet d'aberrants à la médiane | le pouce du sujet couvre plus de la moitié d'un bord : les aberrants sont **majoritaires**, la médiane bascule de leur côté, le coin sortait à 16 px | consensus RANSAC déterministe : la droite qui explique le PLUS de points, quel que soit leur nombre relatif |
+
+`NOMINAL_DISTANCE_MM` est branchée pour céder la place à la distance mesurée dès qu'elle
+existe — et le code ne demande jamais *pourquoi* elle manque, seulement si elle est là
+(§11.4).
+
+### Ce qui ne marche PAS sur cette vidéo-ci, et pourquoi
+
+La distance n'a **pas** pu être mesurée sur le balayage du sujet. La cause est nommable
+et se voit à l'œil : **il tient sa carte avec le pouce posé sur le bord court droit**, sur
+toute la durée. Ce bord n'existe pas dans l'image : l'accrochage suit le contour du pouce,
+qui est une droite plus longue et plus nette que le bord masqué. Le raffinage le détecte
+et **refuse** — 13 px d'écart au coin 1, limite 12 — au lieu de rendre un cadre faux.
+
+C'est le comportement voulu. Une distance fausse serait bien pire qu'une distance
+supposée, et rien ne l'aurait signalée.
+
+**Ce qu'il faut pour la débloquer, et ce n'est pas une contrainte de tournage :** une
+phrase à l'écran — « tenez la carte par le bord court, doigts hors du cadre ». Zéro coût
+pour le client. Alternative purement logicielle, à écrire : ajuster les quatre coins sous
+la contrainte que le quadrilatère reste un rectangle aux proportions ISO, ce qui rend le
+quatrième bord déductible des trois autres. Trois bords visibles suffisent alors.
+
+**En attendant, la chaîne rend exactement ce qu'elle rendait**, avec la distance supposée
+et sa marge honnête. Sur la vidéo du sujet : écart temporal **160 mm ± 2,9 mm** (1,8 %),
+parallaxe +6,8 % corrigée, profondeur 49,6 mm sur 37 vues.
 
 ### En attendant, un correctif partiel sur ce tronçon
 
@@ -790,13 +824,18 @@ chassé du seuil en le rendant proportionnel. Il est désormais une **proportion
 largeur du visage (7,9 %, calée sur le sujet réel). Ce n'est plus une hypothèse de taille ;
 c'est encore une hypothèse de forme, et elle est destinée à disparaître au point 3.
 
-**Contrôles :** 132 tests Vitest · `tsc --noEmit` en `strict`.
+**Contrôles :** 139 tests Vitest · `tsc --noEmit` en `strict` · banc navigateur vert.
 
 ## Journal
 
+- **2026-08-17** — `core/cardEdges.ts` + `core/cardSweep.ts` : les coins se retrouvent tout
+  seuls (0,05 px sur vérité terrain), la focale sort du balayage, la distance mesurée est
+  branchée dans la chaîne. Deux défauts trouvés : convention de demi-pixel, et rejet
+  d'aberrants inopérant quand les aberrants sont majoritaires. Sur la vidéo du sujet, le
+  pouce masque un bord court : le raffinage **refuse** au lieu de rendre un cadre faux.
 - **2026-08-17** — `core/cardPose.ts` : la carte devient une mire de calibration — focale et
   distance **mesurées**. Caractérisation du bruit : inutilisable sur une vue, ±4 % sur le
-  balayage. Le suivi des coins pendant la rotation reste à écrire.
+  balayage.
 - **2026-08-17** — Plans de rendu explicités (`core/framePlane.ts`) : la largeur reste au plan
   des tempes, le pont et le décentrement passent au plan du nez. Correction d'une conclusion
   erronée de ma part, qui aurait dessiné la monture 6 % trop large. Audit du yaw MediaPipe :

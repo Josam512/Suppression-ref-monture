@@ -140,6 +140,31 @@ export function homographyFromQuad(quad: CardQuad): Homography {
   return [...solveLinear(a, b), 1];
 }
 
+/**
+ * Distance caméra ↔ centre de la carte, la focale étant DÉJÀ connue.
+ *
+ * ⚠️ C'est la version qu'il faut utiliser en production. `cameraFromCard`
+ * réestime la focale sur chaque vue, ce qui est le calcul bruité (§tests :
+ * ±20 % sur une vue). Une fois la focale fixée par le balayage, la distance
+ * redevient une simple division — elle ne dépend plus que de la TAILLE
+ * apparente de la carte, du premier ordre, et non de sa perspective.
+ */
+export function cardDistanceWithFocal(quad: CardQuad, w: number, h: number, focalPx: number): number {
+  const centred = quad.map((p) => ({ x: p.x - w / 2, y: p.y - h / 2 })) as unknown as CardQuad;
+  const H = homographyFromQuad(centred);
+
+  const c1x = (H[0] ?? 0) / focalPx;
+  const c1y = (H[3] ?? 0) / focalPx;
+  const c1z = H[6] ?? 0;
+  const lambda = 1 / Math.hypot(c1x, c1y, c1z);
+
+  const d = lambda * (H[8] ?? 1);
+  if (!Number.isFinite(d) || d <= 0) {
+    throw new CalibrationError(`Distance de la carte incalculable : cadre invalide.`);
+  }
+  return d;
+}
+
 export interface CameraFromCard {
   /** Focale en pixels. MESURÉE, pas déduite d'un champ de vision supposé. */
   focalPx: number;

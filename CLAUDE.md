@@ -1779,7 +1779,7 @@ ordre : sur 85 mm vus à 78 cm, le raccourci d'un bord à l'autre fait un ou deu
 > constante que **moyennée sur le balayage** — et le bruit de pointage, lui, se moyenne,
 > contrairement au biais de parallaxe.
 
-**État d'exécution :** lots 0 à 7 implémentés, 120 tests au vert, typecheck `strict` clean, banc navigateur vert (23 contrôles), barrages du hook vérifiés en tentant de les contourner. **Lot 8 (calibration humaine) non fait — il ne peut pas l'être par un agent, mais la V1 n'en dépend plus tant que la mesure de l'écart temporal aboutit.**
+**État d'exécution :** lots 0 à 7 implémentés, 139 tests au vert, typecheck `strict` clean, banc navigateur vert (23 contrôles), barrages du hook vérifiés en tentant de les contourner. **Lot 8 (calibration humaine) non fait — il ne peut pas l'être par un agent, mais la V1 n'en dépend plus tant que la mesure de l'écart temporal aboutit.**
 
 **Arbitrages humains intégrés :** seuil proportionnel borné 3–5 mm (§5) · rotation de tête seulement en cas de doute (§4), **puis systématique en V1 (§14.2)** · contrat corrigé avant tout code · carte obligatoire en V1 (§14.1) · recoloriage 2,5 D en V2 (§14.3).
 
