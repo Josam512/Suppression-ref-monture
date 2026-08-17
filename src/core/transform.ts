@@ -14,28 +14,39 @@
 import { CalibrationError, type Pt } from './geom.js';
 import type { FrameSpec } from './frameSpec.js';
 import type { FrameMetrics } from './faceMetrics.js';
-import { BRIDGE_AHEAD_MM, planeScale } from './framePlane.js';
+
 
 /**
- * ⭐ T1 — décalage vertical du centre du pont SOUS le sellion, en mm réels.
+ * ⭐ `VERTICAL_OFFSET_MM` a été SUPPRIMÉE. Ce commentaire prend sa place pour
+ * que personne ne la réintroduise en croyant combler un trou.
  *
- * L'ancrage est le sellion (landmark 168, creux entre les yeux), mais une
- * monture ne se pose pas AU sellion : ses plaquettes portent légèrement plus
- * bas sur l'arête du nez.
+ * ## Pourquoi elle était incalibrable, et pas seulement non calibrée
  *
- * Compté en millimètres réels — jamais en pixels en dur, sinon la pose
- * changerait avec la distance à la caméra.
+ * Elle décalait le centre du PONT sous le sellion. Or ce n'est pas le pont que
+ * l'œil juge, ce sont les CENTRES OPTIQUES — et sur une monture réelle ils sont
+ * franchement plus bas que le pont : 10,4 mm sur la fiche `severine`, valeur
+ * lue dans son `spec.json`, et qui change d'une monture à l'autre. Ancrer le
+ * pont à 3 mm sous le sellion envoyait donc les centres optiques ~13 mm sous la
+ * ligne des yeux. C'est ce que montrent les photos de vérification : les
+ * pupilles se retrouvent tout en haut des verres.
  *
- * ⚠️ Converti à l'échelle du PLAN DU PONT, pas à celle des tempes : ces 3 mm
- * se mesurent sur l'arête du nez, ~48 mm devant les repères 234/454, où
- * l'échelle est 6 % plus grande (`core/framePlane.ts`). La correction ne vaut
- * ici que 0,2 mm — mais c'est le bon plan, et il ne coûte rien.
+ * Aucune valeur de cette constante ne pouvait corriger ça, parce qu'elle
+ * ignorait la seule grandeur qui décide : l'écart pont ↔ centres optiques,
+ * propre à CHAQUE monture.
  *
- * ⚠️ VALEUR PROVISOIRE — se calibre au lot 8, puis se fige avec sa date.
- * ⚠️ Ce n'est PAS un slider déguisé (§1 bug #1) : c'est une constante
- * d'anatomie, identique pour toutes les montures et tous les clients.
+ * ## Ce qui la remplace : rien à calibrer
+ *
+ * `core/faceMetrics.ts` → `poseAnchorOf` : la médiane du nez donne le X, la
+ * ligne des yeux donne le Y. Le sprite est ancré par ses PROPRES centres
+ * optiques. Il n'y a plus de paramètre libre, donc plus de séance d'opticien
+ * pour cette grandeur — c'est le lot 8 amputé de sa moitié.
+ *
+ * ⚠️ Hypothèse assumée, et qui doit rester écrite : la monture est montrée
+ * telle qu'un opticien l'ajusterait, plaquettes réglées pour amener le centre
+ * optique à hauteur de pupille. Une monture dont les plaquettes ne le
+ * permettraient pas sur ce nez-là n'est pas modélisée. C'est une convention de
+ * pose déclarée, pas une constante cachée.
  */
-export const VERTICAL_OFFSET_MM = 3; // calibrée le : —  | sur N montures : 0
 
 /** Matrice affine au format `ctx.setTransform(a, b, c, d, e, f)`. */
 export interface Affine {
@@ -75,21 +86,23 @@ export function spriteAffine(spec: FrameSpec, m: FrameMetrics): Affine {
   const c = -sinR * sy;
   const d = cosR * sy;
 
-  // Le centre du pont du sprite doit tomber sur l'ancre écran, décalée de
-  // VERTICAL_OFFSET_MM vers le bas.
-  const anchorX = m.anchor.x;
-  const anchorY = m.anchor.y + VERTICAL_OFFSET_MM * planeScale(m.livePxPerMm, BRIDGE_AHEAD_MM);
-
-  const bx = spec.bridgeCenter.x;
-  const by = spec.bridgeCenter.y;
+  // ⭐ Le point du SPRITE qui doit tomber sur l'ancre de pose :
+  //   - en X, le centre du pont : le pont enjambe le nez, il ne coulisse pas.
+  //     C'est ce qui laisse le décentrement horizontal être une vraie mesure.
+  //   - en Y, la hauteur des CENTRES OPTIQUES : c'est elle que l'opticien règle
+  //     pour l'amener à hauteur de pupille, et elle est propre à chaque monture.
+  //
+  // Ce couple remplace `VERTICAL_OFFSET_MM` (voir l'en-tête de ce fichier).
+  const sx0 = spec.bridgeCenter.x;
+  const sy0 = (spec.lensCenterL.y + spec.lensCenterR.y) / 2;
 
   return {
     a,
     b,
     c,
     d,
-    e: anchorX - (a * bx + c * by),
-    f: anchorY - (b * bx + d * by),
+    e: m.poseAnchor.x - (a * sx0 + c * sy0),
+    f: m.poseAnchor.y - (b * sx0 + d * sy0),
   };
 }
 

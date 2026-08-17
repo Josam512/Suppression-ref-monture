@@ -67,7 +67,7 @@ const metrics: FrameMetrics = {
   livePxPerMm: 3,
   rollRad: 0,
   yawRad: 0,
-  anchor: { x: W / 2, y: H / 2 },
+  poseAnchor: { x: W / 2, y: H / 2 },
 };
 
 /**

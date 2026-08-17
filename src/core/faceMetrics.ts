@@ -40,12 +40,80 @@ export function irisWidthPx(lm: readonly NormalizedLandmark[], w: number, h: num
   return (left + right) / 2;
 }
 
+/**
+ * Les quatre canthi. Ils définissent la LIGNE DES YEUX, qui est la hauteur à
+ * laquelle une monture bien portée place ses centres optiques.
+ *
+ * 🔴 Ce sont les COINS des yeux, jamais les centres d'iris (468 / 473). Un iris
+ * se déplace de plusieurs millimètres quand la personne regarde en haut ou en
+ * bas ; ancrer la monture dessus la ferait glisser sur le nez au gré du regard.
+ * Les canthi, eux, sont accrochés au crâne. C'est la même discipline qu'au §4 :
+ * on ancre sur ce qui ne bouge pas avec autre chose que la tête.
+ */
+export const CANTHI = [EYE_L, EYE_L_INNER, EYE_R, EYE_R_INNER] as const;
+
+/** Ordonnée écran de la ligne des yeux. Exportée : l'atelier la mesure aussi. */
+export function eyeLineY(lm: readonly NormalizedLandmark[], w: number, h: number): number {
+  let sum = 0;
+  for (const i of CANTHI) sum += px(at(lm, i), w, h).y;
+  return sum / CANTHI.length;
+}
+
+/**
+ * ⭐ Point d'ancrage de la pose — remplace `VERTICAL_OFFSET_MM` (voir §6.3).
+ *
+ * Il combine les deux seules références défendables, chacune sur SON axe :
+ *
+ *   - **horizontalement, le sellion** : le pont enjambe le nez, la monture ne
+ *     peut pas coulisser latéralement. Un écart pupille ↔ centre optique en X
+ *     est donc une VRAIE mesure — c'est le décentrement du §5, règle 2.
+ *   - **verticalement, la ligne des yeux** : la monture, elle, coulisse sur
+ *     l'arête du nez, et l'opticien règle justement les plaquettes pour amener
+ *     le centre optique à hauteur de pupille. La hauteur n'est donc pas une
+ *     constante d'anatomie : c'est la cible du réglage.
+ *
+ * C'est ce qui rendait `VERTICAL_OFFSET_MM` incalibrable : elle figeait un degré
+ * de liberté qui, dans la réalité, est ajusté personne par personne.
+ *
+ * ⚠️ Construit dans le repère du visage (base `u` le long de la ligne des yeux),
+ * et non en mélangeant un x d'un point et un y d'un autre : sous roulis, ce
+ * mélange déplacerait la monture latéralement sans raison physique.
+ */
+export function poseAnchorOf(
+  lm: readonly NormalizedLandmark[],
+  w: number,
+  h: number,
+  rollRad: number,
+): Pt {
+  let sx = 0;
+  let sy = 0;
+  for (const i of CANTHI) {
+    const p = px(at(lm, i), w, h);
+    sx += p.x;
+    sy += p.y;
+  }
+  const canthiMid = { x: sx / CANTHI.length, y: sy / CANTHI.length };
+  const sellion = px(at(lm, SELLION), w, h);
+
+  // Glisser le milieu des canthi LE LONG de la ligne des yeux jusqu'à la
+  // médiane du nez : la composante perpendiculaire — la hauteur — est conservée.
+  const ux = Math.cos(rollRad);
+  const uy = Math.sin(rollRad);
+  const t = (sellion.x - canthiMid.x) * ux + (sellion.y - canthiMid.y) * uy;
+  return { x: canthiMid.x + ux * t, y: canthiMid.y + uy * t };
+}
+
 export interface FrameMetrics {
   livePxPerMm: number;
   rollRad: number;
   /** ⭐ T2 : était consommé par drawFrame et par le §5 sans jamais être renvoyé. */
   yawRad: number;
-  anchor: Pt;
+  /**
+   * ⭐ Ancre de pose (`poseAnchorOf`). Le champ s'appelait `anchor` et valait le
+   * seul sellion : renommé pour qu'aucun appelant ne continue de compiler avec
+   * l'ancienne sémantique sans s'en apercevoir.
+   */
+  poseAnchor: Pt;
 }
 
 /** Largeur apparente du visage, en pixels image. Exportée car les tests en ont besoin. */
@@ -100,7 +168,7 @@ export function frameMetrics(
     livePxPerMm,
     rollRad: rollRadOf(lm, w, h),
     yawRad,
-    anchor: px(at(lm, SELLION), w, h),
+    poseAnchor: poseAnchorOf(lm, w, h, rollRadOf(lm, w, h)),
   };
 }
 // ⚠️ NE PAS ajouter `faceWidthMm` au retour : ce serait une simple recopie de la
