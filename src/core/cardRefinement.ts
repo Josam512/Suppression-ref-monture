@@ -18,7 +18,7 @@
  * que sa marge est plus large.
  */
 
-import { fitDepthAndDistance } from './depthFit.js';
+import { depthFromRotation } from './depthFit.js';
 import { CalibrationError } from './geom.js';
 import { type RotatedView } from './parallax.js';
 import {
@@ -94,19 +94,32 @@ export const UNMEASURED_PARALLAX_REL_ERROR = 0.025;
  */
 export const MAX_DEPTH_REL_ERROR = 0.5;
 
-/** Combinaison par pondération inverse des variances. */
-function fuse(
-  a: { value: number; rel: number },
-  b: { value: number; rel: number },
-): { value: number; rel: number } {
-  if (!Number.isFinite(a.value) || a.rel >= 1) return b;
-  const wa = 1 / (a.value * a.rel) ** 2;
-  const wb = 1 / (b.value * b.rel) ** 2;
-  if (!Number.isFinite(wa) || wa <= 0) return b;
-  if (!Number.isFinite(wb) || wb <= 0) return a;
-  const value = (wa * a.value + wb * b.value) / (wa + wb);
-  return { value, rel: Math.sqrt(1 / (wa + wb)) / value };
-}
+/**
+ * Profondeur entre le plan des COINS EXTERNES DES YEUX et celui des tempes.
+ *
+ * ## Pourquoi ce terme existe
+ *
+ * La rotation mesure la profondeur entre la carte et les coins externes des
+ * yeux — les seuls repères sagittaux qui soient de vrais points physiques. Mais
+ * la largeur, elle, se lit au plan des TEMPES, un peu en arrière. Ce reliquat
+ * n'est pas mesurable par rotation : les points du contour temporal glissent sur
+ * la silhouette au lieu de suivre la peau, et c'est précisément ce qui rendait
+ * toute la mesure fausse jusqu'ici.
+ *
+ * ## Pourquoi c'est acceptable ici, et pas ailleurs
+ *
+ * ⚠️ C'est une constante anatomique, donc exactement ce que le §0.0.3 interdit
+ * dans la chaîne principale. Elle est tolérée ICI parce qu'elle n'entre que dans
+ * un terme CORRECTIF : la correction totale vaut ~6 %, dont ce terme représente
+ * le quart. Se tromper de 50 % dessus coûte 0,8 % sur la largeur finale — à
+ * comparer aux 3 à 7 % de biais que l'ensemble de la correction supprime.
+ *
+ * Elle ne remplace aucune mesure : elle complète une mesure là où l'imagerie ne
+ * peut pas aller. Et elle est déclarée, avec son incertitude, plutôt que d'être
+ * implicitement posée à zéro comme elle l'était.
+ */
+export const CANTHI_TO_TEMPLE_DEPTH_MM = 12;
+export const CANTHI_TO_TEMPLE_DEPTH_SD_MM = 6;
 
 interface Parallax {
   factor: number;
@@ -131,7 +144,12 @@ function measureParallax(input: RefinementInput): Parallax {
     };
   }
 
-  const fit = fitDepthAndDistance(input.views, input.naiveFaceWidthMm);
+  // ⚠️ La distance n'est PAS ajustée : elle est fixée à la fenêtre de travail.
+  // Elle ne pèse que dans le petit terme perspectif du milieu — ±17 % dessus ne
+  // font que 3,4 % sur la profondeur. Vouloir l'ajuster en même temps rendait le
+  // système presque singulier et faisait tripler la profondeur d'une image à
+  // l'autre : c'est la première vraie vidéo qui l'a montré.
+  const fit = depthFromRotation(input.views, input.naiveFaceWidthMm, prior.value);
 
   // 🔴 Une profondeur mesurée mais INSTABLE ne vaut pas mieux que pas de mesure.
   //
@@ -154,28 +172,30 @@ function measureParallax(input: RefinementInput): Parallax {
     };
   }
 
-  // 🔴 La distance EST mesurée — mais elle est portée par un effet perspectif du
-  // second ordre, et le bruit des repères la dégrade massivement. Au banc,
-  // ±0,5 px de bruit donnent ±300 mm d'écart-type sur 700. On la fusionne donc
-  // avec la fenêtre de travail imposée, chacune pesée par son incertitude : la
-  // mesure prend le dessus si elle est bonne, s'efface si elle ne l'est pas.
-  // C'est le contraire d'un choix a priori — c'est la donnée qui décide.
-  const distance = fuse({ value: fit.distanceMm, rel: fit.distanceRelError }, prior);
+  const distance = prior;
 
-  const delta = fit.depthMm / distance.value;
-  const deltaRel = Math.hypot(fit.depthRelError, distance.rel);
+  // La profondeur totale carte → tempes : la part mesurée, plus le reliquat
+  // anatomique que l'imagerie ne peut pas atteindre.
+  const depthTotalMm = fit.depthMm + CANTHI_TO_TEMPLE_DEPTH_MM;
+  const depthSdMm = Math.hypot(
+    fit.depthMm * fit.depthRelError,
+    CANTHI_TO_TEMPLE_DEPTH_SD_MM,
+  );
+
+  const delta = depthTotalMm / distance.value;
+  const deltaRel = Math.hypot(depthSdMm / depthTotalMm, distance.rel);
   const factor = 1 / (1 - delta);
 
   return {
     factor,
-    depthMm: fit.depthMm,
+    depthMm: depthTotalMm,
     distanceMm: distance.value,
     // d(facteur)/facteur ≈ δ × (incertitude relative sur δ).
     scaleRelError: Math.hypot(input.clickRelError, delta * deltaRel),
     note:
-      `Profondeur front ↔ tempes mesurée : ${fit.depthMm.toFixed(0)} mm sur ${fit.views} vues. ` +
-      `Distance retenue : ${(distance.value / 10).toFixed(0)} cm ` +
-      `(mesurée ${(fit.distanceMm / 10).toFixed(0)} cm à ±${(fit.distanceRelError * 100).toFixed(0)} %). ` +
+      `Profondeur carte ↔ yeux mesurée : ${fit.depthMm.toFixed(0)} mm sur ${fit.views} vues ` +
+      `(±${(fit.depthRelError * 100).toFixed(0)} %), plus ${CANTHI_TO_TEMPLE_DEPTH_MM} mm ` +
+      `jusqu'au plan des tempes. ` +
       `Le biais de parallaxe de la carte, ${((factor - 1) * 100).toFixed(1)} %, est corrigé ` +
       `au lieu d'être supposé nul.`,
   };

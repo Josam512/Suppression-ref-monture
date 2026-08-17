@@ -30,13 +30,13 @@ import {
   parallaxResidualRelError,
   type RotatedView,
 } from '../src/core/parallax.js';
-import { fitDepthAndDistance } from '../src/core/depthFit.js';
+import { depthFromRotation } from '../src/core/depthFit.js';
 import { findHeadEdge, motionMask } from '../src/core/silhouette.js';
 import { measureTemporalWidth, MAX_TEMPLE_MARGIN_MM } from '../src/core/temporalWidth.js';
 import { comparisonWidth } from '../src/core/verdict.js';
 import { at, CalibrationError } from '../src/core/geom.js';
 import { EYE_L, EYE_R } from '../src/core/faceMetrics.js';
-import { ADULTE, cardWidthPx, projectHead, type CameraOptions } from './fixtures/head3d.js';
+import { ADULTE, cardWidthPx, probeDepthMm, projectHead, type CameraOptions } from './fixtures/head3d.js';
 import { makeScene, type GlassesOptions, type SceneOptions } from './fixtures/scene.js';
 import { makeCal } from './fixtures/builders.js';
 
@@ -69,10 +69,11 @@ const VRAIE_LARGEUR_REPERES = 2 * ADULTE.templeHalfMm;
 const VRAI_ECART_TEMPORAL = 2 * ADULTE.headHalfMm;
 
 describe('parallaxe mesurée par rotation de tête (B4, parade n°2)', () => {
-  it('retrouve la profondeur front ↔ tempes à mieux que 10 %', () => {
+  it('retrouve la profondeur front ↔ coins externes à mieux que 10 %', () => {
+    const attendu = probeDepthMm(ADULTE);
     const depth = depthOffsetMm(view(-20), view(20), VRAIE_LARGEUR_REPERES, DISTANCE_MM);
-    expect(depth).toBeGreaterThan(ADULTE.foreheadAheadMm * 0.9);
-    expect(depth).toBeLessThan(ADULTE.foreheadAheadMm * 1.1);
+    expect(depth).toBeGreaterThan(attendu * 0.9);
+    expect(depth).toBeLessThan(attendu * 1.1);
   });
 
   it('la mesure ne dépend pas du signe de la convention de yaw', () => {
@@ -100,49 +101,53 @@ describe('parallaxe mesurée par rotation de tête (B4, parade n°2)', () => {
   });
 });
 
-describe('la distance est MESURÉE, plus supposée', () => {
+describe('profondeur par rotation — l’estimateur qui a survécu au réel', () => {
   const VRAIE = 2 * ADULTE.templeHalfMm;
 
-  it('retrouve la profondeur ET la distance du plan des tempes', () => {
-    const f = fitDepthAndDistance(BALAYAGE, VRAIE);
-    expect(f.depthMm).toBeCloseTo(ADULTE.foreheadAheadMm, 0);
-    // La distance de la caméra au plan des TEMPES, jamais annoncée nulle part
-    // à la sonde : elle sort de la seule courbure perspective des vues.
-    expect(f.distanceMm).toBeGreaterThan(DISTANCE_MM * 0.85);
-    expect(f.distanceMm).toBeLessThan(DISTANCE_MM * 1.15);
+  it('retrouve la profondeur carte ↔ coins externes à mieux que 10 %', () => {
+    // La tête de test est projetée en perspective EXACTE ; la sonde, elle,
+    // utilise un modèle au premier ordre. L'écart résiduel — 8 % ici — est
+    // exactement la différence entre les deux, et il pèse 8 % d'une correction
+    // qui vaut 6 %, soit 0,5 % sur la largeur finale.
+    const d = depthFromRotation(BALAYAGE, VRAIE, DISTANCE_MM);
+    expect(Math.abs(d.depthMm - probeDepthMm(ADULTE)) / probeDepthMm(ADULTE)).toBeLessThan(0.1);
   });
 
   it('🔴 aucune dépendance au champ de vision de la caméra', () => {
     // Le HFOV supposé de 60° servait à estimer la distance. Il n'entre plus
     // nulle part : une caméra à 75° doit rendre EXACTEMENT le même résultat.
-    const a = fitDepthAndDistance(BALAYAGE, VRAIE);
-    const b = fitDepthAndDistance(BALAYAGE_75, VRAIE);
+    const a = depthFromRotation(BALAYAGE, VRAIE, DISTANCE_MM);
+    const b = depthFromRotation(BALAYAGE_75, VRAIE, DISTANCE_MM);
     expect(b.depthMm).toBeCloseTo(a.depthMm, 6);
-    expect(b.distanceMm).toBeCloseTo(a.distanceMm, 6);
   });
 
-  it('refuse un balayage trop étroit, où les deux inconnues se confondent', () => {
-    const plat = [-20, -19.5, 19.5, 20].map((d) => view(d));
-    expect(() => fitDepthAndDistance(plat, VRAIE)).toThrow(/même angle|balayer/i);
+  it('🔴 un DÉCALAGE CONSTANT du repère sagittal est éliminé', () => {
+    // C'est le défaut qui rendait 103 mm sur la vraie vidéo : le repère de front
+    // n'est jamais exactement sur le plan sagittal. La pente doit l'ignorer.
+    const biaise = BALAYAGE.map((v) => ({
+      ...v,
+      lm: v.lm.map((p, k) => (k === 151 ? { x: p.x + 0.02, y: p.y } : p)),
+    }));
+    const d = depthFromRotation(biaise, VRAIE, DISTANCE_MM);
+    expect(d.depthMm).toBeCloseTo(depthFromRotation(BALAYAGE, VRAIE, DISTANCE_MM).depthMm, 1);
+  });
+
+  it('refuse un balayage d’un seul côté', () => {
+    const plat = [12, 15, 18, 20].map((deg) => view(deg));
+    expect(() => depthFromRotation(plat, VRAIE, DISTANCE_MM)).toThrow(/trop semblables|franchement/i);
   });
 
   it('refuse trop peu de vues', () => {
-    expect(() => fitDepthAndDistance([view(-20), view(20)], VRAIE)).toThrow(/vue\(s\) exploitable/);
+    expect(() => depthFromRotation([view(-20)], VRAIE, DISTANCE_MM)).toThrow(/vue\(s\) exploitable/);
   });
 
-  it('🔴 la sonde ANNONCE la faiblesse de sa mesure de distance', () => {
-    // C'est le résultat qui a décidé la conception : sur un balayage parfait,
-    // la distance sort juste ; sous un bruit de repères réaliste, elle part
-    // à ±35 %. La régression doit le DIRE, pour que l'aval puisse la pondérer.
-    const brouille = BALAYAGE.map((v, i) => ({
+  it('rejette une profondeur hors de tout plausible', () => {
+    // Un repère qui s'envole : la sonde doit refuser, pas publier.
+    const fou = BALAYAGE.map((v) => ({
       ...v,
-      lm: v.lm.map((p, k) => ({
-        x: p.x + (((i * 37 + k * 13) % 7) - 3) * (0.4 / W),
-        y: p.y,
-      })),
+      lm: v.lm.map((p, k) => (k === 151 ? { x: 0.5 + (v.yawRad > 0 ? 0.2 : -0.2), y: p.y } : p)),
     }));
-    const f = fitDepthAndDistance(brouille, VRAIE);
-    expect(f.distanceRelError).toBeGreaterThan(f.depthRelError);
+    expect(() => depthFromRotation(fou, VRAIE, DISTANCE_MM)).toThrow(/hors de tout plausible/);
   });
 });
 
@@ -160,6 +165,8 @@ describe('la carte seule est BIAISÉE — et la rotation le corrige', () => {
   });
 
   it('🔴 INVARIANT : avec la rotation, la largeur vraie est retrouvée à mieux que 1 %', () => {
+    // Le reliquat anatomique yeux → tempes vaut exactement, sur cette tête de
+    // test, `sellionAheadMm / 2` = 11 mm — à comparer aux 12 mm déclarés.
     const { cal, refinement } = calibrateWithCardMeasured(
       cardPx,
       W,
@@ -170,7 +177,8 @@ describe('la carte seule est BIAISÉE — et la rotation le corrige', () => {
       null,
     );
     expect(refinement.parallaxMeasured).toBe(true);
-    expect(cal.faceWidthMm).toBeCloseTo(VRAIE_LARGEUR_REPERES, 0);
+    // Le reliquat vient du terme anatomique déclaré : 12 mm annoncés contre
+    // 11 mm réels sur cette tête. Il vaut 0,6 % — l'ordre de grandeur promis.
     expect(Math.abs(cal.faceWidthMm - VRAIE_LARGEUR_REPERES) / VRAIE_LARGEUR_REPERES).toBeLessThan(
       0.01,
     );
@@ -255,7 +263,11 @@ describe('écart temporal lu dans les pixels', () => {
     expect(comparisonWidth(cal).relError).toBeCloseTo(cal.relError, 6);
   });
 
-  it('un fond chargé est REFUSÉ, jamais deviné', () => {
+  it('🔴 un fond CHARGÉ ne gêne plus : on ne le lit jamais', () => {
+    // Renversement assumé. L'ancienne version modélisait le FOND et exigeait un
+    // mur uni ; sur la première vraie vidéo elle a trouvé le montant d'une
+    // fenêtre à 83 mm de la tempe. La nouvelle part de la TÊTE et croît vers
+    // l'extérieur : ce qu'il y a derrière n'a plus d'importance.
     const charge = sceneOf({ bgNoise: 60 });
     const r = measureTemporalWidth({
       frontal: charge,
@@ -266,8 +278,9 @@ describe('écart temporal lu dans les pixels', () => {
       pxPerMm: cardPx / CARD_WIDTH_MM,
       scaleRelError: 0.02,
     });
-    expect(r.measured).toBe(false);
-    expect(r.reason).toMatch(/fond/i);
+    expect(r.measured).toBe(true);
+    // Un fond bruité coûte un peu de précision sur le bord, mais ne l'empêche plus.
+    expect(Math.abs(r.widthMm - VRAI_ECART_TEMPORAL)).toBeLessThan(6);
   });
 
   it('une chevelure large est REFUSÉE, jamais prise pour une tempe', () => {
@@ -287,7 +300,7 @@ describe('écart temporal lu dans les pixels', () => {
       scaleRelError: 0.02,
     });
     expect(r.measured).toBe(false);
-    expect(r.reason).toMatch(/cheveux/i);
+    expect(r.reason).toMatch(/cheveux|frontière nette/i);
   });
 
   it('🔴 un client qui a GARDÉ SES LUNETTES est refusé, pas mesuré', () => {

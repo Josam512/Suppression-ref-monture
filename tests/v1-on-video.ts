@@ -20,7 +20,8 @@
 import { calibrateWithCardMeasured } from '../src/core/calibration.js';
 import { rollRadOf } from '../src/core/faceMetrics.js';
 import type { NormalizedLandmark } from '../src/core/geom.js';
-import type { RotatedView } from '../src/core/parallax.js';
+import { setProbeLandmark, setReferencePair, type RotatedView } from '../src/core/parallax.js';
+import { depthFromRotation } from '../src/core/depthFit.js';
 import { motionMask, type ImageBuffer } from '../src/core/silhouette.js';
 import { createLandmarker, yawFromMatrix } from '../src/tracking/landmarker.js';
 
@@ -231,6 +232,37 @@ export async function runV1(
     w: l.w,
     h: l.h,
   }));
+
+  // Comparaison des repères sagittaux candidats : le front est OCCULTÉ par la
+  // carte elle-même, ce que la première vraie vidéo a révélé.
+  for (const [refNom, ra, rb] of [
+    ['tempes 234/454 (glissantes)', 234, 454],
+    ['canthus externes 33/263', 33, 263],
+    ['canthus internes 133/362', 133, 362],
+    ['ailes du nez 129/358', 129, 358],
+  ] as const) {
+    setReferencePair(ra, rb);
+    const ligne: string[] = [];
+    for (const [nom, idx] of [
+      ['151 front', 151],
+      ['168 sellion', 168],
+      ['4 nez', 4],
+    ] as const) {
+      setProbeLandmark(idx);
+      try {
+        const d = depthFromRotation(views, 129.6, 780);
+        ligne.push(`${nom} ${d.depthMm.toFixed(1)}±${(d.depthRelError * 100).toFixed(0)}%`);
+      } catch {
+        try {
+          setProbeLandmark(idx);
+          ligne.push(`${nom} refus`);
+        } catch { /* rien */ }
+      }
+    }
+    console.log(`   réf ${refNom.padEnd(30)} ${ligne.join('  |  ')}`);
+  }
+  setProbeLandmark(151);
+  setReferencePair(33, 263); // le défaut du module : coins externes des yeux
 
   const frontalBuf = await buffer(l, frontal.t);
   const left = l.frames.reduce((a, b) => (b.yawRad < a.yawRad ? b : a));

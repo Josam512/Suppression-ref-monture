@@ -64,6 +64,7 @@ try {
   const page = await browser.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
+  page.on('console', (m) => { if (m.type() === 'log' && m.text().startsWith('   ')) console.log(m.text()); });
   await page.goto(`${BASE}/tests/v1-on-video.html`, { waitUntil: 'load' });
   await page.waitForFunction(() => typeof window.__SURVEY__ === 'function', { timeout: 20000 });
 
