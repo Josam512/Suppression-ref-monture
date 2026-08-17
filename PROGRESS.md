@@ -795,44 +795,66 @@ seul coin juste sur quatre suffit à récupérer les trois autres.
 existe — et le code ne demande jamais *pourquoi* elle manque, seulement si elle est là
 (§11.4).
 
-### Ce qui ne marche PAS sur cette vidéo-ci, et pourquoi
+### Le bord masqué n'était pas un obstacle — c'était un mauvais critère
 
-La distance n'a **pas** pu être mesurée sur le balayage du sujet. La cause est nommable
-et se voit à l'œil : **il tient sa carte avec le pouce posé sur le bord court droit**, sur
-toute la durée. Ce bord n'existe pas dans l'image : l'accrochage suit le contour du pouce,
-qui est une droite plus longue et plus nette que le bord masqué. Le raffinage le détecte
-et **refuse** — 13 px d'écart au coin 1, limite 12 — au lieu de rendre un cadre faux.
+Sur la vidéo du sujet, la carte est tenue à la main : le pouce couvre le milieu d'un bord
+court. Deux critères de sélection de droite ont échoué là-dessus, et **pour la même
+raison** :
 
-C'est le comportement voulu. Une distance fausse serait bien pire qu'une distance
-supposée, et rien ne l'aurait signalée.
+1. **rejet à la médiane** — il suppose les aberrants minoritaires ; ici ils sont
+   majoritaires sur ce bord, la médiane bascule de leur côté, le coin sortait à 16 px ;
+2. **consensus « le plus de points »** — le contour du pouce est une droite plus longue et
+   mieux échantillonnée que les vingt pixels de bord qui dépassent de part et d'autre. Il
+   gagne.
 
-**Ce qu'il faut pour la débloquer, et ce n'est pas une contrainte de tournage :** une
-phrase à l'écran — « tenez la carte par le bord court, doigts hors du cadre ». Zéro coût
-pour le client. Alternative purement logicielle, à écrire : ajuster les quatre coins sous
-la contrainte que le quadrilatère reste un rectangle aux proportions ISO, ce qui rend le
-quatrième bord déductible des trois autres. Trois bords visibles suffisent alors.
+Ce que les deux oubliaient : **un bord masqué n'est pas un bord inconnu.** La carte est un
+rectangle rigide et le cadre de départ — celui du client, ou celui de l'image précédente —
+dit déjà où il est à quelques pixels près. La bonne droite n'est donc pas celle qui a le
+plus de points, c'est celle qui est **compatible avec ce qu'on sait déjà** et qui explique
+le mieux les points restants. Quatre pixels de bord visible suffisent ; le pouce est
+écarté d'office parce qu'il est trop loin du cadre. Et si un bord est *totalement* masqué,
+on garde celui du cadre : la vue reste dans le balayage.
 
-**En attendant, la chaîne rend exactement ce qu'elle rendait**, avec la distance supposée
-et sa marge honnête. Sur la vidéo du sujet : écart temporal **160 mm ± 2,9 mm** (1,8 %),
-parallaxe +6,8 % corrigée, profondeur 49,6 mm sur 37 vues.
+**Effet : 0 cadre suivi → 100 cadres suivis sur 148 images.**
 
-### En attendant, un correctif partiel sur ce tronçon
+Un garde-fou vient avec (`MIN_MEASURED_EDGES`) : il faut qu'au moins deux bords aient été
+réellement accrochés sur les pixels. Sans lui, une image uniformément grise passerait —
+les quatre bords retomberaient sur le cadre, aucun coin ne bougerait, et la vue entrerait
+dans le balayage sans qu'un seul pixel ait été mesuré.
 
-Il valait **12 mm en absolu** : un chiffre d'adulte, qui surestimait de moitié sur un
-visage d'enfant — le présupposé de taille du §0.0.3, celui-là même que le §5 avait déjà
-chassé du seuil en le rendant proportionnel. Il est désormais une **proportion** de la
-largeur du visage (7,9 %, calée sur le sujet réel). Ce n'est plus une hypothèse de taille ;
-c'est encore une hypothèse de forme, et elle est destinée à disparaître au point 3.
+### 🔴 Ce que la distance mesurée révèle : l'a priori était faux de 46 %
 
-**Contrôles :** 139 tests Vitest · `tsc --noEmit` en `strict` · banc navigateur vert.
+| | Supposé | **Mesuré sur la carte** |
+|---|---|---|
+| Distance | 78 cm ± 17 % | **42,1 cm** ± 10,7 % |
+| Facteur de parallaxe | 6,8 % | **12,9 %** |
+| Largeur aux repères 234/454 | 145,2 mm | **153,5 mm** |
+| Écart temporal | 160,0 ± 2,9 mm | **169,0 ± 3,5 mm** |
+
+**Recoupement, par une voie indépendante de la pose :** la carte raffinée mesure 145 px de
+long ; à la focale trouvée (721 px, soit 1,00 × la largeur d'image → 53° de champ, typique
+d'une caméra frontale de téléphone), une carte de 85,6 mm vue de face serait à 42,4 cm. La
+pose rend 42,1 cm. Les deux concordent à 0,7 %.
+
+Le sujet filmait à bout de bras : 42 cm est parfaitement plausible, et **78 cm ne l'était
+pas**. Toute la chaîne tournait donc avec une distance fausse de près de moitié, et le
+biais de parallaxe était sous-corrigé du simple au double — sans que rien ne le signale,
+puisque l'a priori était « imposé par la fenêtre de travail ».
+
+> ⚠️ Conséquence immédiate pour le produit : 42 cm est **sous** `CARD_MIN_DISTANCE_MM`
+> (600 mm), que le §4 impose comme parade n°1 au biais B4. L'application peut désormais le
+> DÉTECTER et dire « reculez » sur une mesure, là où elle ne pouvait que l'espérer.
+
+**Contrôles :** 139 tests Vitest · `tsc --noEmit` en `strict` · banc navigateur vert (23 contrôles).
 
 ## Journal
 
-- **2026-08-17** — `core/cardEdges.ts` + `core/cardSweep.ts` : les coins se retrouvent tout
-  seuls (0,05 px sur vérité terrain), la focale sort du balayage, la distance mesurée est
-  branchée dans la chaîne. Deux défauts trouvés : convention de demi-pixel, et rejet
-  d'aberrants inopérant quand les aberrants sont majoritaires. Sur la vidéo du sujet, le
-  pouce masque un bord court : le raffinage **refuse** au lieu de rendre un cadre faux.
+- **2026-08-17** — `core/cardEdges.ts` + `core/edgeLines.ts` + `core/cardSweep.ts` : les
+  coins se retrouvent tout seuls (0,05 px sur vérité terrain), un bord masqué par un doigt
+  n'arrête plus rien, la focale sort du balayage. **Distance mesurée à 42,1 cm là où la
+  chaîne en supposait 78** : le biais de parallaxe était sous-corrigé du simple au double.
+  Trois défauts trouvés : convention de demi-pixel, rejet d'aberrants inopérant quand les
+  aberrants sont majoritaires, et critère de consensus qui préférait le contour du pouce.
 - **2026-08-17** — `core/cardPose.ts` : la carte devient une mire de calibration — focale et
   distance **mesurées**. Caractérisation du bruit : inutilisable sur une vue, ±4 % sur le
   balayage.

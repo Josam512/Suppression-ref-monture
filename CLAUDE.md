@@ -1773,6 +1773,17 @@ ordre : sur 85 mm vus à 78 cm, le raccourci d'un bord à l'autre fait un ou deu
 | 1 | ±0,5 px | **±20 à 25 %** — pire que l'a priori qu'elle remplace |
 | 50 (le balayage) | ±0,5 px | **±4 à 8 %**, sans biais |
 
+**Un bord masqué n'arrête rien.** La carte est un rectangle rigide et le cadre de départ
+dit déjà où sont ses bords : la droite retenue est celle qui est **compatible avec ce
+qu'on sait déjà** et qui explique le mieux les points restants — pas celle qui a le plus
+de points, critère qui désignait le contour du pouce du sujet. Un bord totalement masqué
+est repris du cadre, et la vue reste dans le balayage. Garde-fou : au moins deux bords
+doivent avoir été réellement accrochés sur les pixels, sinon une image grise passerait.
+
+**Premier résultat sur le sujet réel :** distance **42,1 cm mesurée** contre 78 cm
+supposés — l'a priori était faux de 46 %, et le biais de parallaxe sous-corrigé du simple
+au double (6,8 % → 12,9 %). Recoupé par une voie indépendante de la pose à 0,7 % près.
+
 > 🔴 **Une seule vue est insuffisante, et c'est verrouillé par un test.** Remplacer un
 > a priori honnête (780 mm ± 17 %) par une mesure plus bruitée mais qui *ressemble* à une
 > mesure est le mode d'échec que tout ce document combat. La carte ne remplace la
