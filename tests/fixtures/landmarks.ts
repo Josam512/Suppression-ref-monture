@@ -8,6 +8,8 @@
 
 import type { NormalizedLandmark } from '../../src/core/geom.js';
 import {
+  EAR_L,
+  EAR_R,
   EYE_L,
   EYE_L_INNER,
   EYE_R,
@@ -33,7 +35,23 @@ export interface FaceOptions {
   faceWidthPx: number;
   /** Inclinaison de la tête, en radians. 0 par défaut. */
   rollRad?: number;
+  /**
+   * Rotation de la tête, en radians — utilisée UNIQUEMENT pour projeter les
+   * oreilles, qui sont les seuls points de ce jeu à vivre franchement en
+   * arrière du plan du visage. Le reste du fixture est frontal.
+   */
+  yawRad?: number;
 }
+
+/**
+ * Recul de l'oreille derrière le plan des yeux, en fraction de la largeur du
+ * visage. ~0,5 × 138 mm ≈ 69 mm, l'ordre de grandeur anatomique du tragus.
+ *
+ * ⚠️ C'est un FIXTURE, pas une constante de la chaîne de mesure : aucune ligne
+ * de `src/` ne la lit. Elle n'existe que pour que la branche ait quelque chose
+ * de physiquement cohérent à viser dans les tests.
+ */
+export const EAR_BEHIND_EYES_RATIO = 0.5;
 
 /**
  * Construit un jeu de 478 landmarks cohérent : les deux bords du visage
@@ -70,6 +88,19 @@ export function makeFace(opts: FaceOptions): NormalizedLandmark[] {
   lm[EYE_R_INNER] = at(halfPx * 0.22, eyeDy);
   lm[SELLION] = at(0, eyeDy);
 
+  // ⭐ Les oreilles, seuls points nettement EN ARRIÈRE du plan du visage.
+  //
+  // Un point de coordonnées (X latéral, Z avant-arrière) se projette en
+  // `X·cos(yaw) + Z·sin(yaw)`. Avec Z = −recul, l'oreille glisse donc vers
+  // l'avant ou l'arrière quand la tête tourne — et c'est exactement ce que la
+  // branche doit suivre. `halfPx` porte déjà le cos(yaw) (cf. makeFaceAtYaw) :
+  // on n'ajoute ici que le terme de recul.
+  const yaw = opts.yawRad ?? 0;
+  const backPx = EAR_BEHIND_EYES_RATIO * (opts.faceWidthPx / Math.max(Math.cos(yaw), 1e-6));
+  const earDx = backPx * Math.sin(yaw);
+  lm[EAR_L] = at(-halfPx - earDx, eyeDy);
+  lm[EAR_R] = at(halfPx - earDx, eyeDy);
+
   return lm;
 }
 
@@ -81,7 +112,7 @@ export function makeFace(opts: FaceOptions): NormalizedLandmark[] {
  * pas » deviendrait faux pour une raison qui n'est pas le bug cherché.
  */
 export function makeFaceAtYaw(yawRad: number, baseFacePx = BASE_FACE_PX): NormalizedLandmark[] {
-  return makeFace({ faceWidthPx: baseFacePx * Math.cos(yawRad) });
+  return makeFace({ faceWidthPx: baseFacePx * Math.cos(yawRad), yawRad });
 }
 
 /** Le visage que la carte de 300 px mesure à 138 mm. */
