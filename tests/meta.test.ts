@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 // ⭐ T6 : l'ancienne valeur (12) ne correspondait à rien — la §8 n'en listait que 11.
-const EXPECTED_MIN_TESTS = 143; // V1 : 49 | V2 : 56 | lot 8 : 64 | lot 7 : 68 | ajustement : 76 | borne robuste : 143
+const EXPECTED_MIN_TESTS = 147; // V1 : 49 | V2 : 56 | lot 8 : 64 | lot 7 : 68 | borne robuste : 143 | calibres : 147
 // écart temporal mesuré + règle des 300 lignes : 94 | recoloriage V2 2,5 D : 101 | lunettes portees refusees : 103 | distance mesuree + borne anatomique : 117
 // carte = mire de calibration (focale + distance mesurées) : 132 | accrochage des coins + balayage : 139
 

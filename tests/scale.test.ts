@@ -37,6 +37,7 @@ import {
   H,
   LANDMARKS_100CM,
   LANDMARKS_50CM,
+  LANDMARKS_138,
   LANDMARKS_CAL,
   makeFaceAtYaw,
   W,
@@ -214,5 +215,84 @@ describe('Échelle 3 — chaque frame', () => {
     const k = 4;
     expect(planeScale(k, 400)).toBe(k); // 400 mm devant les tempes : impossible
     expect(planeScale(k, Number.NaN)).toBe(k);
+  });
+});
+
+/**
+ * ⭐ La question que le produit doit trancher : « une 46 ou une 48 ? »
+ *
+ * Un pas de calibre de 2 mm change la largeur totale de ~4 mm — 2 mm par verre.
+ * Or l'incertitude sur la largeur du VISAGE vaut ±2,5 % en mode carte, soit
+ * ±3,6 mm sur un visage de 145 : du même ordre. On pourrait en conclure que
+ * l'app ne sait pas départager les deux tailles. Ce serait une erreur de
+ * raisonnement, et ces tests disent pourquoi.
+ *
+ * Le client ne demande pas une largeur absolue : il compare DEUX montures sur
+ * SON visage. L'erreur d'échelle du visage est alors **commune aux deux rendus**
+ * — elle les agrandit ou les rétrécit ensemble, et l'écart entre les deux
+ * survit intact. Ce qui doit être juste, c'est le RAPPORT des deux montures,
+ * qui ne dépend que de leurs `spec.json` respectifs.
+ */
+describe('choisir entre une taille 46 et une taille 48', () => {
+  /** Deux calibres du même modèle : 2 mm par verre, donc ~4 mm de largeur totale. */
+  const CALIBRE_STEP_MM = 4;
+
+  it('l’écart rendu à l’écran vaut exactement le pas de calibre', () => {
+    const t46 = specForTotalWidthMm(132);
+    const t48 = specForTotalWidthMm(132 + CALIBRE_STEP_MM);
+    const m = frameMetrics(LANDMARKS_138, W, H, makeCal(), 0);
+
+    const ecartPx = renderedFrameWidthPx(t48, m) - renderedFrameWidthPx(t46, m);
+    expect(ecartPx / m.livePxPerMm).toBeCloseTo(CALIBRE_STEP_MM, 6);
+  });
+
+  /**
+   * 🔴 LE test qui répond vraiment à la question — et qui a démenti la première
+   * version de ce raisonnement.
+   *
+   * On avait écrit : « l'erreur de calibration est commune aux deux rendus,
+   * donc elle ne brouille pas le choix ». **Faux, et le test l'a dit.** Ce qui
+   * est commun, c'est le rapport entre les DEUX MONTURES. Leur rapport au
+   * VISAGE, lui, se déplace en 1/calibration : croire le visage 10 % plus large
+   * qu'il n'est dessine les deux montures 10 % plus étroites par rapport à lui.
+   *
+   * Ce qui est donc verrouillé ici, c'est le vrai invariant : le RAPPORT des
+   * deux tailles entre elles, exact quelle que soit la calibration.
+   */
+  it('GARDE-FOU : le rapport entre les deux tailles est exact, calibration fausse ou non', () => {
+    const t46 = specForTotalWidthMm(132);
+    const t48 = specForTotalWidthMm(132 + CALIBRE_STEP_MM);
+
+    for (const biais of [0.9, 0.95, 1.0, 1.05, 1.1]) {
+      const m = frameMetrics(LANDMARKS_138, W, H, makeCal({ faceWidthMm: 138 * biais }), 0);
+      expect(
+        renderedFrameWidthPx(t48, m) / renderedFrameWidthPx(t46, m),
+        `biais=${biais}`,
+      ).toBeCloseTo((132 + CALIBRE_STEP_MM) / 132, 9);
+    }
+  });
+
+  /**
+   * ⚠️ Le chiffre qui décide, et il n'est pas confortable : avec la carte à
+   * 2,5 %, l'incertitude sur la largeur du visage déplace la monture APPARENTE
+   * de 3,3 mm sur 132 — soit 0,8 pas de calibre. Deux tailles voisines restent
+   * donc départageables **par comparaison**, mais pas de façon absolue.
+   *
+   * Conclusion pratique, à ne pas enjoliver : pour trancher une taille 46
+   * contre une 48 sans hésitation, il faut descendre la calibration sous 1,5 %.
+   */
+  it('chiffre la marge : la carte à 2,5 % vaut 0,8 pas de calibre', () => {
+    const CARD = 0.025;
+    const pasEquivalents = (132 * CARD) / CALIBRE_STEP_MM;
+    expect(pasEquivalents).toBeGreaterThan(0.5);
+    expect(pasEquivalents).toBeLessThan(1.0);
+  });
+
+  it('…et le pas de calibre reste bien au-dessus du bruit de pointage du sprite', () => {
+    // Le sprite est contrôlé par trois cotes indépendantes concordantes à 4 %
+    // (§4). Sur les ~44 mm d'un verre, cela borne l'écart de cote à 1,8 mm par
+    // verre au PIRE — le pas de 2 mm par verre reste au-dessus, donc lisible.
+    const spec = specForTotalWidthMm(132);
+    expect(spec.aMm * 0.04).toBeLessThan(CALIBRE_STEP_MM / 2);
   });
 });
