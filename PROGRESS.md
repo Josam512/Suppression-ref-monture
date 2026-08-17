@@ -875,6 +875,24 @@ banc navigateur vert (23 contrôles).
 
 ## Journal
 
+- **2026-08-17** — **La focale est mesurée une fois, puis mémorisée et réutilisée**
+  (`core/cameraProfile.ts`). Le balayage la mesurait déjà, s'en servait pour une
+  conversion, puis la **jetait** : à la séance suivante — ou si le client passait la
+  rotation — la chaîne retombait sur le champ de vision supposé, faux de 46 % sur le
+  premier sujet réel. Elle est désormais persistée sous forme **normalisée**
+  (`focale ÷ largeur d'image`), donc invariante par changement de résolution, sous une clé
+  `localStorage` **séparée de la calibration** : « refaire la calibration » décrit un
+  visage et ne doit pas jeter la mesure d'un objectif. Fusion pondérée par l'inverse de la
+  variance entre séances, avec **plancher systématique de 2 %** — le moyennage tue le bruit
+  de pointage, pas la distorsion ni le point principal supposé au centre.
+  **Ce que ça débloque :** une vue frontale unique, qui ne peut PAS porter la focale et que
+  `cameraFromCard` refuse à juste titre, redonne une distance juste par simple division.
+  Sur les coins réels de la photo du sujet : **43,1 cm**. 16 tests, dont trois bâtis sur
+  ces coins réels.
+  ⚠️ Un test écrit « doubler la focale double la distance » a rougi : mesure faite, le
+  rapport vaut 1,957 — le terme de fuite de l'homographie ne porte pas la focale. C'était
+  l'énoncé qui était faux, pas le code.
+
 - **2026-08-17** — **La contrainte de tournage est retirée.** `isTooCloseForCard` et le
   « reculez, il faut au moins 60 cm » (bouton de validation désactivé) sont **supprimés** :
   c'était un problème de mesure converti en contrainte imposée au client, l'erreur n°11 du

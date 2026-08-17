@@ -23,6 +23,14 @@ import { calibrateWithCardMeasured, type UserCalibration } from '../core/calibra
 import { refineQuad } from '../core/cardEdges.js';
 import type { CardQuad } from '../core/cardPose.js';
 import { cameraFromSweep, measureDistance } from '../core/cardSweep.js';
+import {
+  focalPxFor,
+  isProfileUsable,
+  mergeProfile,
+  profileFromSweep,
+  type CameraProfile,
+} from '../core/cameraProfile.js';
+import { cardDistanceWithFocal } from '../core/cardPose.js';
 import { CalibrationError } from '../core/geom.js';
 import { motionMask, type ImageBuffer } from '../core/silhouette.js';
 import type { Live } from './liveState.js';
@@ -37,6 +45,14 @@ export interface V1CalibrationDeps {
   onFailed(message: string): void;
   /** Passe à l'étape de rotation, avec sa jauge à zéro. */
   onRotationStart(): void;
+  /**
+   * ⭐ Profil d'objectif déjà mesuré lors d'une séance précédente, ou `null`.
+   * La focale est une propriété de l'APPAREIL : mesurée une fois, elle sert
+   * pour toutes les vues suivantes (`core/cameraProfile.ts`).
+   */
+  cameraProfile: CameraProfile | null;
+  /** Appelé quand le balayage a produit un profil meilleur ou nouveau. */
+  onCameraProfile(profile: CameraProfile): void;
 }
 
 /** Tolérance d'accrochage pendant le balayage : la tête bouge entre deux images. */
@@ -80,14 +96,48 @@ export function useV1Calibration(deps: V1CalibrationDeps): V1Calibration {
     // une marge plus large. Le client doit pouvoir essayer des lunettes.
     let measured: { cardDistanceMm: number; relError: number } | null = null;
     const quads = card.quad === null ? [] : [card.quad, ...(probe?.quads() ?? [])];
+    const now = Date.now();
+
     if (quads.length > 0 && card.quad !== null) {
       try {
         const sweep = cameraFromSweep(quads, card.w, card.h);
         const d = measureDistance(card.quad, sweep, card.w, card.h);
         measured = { cardDistanceMm: d.cardDistanceMm, relError: d.relError };
+
+        // ⭐ La focale ne sert plus une seule fois puis part à la poubelle : on
+        // la garde. Elle appartient à l'objectif du client, pas à cette séance.
+        try {
+          const fresh = profileFromSweep(sweep, card.w, now);
+          deps.onCameraProfile(mergeProfile(deps.cameraProfile, fresh));
+        } catch {
+          // Focale hors bornes : on ne persiste RIEN. Un profil absurde
+          // contaminerait toutes les séances suivantes — bien pire qu'une
+          // séance ratée.
+        }
       } catch {
         // Carte perdue de vue, ou focale trop dispersée pour valoir mieux que
         // l'a priori. `cardSweep` refuse lui-même dans ce cas : on le suit.
+      }
+    }
+
+    // ⭐ Repli MESURÉ, et non plus a priori. Le balayage a échoué — carte
+    // perdue, rotation passée, vue trop frontale pour porter la focale — mais
+    // si l'objectif a déjà été mesuré une fois, la distance redevient une
+    // simple division : elle ne dépend plus que de la TAILLE apparente de la
+    // carte, qui est du premier ordre et donc robuste.
+    if (measured === null && card.quad !== null && isProfileUsable(deps.cameraProfile, now)) {
+      const profile = deps.cameraProfile as CameraProfile;
+      try {
+        const cardDistanceMm = cardDistanceWithFocal(
+          card.quad,
+          card.w,
+          card.h,
+          focalPxFor(profile, card.w),
+        );
+        measured = { cardDistanceMm, relError: profile.relError };
+      } catch {
+        // Cadre inexploitable : on laisse `measured` à null, et l'aval élargit
+        // la marge au lieu de bloquer quoi que ce soit.
       }
     }
 
