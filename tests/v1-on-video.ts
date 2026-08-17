@@ -20,8 +20,7 @@
 import { calibrateWithCardMeasured } from '../src/core/calibration.js';
 import { rollRadOf } from '../src/core/faceMetrics.js';
 import type { NormalizedLandmark } from '../src/core/geom.js';
-import { setProbeLandmark, setReferencePair, type RotatedView } from '../src/core/parallax.js';
-import { depthFromRotation } from '../src/core/depthFit.js';
+import { type RotatedView } from '../src/core/parallax.js';
 import { motionMask, type ImageBuffer } from '../src/core/silhouette.js';
 import { createLandmarker, yawFromMatrix } from '../src/tracking/landmarker.js';
 
@@ -195,6 +194,106 @@ export async function surveyVideo(videoUrl: string): Promise<Survey> {
   };
 }
 
+/**
+ * ⭐ AUDIT — le yaw de MediaPipe est-il À L'ÉCHELLE ?
+ *
+ * Toute la profondeur repose dessus au premier ordre : `Δz = Δu / sin θ`. Si
+ * MediaPipe annonce 20° là où la tête en a tourné 30, la profondeur sort
+ * gonflée d'un facteur 1,5 — et **de façon parfaitement stable d'une vue à
+ * l'autre**, donc avec l'air d'une bonne mesure. C'est exactement le mode
+ * d'échec que ce projet combat, et rien dans la chaîne ne l'attraperait.
+ *
+ * Le soupçon est chiffré : la mesure rend 35,6 mm entre les canthus externes et
+ * le sellion, là où l'anatomie en donne 15 à 20.
+ *
+ * ## Comment on vérifie sans mire ni ground truth
+ *
+ * Un yaw est une rotation autour de la VERTICALE. Il raccourcit donc les
+ * longueurs horizontales d'un facteur cos θ, et **ne touche à aucune longueur
+ * verticale**. Le rapport
+ *
+ *     r(θ) = (écart horizontal des canthus externes) / (hauteur front ↔ menton)
+ *
+ * vaut donc `r0·cos θ`, et il est INSENSIBLE à la distance caméra puisque les
+ * deux termes s'y échelonnent pareil. On en tire un yaw mesuré directement dans
+ * les pixels, sans passer par la matrice — donc opposable à elle.
+ *
+ * ⚠️ Ce n'est PAS un estimateur de yaw pour l'application (§4 l'interdit : il
+ * dépendrait d'une morphologie supposée, ici le rapport largeur/hauteur du
+ * visage). C'est un CONTRÔLE : le rapport `r0` de la personne est pris sur ses
+ * propres images frontales, donc aucune morphologie n'est supposée. Il vit dans
+ * l'atelier et ne peut pas remonter dans `src/`.
+ */
+interface YawAudit {
+  /** Médiane de (yaw mesuré dans les pixels) / (yaw MediaPipe). 1 = MediaPipe juste. */
+  slope: number;
+  /** Dispersion robuste de ce rapport. */
+  spread: number;
+  n: number;
+  rows: string[];
+}
+
+function median(xs: readonly number[]): number {
+  if (xs.length === 0) return NaN;
+  const s = [...xs].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 === 1 ? (s[mid] ?? NaN) : ((s[mid - 1] ?? NaN) + (s[mid] ?? NaN)) / 2;
+}
+
+/** Écart des canthus externes ÷ hauteur front↔menton, dé-rollé. Sans dimension. */
+function shapeRatio(f: Frame, w: number, h: number): number {
+  const at = (i: number): { x: number; y: number } => {
+    const p = f.lm[i];
+    return { x: (p?.x ?? 0) * w, y: (p?.y ?? 0) * h };
+  };
+  const c = Math.cos(f.rollRad);
+  const s = Math.sin(f.rollRad);
+
+  const eL = at(33);
+  const eR = at(263);
+  const horiz = Math.abs((eR.x - eL.x) * c + (eR.y - eL.y) * s);
+
+  const top = at(10);
+  const chin = at(152);
+  const vert = Math.abs(-(chin.x - top.x) * s + (chin.y - top.y) * c);
+
+  return vert > 0 ? horiz / vert : NaN;
+}
+
+/** En deçà, acos est trop plat : le bruit sur `r` explose en degrés. */
+const AUDIT_MIN_YAW_RAD = 0.25; // ~14°
+
+function auditYaw(frames: readonly Frame[], w: number, h: number): YawAudit {
+  const pts = frames.map((f) => ({ yaw: Math.abs(f.yawRad), r: shapeRatio(f, w, h) }));
+
+  const frontal = pts.filter((p) => p.yaw < 0.06 && Number.isFinite(p.r)).map((p) => p.r);
+  const r0 = median(frontal.length >= 3 ? frontal : pts.map((p) => p.r).filter(Number.isFinite));
+
+  const ratios: number[] = [];
+  const rows: string[] = [];
+  for (const p of pts) {
+    if (!Number.isFinite(p.r) || p.yaw < AUDIT_MIN_YAW_RAD) continue;
+    const cosMeasured = Math.min(1, Math.max(-1, p.r / r0));
+    const yawMeasured = Math.acos(cosMeasured);
+    ratios.push(yawMeasured / p.yaw);
+    if (rows.length < 12) {
+      rows.push(
+        `MediaPipe ${((p.yaw * 180) / Math.PI).toFixed(1).padStart(5)}°  ` +
+          `pixels ${((yawMeasured * 180) / Math.PI).toFixed(1).padStart(5)}°  ` +
+          `rapport ${(yawMeasured / p.yaw).toFixed(2)}`,
+      );
+    }
+  }
+
+  const slope = median(ratios);
+  return {
+    slope,
+    spread: median(ratios.map((x) => Math.abs(x - slope))) * 1.4826,
+    n: ratios.length,
+    rows,
+  };
+}
+
 export interface V1Result {
   faceWidthMm: number;
   relError: number;
@@ -233,36 +332,13 @@ export async function runV1(
     h: l.h,
   }));
 
-  // Comparaison des repères sagittaux candidats : le front est OCCULTÉ par la
-  // carte elle-même, ce que la première vraie vidéo a révélé.
-  for (const [refNom, ra, rb] of [
-    ['tempes 234/454 (glissantes)', 234, 454],
-    ['canthus externes 33/263', 33, 263],
-    ['canthus internes 133/362', 133, 362],
-    ['ailes du nez 129/358', 129, 358],
-  ] as const) {
-    setReferencePair(ra, rb);
-    const ligne: string[] = [];
-    for (const [nom, idx] of [
-      ['151 front', 151],
-      ['168 sellion', 168],
-      ['4 nez', 4],
-    ] as const) {
-      setProbeLandmark(idx);
-      try {
-        const d = depthFromRotation(views, 129.6, 780);
-        ligne.push(`${nom} ${d.depthMm.toFixed(1)}±${(d.depthRelError * 100).toFixed(0)}%`);
-      } catch {
-        try {
-          setProbeLandmark(idx);
-          ligne.push(`${nom} refus`);
-        } catch { /* rien */ }
-      }
-    }
-    console.log(`   réf ${refNom.padEnd(30)} ${ligne.join('  |  ')}`);
-  }
-  setProbeLandmark(151);
-  setReferencePair(33, 263); // le défaut du module : coins externes des yeux
+  const audit = auditYaw(l.frames, l.w, l.h);
+  console.log(
+    `   AUDIT YAW — rapport (yaw mesuré dans les pixels)/(yaw MediaPipe) : ` +
+      `${audit.slope.toFixed(3)} ± ${audit.spread.toFixed(3)} sur ${audit.n} vues ` +
+      `(1.000 = MediaPipe juste ; 1,5 = profondeurs gonflées de 50 %)`,
+  );
+  for (const row of audit.rows) console.log(`      ${row}`);
 
   const frontalBuf = await buffer(l, frontal.t);
   const left = l.frames.reduce((a, b) => (b.yawRad < a.yawRad ? b : a));

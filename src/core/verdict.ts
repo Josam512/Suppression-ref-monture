@@ -19,6 +19,7 @@ import {
   type FrameMetrics,
 } from './faceMetrics.js';
 import { spriteToScreen } from './transform.js';
+import { BRIDGE_AHEAD_MM, planeScale } from './framePlane.js';
 
 export type Status = 'sous-taillee' | 'correcte' | 'surtaillee' | 'indetermine';
 
@@ -117,7 +118,10 @@ function horizontalOffsetMm(
   const ux = Math.cos(m.rollRad);
   const uy = Math.sin(m.rollRad);
   const dxPx = (eye.x - lens.x) * ux + (eye.y - lens.y) * uy;
-  return Math.abs(dxPx) / m.livePxPerMm;
+  // ⭐ Le centre optique est sur la FACE AVANT de la monture, au plan du pont.
+  // C'est donc l'échelle de ce plan-là qui convertit l'écart en millimètres,
+  // et non celle des tempes (`core/framePlane.ts`).
+  return Math.abs(dxPx) / planeScale(m.livePxPerMm, BRIDGE_AHEAD_MM);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

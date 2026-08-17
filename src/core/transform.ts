@@ -14,6 +14,7 @@
 import { CalibrationError, type Pt } from './geom.js';
 import type { FrameSpec } from './frameSpec.js';
 import type { FrameMetrics } from './faceMetrics.js';
+import { BRIDGE_AHEAD_MM, planeScale } from './framePlane.js';
 
 /**
  * ⭐ T1 — décalage vertical du centre du pont SOUS le sellion, en mm réels.
@@ -22,8 +23,13 @@ import type { FrameMetrics } from './faceMetrics.js';
  * monture ne se pose pas AU sellion : ses plaquettes portent légèrement plus
  * bas sur l'arête du nez.
  *
- * Compté en millimètres réels et converti par `livePxPerMm` — jamais en pixels
- * en dur, sinon la pose changerait avec la distance à la caméra.
+ * Compté en millimètres réels — jamais en pixels en dur, sinon la pose
+ * changerait avec la distance à la caméra.
+ *
+ * ⚠️ Converti à l'échelle du PLAN DU PONT, pas à celle des tempes : ces 3 mm
+ * se mesurent sur l'arête du nez, ~48 mm devant les repères 234/454, où
+ * l'échelle est 6 % plus grande (`core/framePlane.ts`). La correction ne vaut
+ * ici que 0,2 mm — mais c'est le bon plan, et il ne coûte rien.
  *
  * ⚠️ VALEUR PROVISOIRE — se calibre au lot 8, puis se fige avec sa date.
  * ⚠️ Ce n'est PAS un slider déguisé (§1 bug #1) : c'est une constante
@@ -47,6 +53,13 @@ export interface Affine {
  */
 export function spriteAffine(spec: FrameSpec, m: FrameMetrics): Affine {
   // Échelle isotrope : le yaw a déjà été retiré de livePxPerMm (S1, moitié 1/2).
+  //
+  // 🔴 C'est l'échelle du plan des TEMPES, et elle doit le rester. La LARGEUR
+  // de la monture se réalise à ses tenons, plaqués sur les côtés de la tête —
+  // pas à son pont, 48 mm plus avant. Redimensionner le sprite au plan du pont
+  // dessinerait la monture 6 % trop large (8 mm sur 132) : le critère de succès
+  // du §0 tomberait, sans que rien à l'écran ne le signale.
+  // Raisonnement complet et test de verrouillage : `core/framePlane.ts`.
   const s = m.livePxPerMm / spec.spritePxPerMm;
 
   // ⭐ Correctif S1, moitié 2/2 — le cos du yaw, UNE seule fois, sur X seulement.
@@ -65,7 +78,7 @@ export function spriteAffine(spec: FrameSpec, m: FrameMetrics): Affine {
   // Le centre du pont du sprite doit tomber sur l'ancre écran, décalée de
   // VERTICAL_OFFSET_MM vers le bas.
   const anchorX = m.anchor.x;
-  const anchorY = m.anchor.y + VERTICAL_OFFSET_MM * m.livePxPerMm;
+  const anchorY = m.anchor.y + VERTICAL_OFFSET_MM * planeScale(m.livePxPerMm, BRIDGE_AHEAD_MM);
 
   const bx = spec.bridgeCenter.x;
   const by = spec.bridgeCenter.y;

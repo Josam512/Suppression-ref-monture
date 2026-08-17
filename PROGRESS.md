@@ -650,11 +650,87 @@ puis rotation lente. Trente secondes, et les trois mesures deviennent testables.
 | `putImageData` **remplace** les pixels au lieu de les composer : le recoloriage découpait un rectangle noir autour de la monture | dans l'application, le canvas est transparent au-dessus du `<video>` — le trou tombait sur du vide. **Le mode d'échec exact de `destination-out`, une deuxième fois** | composition par `drawImage` sur un calque isolé |
 | La règle des 300 lignes du §3 n'était vérifiée par **rien** | sept fichiers l'avaient franchie ou l'approchaient sans que rien ne le signale | barrage `i` du hook + test `guards.test.ts` |
 
-**Contrôles :** 117 tests Vitest · `tsc --noEmit` en `strict` · `npm run build` · `npm run smoke`
-21 contrôles verts, dont la preuve métrologique du rendu inchangée à 131,82 mm pour 132,00 attendus.
+**Contrôles :** 120 tests Vitest · `tsc --noEmit` en `strict` · `npm run build` · `npm run smoke`
+23 contrôles verts, dont la preuve métrologique du rendu inchangée à 131,82 mm pour 132,00 attendus.
+
+---
+
+## « Des lunettes sont posées sur le nez, pas sur les yeux » — ce que ça change, et ce que ça ne change pas
+
+C'est vrai. Et la conclusion que j'en avais tirée au tour précédent — *donc il faut
+dessiner le sprite à l'échelle du plan du nez, soit ~6 % plus grand* — était **fausse**.
+Je la corrige avant de la coder, parce qu'elle aurait cassé le seul critère de succès
+du projet en ayant l'air de l'améliorer.
+
+### Pourquoi la conclusion est fausse
+
+Une monture n'est pas plate. Son plan avant (pont, faces des verres) est **mesuré** à
+~48 mm devant les repères temporaux sur le sujet réel. Mais sa **largeur**, les 132 mm
+qu'on affiche, ne se réalise pas là : elle se réalise à ses **tenons**, plaqués sur les
+côtés de la tête, à quelques millimètres devant le contour du visage. C'est là que
+l'opticien pose son réglet, et c'est là que la caméra voit les deux bords.
+
+Mettre tout le sprite à l'échelle du pont dessinerait donc une monture **6 % plus large
+qu'elle n'est** — 8 mm sur 132. Un opticien lirait 140 mm sur un visage de 152 là où la
+réalité donne 132. Et l'image aurait l'air **meilleure**, puisque sa partie centrale
+tomberait mieux : le mode d'échec exact que tout ce dépôt combat.
+
+**Verrouillé** dans l'invariant « la distance ne change pas le rapport monture/visage »,
+qui affirme désormais aussi que ce rapport n'est **pas** celui du plan du pont.
+
+### Ce que le plan du nez gouverne réellement — et qui est maintenant juste
+
+| Grandeur | Plan | Effet de la correction |
+|---|---|---|
+| Largeur rendue du sprite | tempes / tenons | **inchangée** — c'était déjà juste |
+| `VERTICAL_OFFSET_MM` (pose sur l'arête du nez) | pont | +0,2 mm |
+| Décentrement (centre optique du verre) | pont | −6 % sur l'écart lu |
+
+Petit, mais gratuit et du bon côté. `core/framePlane.ts` porte le raisonnement complet,
+les trois profondeurs et leurs incertitudes.
+
+### Ce qu'on ne corrige PAS, et pourquoi
+
+Les tenons ne sont pas exactement dans le plan des repères 234/454 : ~8 mm devant, soit
+1 % d'échelle. On ne sait pas cette valeur à mieux que ±6 mm — **75 % d'incertitude sur
+une correction de 1 %**. Le projet a déjà tranché ce cas de figure (`MAX_DEPTH_REL_ERROR`,
+50 %) : au-delà, corriger déplace l'erreur au lieu de la retirer. Ce 1 % reste donc un
+biais **déclaré** (`ENDPIECE_AHEAD_MM`) plutôt qu'une correction devinée.
+
+### L'audit qui manquait : le yaw de MediaPipe est-il à l'échelle ?
+
+Toute la profondeur repose dessus au premier ordre (`Δz = Δu / sin θ`). Si MediaPipe
+annonçait 20° là où la tête en tourne 30, **toutes** les profondeurs sortiraient gonflées
+de 50 %, de façon parfaitement stable d'une vue à l'autre — donc avec l'air d'une bonne
+mesure. Rien dans la chaîne ne l'aurait attrapé. Le soupçon était chiffré : 35,6 mm entre
+les canthus externes et le sellion, là où l'anatomie en donne plutôt 15 à 20.
+
+Vérifié **sans mire et sans nouvelle prise de vue**, sur la vidéo déjà fournie. Un yaw
+tourne autour de la verticale : il raccourcit les longueurs horizontales de `cos θ` et ne
+touche à **aucune** longueur verticale. Le rapport
+
+> (écart horizontal des canthus externes) / (hauteur front ↔ menton)
+
+vaut donc `r₀·cos θ`, et il est insensible à la distance caméra puisque les deux termes
+s'y échelonnent pareil. `r₀` est pris sur les images frontales **de la personne
+elle-même** : aucune morphologie n'est supposée.
+
+**Résultat : 1,013 ± 0,141 sur 70 vues.** MediaPipe est juste, à ±14 % près. La
+profondeur mesurée et la parallaxe de +6,7 % tiennent. *(Cet audit vit dans l'atelier,
+pas dans `src/` : le §4 interdit un estimateur de yaw 2D dans l'application, et il a
+raison — c'est un contrôle, pas une source.)*
+
+**Reste ouvert :** l'écart entre les 35,6 mm mesurés et les 15–20 mm attendus par
+l'anatomie n'est pas expliqué par le yaw. Reste l'hypothèse que les repères de MediaPipe
+soient régularisés vers son maillage canonique sous rotation. Non tranchable sans une
+mesure au pied à coulisse sur le sujet.
 
 ## Journal
 
+- **2026-08-17** — Plans de rendu explicités (`core/framePlane.ts`) : la largeur reste au plan
+  des tempes, le pont et le décentrement passent au plan du nez. Correction d'une conclusion
+  erronée de ma part, qui aurait dessiné la monture 6 % trop large. Audit du yaw MediaPipe :
+  1,013 ± 0,141, il est juste.
 - **2026-08-17** — Carte obligatoire en V1, parallaxe et écart temporal **mesurés**,
   recoloriage 2,5 D en V2. Deux défauts trouvés dont un identique en nature à celui du
   lot précédent (`putImageData` après `destination-out`).
