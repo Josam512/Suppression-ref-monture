@@ -153,6 +153,30 @@ try {
     !boutons.some((b) => /valider/i.test(b)),
   );
 
+  // 🔴 AUCUN CUL-DE-SAC. Le cadre peut ne jamais accrocher — carte sombre sur
+  // peau sombre, contre-jour, doigt sur un bord. Si la seule issue restante est
+  // « Annuler », on interdit l'essayage a ce client-la (§0.0.2). La sortie doit
+  // etre offerte DES LA PREMIERE SECONDE, sans qu'il ait a deviner qu'un delai
+  // finira par le sauver.
+  const sortie = page.getByRole('button', { name: /placer les rep|placer les repères/i });
+  check('V1 : une sortie vers le pointage manuel est offerte d’emblee', (await sortie.count()) === 1);
+
+  await sortie.click();
+  await page.waitForTimeout(2500);
+  const manuel = await page.locator('body').innerText();
+  check(
+    'V1 : elle mene bien au pointage manuel, avec un bouton de validation',
+    /placez les deux rep/i.test(manuel) && /Valider/i.test(manuel),
+  );
+  check('V1 : et on peut revenir au cadre', /Réessayer avec le cadre|Reessayer avec le cadre/i.test(manuel));
+
+  await page.getByRole('button', { name: /Réessayer avec le cadre/ }).click();
+  await page.waitForTimeout(2000);
+  check(
+    'V1 : le retour au cadre remet bien l’etape live',
+    /amenez-la dans le cadre/i.test(await page.locator('body').innerText()),
+  );
+
   // La V2 doit s'ouvrir aussi, et annoncer sa dilatation de sprite.
   const store = await ctx.newPage();
   const storeErrors = [];

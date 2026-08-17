@@ -23,14 +23,14 @@ import type { UserCalibration } from '../core/calibration.js';
 import type { FrameSpec } from '../core/frameSpec.js';
 import { type NormalizedLandmark } from '../core/geom.js';
 import { OVERLAY_PADDING_MM } from '../render/composite.js';
-import { drawOverlay } from '../render/overlay.js';
 import { CalibrationPanel, type Phase } from './CalibrationPanel.js';
-import { CardGuideStep, runCardStep } from './cardGuideStep.js';
+import { CardGuideStep, runCardStep, snapshotVideo } from './cardGuideStep.js';
 import { wornFrameCalibration } from './wornFrameStep.js';
 import { stepCrossCheck, stepRotation } from './liveSteps.js';
 import { FramePicker } from './FramePicker.js';
 import { createLive, type Live } from './liveState.js';
-import { paintScene } from './renderScene.js';
+import { paintLost, paintScene } from './renderScene.js';
+import { drawOverlay } from '../render/overlay.js';
 import { useCatalogue } from './catalogue.js';
 import { useV1Calibration } from './useV1Calibration.js';
 import type { CameraProfile } from '../core/cameraProfile.js';
@@ -80,15 +80,14 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
   const [wornSpec, setWornSpec] = useState<FrameSpec | null>(null);
   const wornSprites = useSprites(wornSpec);
 
-  // Le mode ne descend jamais dans core/ ni render/ : c'est une VALEUR qui descend.
+  // Le mode ne descend jamais dans core/ : c'est une VALEUR qui descend.
   const overlayPaddingMm = props.mode === 'store' ? OVERLAY_PADDING_MM : 0;
 
   /**
-   * ⚠️ La phase, lue DEPUIS LA BOUCLE de détection.
-   *
-   * `phase` est un état React : la closure de `renderFrame` capturerait sa
-   * valeur au moment du rendu, et la boucle continuerait de croire qu'on est à
-   * l'étape carte longtemps après. Une `ref` est la seule lecture juste ici.
+   * ⚠️ La phase, lue DEPUIS LA BOUCLE. `phase` est un état React : la closure de
+   * `renderFrame` en capturerait la valeur au moment du rendu et croirait
+   * encore être à l'étape carte longtemps après. Une `ref` est la seule
+   * lecture juste ici.
    */
   const phaseRef = useRef<Phase['kind']>('loading');
   phaseRef.current = phase.kind;
@@ -122,18 +121,23 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
     setPhase({ kind, frozen: off });
   }, []);
 
+  /** (Re)commencer l'étape carte, compteurs à zéro. */
+  const enterGuide = useCallback(() => {
+    guideStep.current.reset();
+    live.current.lastGuideFill = -1;
+    setPhase({ kind: 'mesure-carte', fill: 0 });
+  }, []);
+
   /** Repartir à zéro : la calibration mémorisée est jetée, l'étape carte reprend. */
   const restart = useCallback(() => {
     localStorage.removeItem(STORAGE_KEY);
     live.current.cal = null;
     live.current.irisSamples = null;
-    live.current.lastGuideFill = -1;
-    guideStep.current.reset();
     setCal(null);
     setNotices([]);
     if (props.mode === 'store') freeze('mesure-monture');
-    else setPhase({ kind: 'mesure-carte', fill: 0 });
-  }, [freeze, props.mode]);
+    else enterGuide();
+  }, [enterGuide, freeze, props.mode]);
 
   const v1 = useV1Calibration({
     live,
@@ -144,8 +148,7 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
     },
     onFailed: (message) => {
       setNotices([message]);
-      guideStep.current.reset();
-      setPhase({ kind: 'mesure-carte', fill: 0 });
+      enterGuide();
     },
     onRotationStart: () =>
       setPhase({ kind: 'mesure-rotation', ratio: 0, degrees: { left: 0, right: 0 } }),
@@ -161,14 +164,13 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
       const s = live.current;
       s.lastLandmarks = lm;
 
-      // ⭐ L'étape carte est LIVE : le cadre se dessine sur le flux, et la mesure
-      // se prend au moment exact où la carte le remplit. Aucun bouton.
+      // ⭐ Étape carte LIVE : mesure prise à l'image exacte du remplissage.
       if (phaseRef.current === 'mesure-carte') {
         runCardStep(guideStep.current, ctx, lm, videoRef.current, {
           locked: v1.onCardValidated,
+          stalled: (frozen) => setPhase({ kind: 'mesure-carte-manuelle', frozen }),
           fill: (ratio) => {
-            // Même précaution qu'à la rotation : ne pas faire rendre React
-            // soixante fois par seconde pendant que la détection travaille.
+            // Comme à la rotation : pas un rendu React par image.
             if (Math.abs(ratio - s.lastGuideFill) <= 0.02) return;
             s.lastGuideFill = ratio;
             setPhase({ kind: 'mesure-carte', fill: ratio });
@@ -193,17 +195,9 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
     [finishCalibration, v1],
   );
 
-  /** ⚠️ Le chemin d'échec DOIT dessiner (§1 bug #3) : sinon la panne est
-   * indiscernable du fonctionnement normal. */
   const renderLost = useCallback((ctx: CanvasRenderingContext2D, n: number): void => {
     live.current.verdict = null;
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-    drawOverlay(ctx, {
-      verdict: null,
-      consecutiveFailures: n,
-      hint: n > 5 ? 'Placez votre visage bien en face de la caméra.' : null,
-    });
+    paintLost(ctx, n);
   }, []);
 
   useCameraLoop(videoRef, canvasRef, {
@@ -213,7 +207,7 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
     onReady: () => {
       if (live.current.cal !== null) setPhase({ kind: 'essayage' });
       else if (props.mode === 'store') freeze('mesure-monture');
-      else setPhase({ kind: 'mesure-carte', fill: 0 });
+      else enterGuide();
     },
     onError: (message) => setPhase({ kind: 'error', message }),
   });
@@ -262,6 +256,12 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
         phase={phase}
         catalogue={essayables}
         onCancel={props.onQuit}
+        onCardValidated={v1.onCardValidated}
+        onManual={() => {
+          const shot = snapshotVideo(videoRef.current, canvasRef.current);
+          if (shot !== null) setPhase({ kind: 'mesure-carte-manuelle', frozen: shot });
+        }}
+        onRetryGuide={enterGuide}
         onSkipRotation={() => {
           live.current.probe = null;
           finishCalibration();

@@ -15,6 +15,7 @@ import { frameMetrics } from '../core/faceMetrics.js';
 import type { NormalizedLandmark } from '../core/geom.js';
 import { verdict } from '../core/verdict.js';
 import { drawFrame } from '../render/composite.js';
+import { drawOverlay } from '../render/overlay.js';
 import { drawRecolored } from '../render/recolorLive.js';
 import { faceOutlinePath } from '../tracking/landmarker.js';
 import type { Live } from './liveState.js';
@@ -59,4 +60,22 @@ export function paintScene(
   }
 
   live.verdict = verdict(lm, live.cal, live.sprites.spec, w, h, yawRad);
+}
+
+/**
+ * ⚠️ Le chemin d'échec DOIT dessiner (§1 bug #3).
+ *
+ * Une première implémentation incrémentait le compteur d'échecs sans jamais le
+ * peindre : détection perdue = canvas figé sur la dernière image, et l'alarme
+ * exigée n'apparaissait jamais. La panne était strictement indiscernable d'un
+ * fonctionnement normal. Le banc navigateur le vérifie à chaque exécution.
+ */
+export function paintLost(ctx: CanvasRenderingContext2D, consecutiveFailures: number): void {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  drawOverlay(ctx, {
+    verdict: null,
+    consecutiveFailures,
+    hint: consecutiveFailures > 5 ? 'Placez votre visage bien en face de la caméra.' : null,
+  });
 }

@@ -37,12 +37,35 @@ export interface GuideStepFrame {
 /** Épaisseur du tracé du cadre, en pixels. */
 const STROKE_PX = 4;
 
+/**
+ * Délai au-delà duquel on cesse d'attendre et on propose le pointage manuel.
+ *
+ * 🔴 Ce n'est pas un confort, c'est l'interdiction du CUL-DE-SAC. Le cadre peut
+ * ne jamais accrocher — carte sombre sur peau sombre, contre-jour, webcam très
+ * floue, doigt sur un bord. Sans issue, l'étape tourne indéfiniment et le seul
+ * bouton restant met le client dehors : on lui interdit l'essayage, ce que le
+ * §0.0.2 refuse. Douze secondes laissent largement le temps de deux ou trois
+ * essais francs avant de basculer.
+ *
+ * ⚠️ La bascule n'est jamais imposée : le client peut la demander tout de suite,
+ * et revenir au cadre depuis l'écran manuel.
+ */
+export const GUIDE_STALL_MS = 12_000;
+
 export class CardGuideStep {
   private readonly lock = new GuideLock();
   private readonly off = document.createElement('canvas');
+  /** Horodatage de la première image de l'étape. `null` tant qu'elle n'a pas commencé. */
+  private startedAt: number | null = null;
 
   reset(): void {
     this.lock.reset();
+    this.startedAt = null;
+  }
+
+  /** Vrai quand l'étape s'éternise et qu'il faut proposer autre chose. */
+  stalled(nowMs: number): boolean {
+    return this.startedAt !== null && nowMs - this.startedAt > GUIDE_STALL_MS;
   }
 
   /**
@@ -59,6 +82,7 @@ export class CardGuideStep {
   ): GuideStepFrame {
     const w = ctx.canvas.width;
     const h = ctx.canvas.height;
+    this.startedAt ??= performance.now();
     const guide = guideQuad(lm, w, h);
 
     let check: GuideCheck = { worstOffsetPx: Infinity, fill: 0, ok: false };
@@ -150,6 +174,8 @@ export function runCardStep(
     /** Reçoit l'image EXACTE du verrouillage, figée. */
     locked(widthPx: number, quad: CardQuad, frozen: HTMLCanvasElement): void;
     fill(ratio: number): void;
+    /** Ça n'accroche pas : on bascule sur le pointage manuel, image figée. */
+    stalled(frozen: HTMLCanvasElement): void;
   },
 ): void {
   const w = ctx.canvas.width;
@@ -157,19 +183,43 @@ export function runCardStep(
   const out = step.run(ctx, lm, video);
 
   if (out.locked === null) {
+    if (step.stalled(performance.now())) {
+      const shot = snapshot(video, w, h);
+      if (shot !== null) on.stalled(shot);
+      return;
+    }
     on.fill(out.fill);
     return;
   }
 
-  // 🔴 Seule exception au « live et jamais différé » (§0.0.2), et elle est
-  // nécessaire : la chaîne aval mesure le VISAGE sur les mêmes pixels que la
-  // carte. Sur deux images différentes, la personne aurait bougé entre les deux
-  // et le rapport carte/visage — qui EST la mesure — serait faux.
+  const frozen = snapshot(video, w, h);
+  if (frozen !== null) on.locked(out.locked.widthPx, out.locked.quad, frozen);
+}
+
+/**
+ * Fige l'image courante.
+ *
+ * 🔴 Seule exception au « live et jamais différé » (§0.0.2), et elle est
+ * nécessaire : la chaîne aval mesure le VISAGE sur les mêmes pixels que la
+ * carte. Sur deux images différentes, la personne aurait bougé entre les deux et
+ * le rapport carte/visage — qui EST la mesure — serait faux.
+ */
+function snapshot(video: HTMLVideoElement | null, w: number, h: number): HTMLCanvasElement | null {
+  if (video === null) return null;
   const frozen = document.createElement('canvas');
   frozen.width = w;
   frozen.height = h;
   const fctx = frozen.getContext('2d');
-  if (fctx === null || video === null) return;
+  if (fctx === null) return null;
   fctx.drawImage(video, 0, 0, w, h);
-  on.locked(out.locked.widthPx, out.locked.quad, frozen);
+  return frozen;
+}
+
+/** Fige la vidéo à la demande de l'IHM, hors boucle de rendu. */
+export function snapshotVideo(
+  video: HTMLVideoElement | null,
+  canvas: HTMLCanvasElement | null,
+): HTMLCanvasElement | null {
+  if (canvas === null) return null;
+  return snapshot(video, canvas.width, canvas.height);
 }

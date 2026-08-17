@@ -10,6 +10,8 @@
 
 import type { FrameSpec } from '../core/frameSpec.js';
 import { CardCalibration } from './CardCalibration.js';
+import { CardManual } from './CardManual.js';
+import type { CardQuad } from '../core/cardPose.js';
 import { RotationStep } from './RotationStep.js';
 import { WornFrameCalibration } from './WornFrameCalibration.js';
 
@@ -17,6 +19,7 @@ export type Phase =
   | { kind: 'loading'; ratio: number }
   | { kind: 'error'; message: string }
   | { kind: 'mesure-carte'; fill: number }
+  | { kind: 'mesure-carte-manuelle'; frozen: HTMLCanvasElement }
   | { kind: 'mesure-rotation'; ratio: number; degrees: { left: number; right: number } }
   | { kind: 'mesure-monture'; frozen: HTMLCanvasElement }
   | { kind: 'essayage' };
@@ -26,6 +29,11 @@ export interface CalibrationPanelProps {
   /** Toutes les montures, pour désigner celle qui est physiquement portée (V2). */
   catalogue: readonly FrameSpec[];
   onSkipRotation(): void;
+  /** Bascule immédiate vers le pointage manuel, à la demande du client. */
+  onManual(): void;
+  /** Retour au cadre depuis l'écran manuel. */
+  onRetryGuide(): void;
+  onCardValidated(widthPx: number, quad: CardQuad, frozen: HTMLCanvasElement): void;
   onWornFrameValidated(widthPx: number, spec: FrameSpec): void;
   onCancel(): void;
 }
@@ -42,7 +50,20 @@ export function CalibrationPanel(props: CalibrationPanelProps): JSX.Element | nu
   }
 
   if (phase.kind === 'mesure-carte') {
-    return <CardCalibration fill={phase.fill} onCancel={props.onCancel} />;
+    return (
+      <CardCalibration fill={phase.fill} onCancel={props.onCancel} onManual={props.onManual} />
+    );
+  }
+
+  // 🔴 Le filet : le cadre ne doit JAMAIS pouvoir enfermer le client (§0.0.2).
+  if (phase.kind === 'mesure-carte-manuelle') {
+    return (
+      <CardManual
+        frozen={phase.frozen}
+        onRetry={props.onRetryGuide}
+        onValidate={(widthPx, quad) => props.onCardValidated(widthPx, quad, phase.frozen)}
+      />
+    );
   }
 
   if (phase.kind === 'mesure-rotation') {
