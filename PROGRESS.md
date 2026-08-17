@@ -875,6 +875,15 @@ banc navigateur vert (23 contrôles).
 
 ## Journal
 
+- **2026-08-17** — `VERTICAL_OFFSET_MM` **supprimée**, remplacée par `poseAnchorOf`
+  (`core/faceMetrics.ts`) : X sur le sellion, Y sur la ligne des quatre canthi, le sprite
+  ancré par ses PROPRES centres optiques. La constante était **incalibrable**, pas
+  seulement non calibrée : elle ancrait le pont, alors que les centres optiques sont
+  10,4 mm plus bas sur `severine` — et cet écart change d'une monture à l'autre. Les
+  centres optiques tombaient donc ~13 mm sous la ligne des yeux. Vérifié sur un **vrai
+  visage** (photo du sujet, avant/après dans `docs/verification/`), et verrouillé au banc
+  par un contrôle **sans paramètre libre**. Le lot 8 perd sa moitié.
+
 - **2026-08-17** — `core/cardEdges.ts` + `core/edgeLines.ts` + `core/cardSweep.ts` : les
   coins se retrouvent tout seuls (0,05 px sur vérité terrain), un bord masqué par un doigt
   n'arrête plus rien, la focale sort du balayage. **Distance mesurée à 42,1 cm là où la

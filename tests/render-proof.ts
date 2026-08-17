@@ -18,10 +18,9 @@
  * chaîne géométrique. La forme réelle vient toujours d'une photo (§1 bug #2).
  */
 
-import { frameMetrics } from '../src/core/faceMetrics.js';
+import { frameMetrics, eyeLineY } from '../src/core/faceMetrics.js';
 import { totalFrameWidthMm, type FrameSpec } from '../src/core/frameSpec.js';
-import { spriteToScreen, VERTICAL_OFFSET_MM } from '../src/core/transform.js';
-import { BRIDGE_AHEAD_MM, planeScale } from '../src/core/framePlane.js';
+import { spriteToScreen } from '../src/core/transform.js';
 import type { UserCalibration } from '../src/core/calibration.js';
 import { drawFrame, OVERLAY_PADDING_MM } from '../src/render/composite.js';
 import { makeFace, makeFaceAtYaw, BASE_FACE_PX, W, H } from './fixtures/landmarks.js';
@@ -176,20 +175,27 @@ export function runProof(): ProofCase[] {
   out.push(compare('centre peint ↔ centre du pont projeté (x)', ancre.x, centre.x, 1.5, 'px'));
   out.push(compare('centre peint ↔ centre du pont projeté (y)', ancre.y, centre.y, 1.5, 'px'));
 
-  // ── 4. L'ancrage vertical vaut bien VERTICAL_OFFSET_MM sous le sellion.
+  // ── 4. ⭐ Les CENTRES OPTIQUES tombent sur la ligne des yeux.
   //
-  // ⚠️ Reconverti à l'échelle du PLAN DU PONT, pas à celle des tempes : ces
-  // 3 mm se mesurent sur l'arête du nez, ~48 mm devant les repères 234/454.
-  // Diviser par `livePxPerMm` ferait sortir 3,2 mm et l'écart passerait pour
-  // une erreur de pose alors qu'il est de la perspective (`core/framePlane.ts`).
-  const sellionY = (lm[168]?.y ?? 0) * H;
+  // Remplace l'ancien contrôle « décalage vertical sous le sellion », qui
+  // vérifiait `VERTICAL_OFFSET_MM` — une constante jamais calibrée, et qui ne
+  // pouvait pas l'être : elle ancrait le PONT, alors que la grandeur que l'œil
+  // juge est la hauteur des centres optiques, propre à chaque monture
+  // (`core/transform.ts`, en-tête).
+  //
+  // Ce contrôle-ci n'a aucun paramètre libre : il rougit si quiconque
+  // réintroduit un décalage vertical constant, quelle que soit sa valeur.
+  const lensMidSprite = {
+    x: SPEC.bridgeCenter.x,
+    y: (SPEC.lensCenterL.y + SPEC.lensCenterR.y) / 2,
+  };
   out.push(
     compare(
-      'décalage vertical sous le sellion',
-      VERTICAL_OFFSET_MM,
-      (centre.y - sellionY) / planeScale(m0.livePxPerMm, BRIDGE_AHEAD_MM),
-      0.3,
-      'mm',
+      'centres optiques ↔ ligne des yeux (y)',
+      eyeLineY(lm, W, H),
+      spriteToScreen(lensMidSprite, SPEC, m0).y,
+      0.5,
+      'px',
     ),
   );
 

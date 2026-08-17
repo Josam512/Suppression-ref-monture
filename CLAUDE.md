@@ -962,7 +962,12 @@ const sy  = s;                                    // ⭐ jamais sur Y
 - **Occlusion :** la branche doit passer *derrière* la tête. Construire un `Path2D` du contour du visage (landmarks de l'ovale facial), puis `ctx.globalCompositeOperation = 'destination-out'` sur la portion intérieure. Une branche qui flotte par-dessus la joue trahit immédiatement le trucage.
 - **Miroir :** la vidéo est affichée en miroir (naturel pour l'utilisateur). Le miroir s'applique **une seule fois**, au niveau du conteneur CSS. Les calculs de `core/` travaillent toujours en coordonnées non miroitées. Ne jamais mélanger les deux — source classique du bug « les lunettes partent du mauvais côté ».
 
-### 6.3 ⭐ T1 — `VERTICAL_OFFSET_MM` : comment la monture se pose sur le nez
+### 6.3 ⭐ T1 — comment la monture se pose sur le nez
+
+> 🔴 **SECTION PÉRIMÉE — voir §14.6.** `VERTICAL_OFFSET_MM` a été **supprimée** le
+> 2026-08-17. Tout ce qui suit décrit l'état antérieur et n'est conservé que pour
+> expliquer pourquoi cette constante ne pouvait pas être calibrée. Ne pas la
+> réintroduire.
 
 Cette constante était **utilisée dans `drawFrame` sans être définie nulle part**, ni spécifiée. C'est le genre de trou qui se remplit tout seul, mal, par un nombre inventé au moment où le rendu « ne tombe pas bien ».
 
@@ -1227,7 +1232,7 @@ Huit contrôles, tous exécutés par `npm run smoke` :
 | largeur peinte reconvertie en mm | l'erreur globale de la chaîne |
 | le padding alpha n'élargit pas la monture | B3 — 1624 px de fichier pour 1584 px de monture |
 | centre peint ↔ centre du pont projeté | B3, second volet : un sprite padé mais **décalé** |
-| décalage vertical sous le sellion | T1 — `VERTICAL_OFFSET_MM` réellement appliqué en mm |
+| centres optiques ↔ ligne des yeux | §14.6 — la pose verticale n'a plus de paramètre libre |
 | hauteur peinte à 20° vs 0° | S1 — le yaw ne raccourcit rien verticalement |
 | largeur à 20° / largeur à 0° = cos(yaw) | S1 — le cos appliqué **une** fois, pas deux |
 | dilatation V2 de chaque côté | §11.6 — la dilatation vaut bien 1,5 mm réels |
@@ -1365,7 +1370,7 @@ Retour arrière garanti en une commande : `git reset --hard lot-3-ok`. C'est ce 
 | 5 | ⭐ `core/transform.ts` (T3) + `render/composite.ts` + **correctif S1** | Sprite de face à l'échelle, **sans aucun slider** ; tête tournée à 30° → la monture ne rétrécit pas et sa hauteur ne bouge pas |
 | 6 | `core/verdict.ts` : seuil proportionnel borné, `classify` par intervalles (B2), légende | Deux chiffres affichés avec leurs marges ; cas limite → proposition de carte, **jamais de libellé flou** (§0.0.1) |
 | 7 | `render/temple.ts` : branche + occlusion | La branche apparaît en tournant la tête et passe derrière la joue |
-| 8 | **Calibration humaine** de `FACE_WIDTH_CORRECTION_MM` (S3) et `VERTICAL_OFFSET_MM` (T1) | Protocole du §5 exécuté sur ≥ 3 montures ; valeurs figées avec date et dispersion dans `PROGRESS.md` |
+| 8 | **Calibration humaine** de `FACE_WIDTH_CORRECTION_MM` (S3). ~~`VERTICAL_OFFSET_MM` (T1)~~ **supprimée, §14.6** | Protocole du §5 exécuté sur ≥ 3 montures ; valeurs figées avec date et dispersion dans `PROGRESS.md` |
 
 > ⚠️ **Le lot 8 n'est pas optionnel et ne peut pas être fait par l'agent.** Tant qu'il n'est pas
 > exécuté, les deux constantes valent une valeur provisoire et **la légende chiffrée est décalée**.
@@ -1730,7 +1735,7 @@ critère de succès du §0 tomberait, et l'image aurait l'air meilleure.
 | Grandeur | Plan | Constante |
 |---|---|---|
 | Largeur rendue du sprite | tempes / tenons | *aucune* — `livePxPerMm` brut |
-| `VERTICAL_OFFSET_MM` (§6.3) | pont | `BRIDGE_AHEAD_MM = 48 ± 10` |
+| Pose verticale (§14.6) | ligne des yeux | *aucune* — plus de constante |
 | Décentrement (§5, règle 2) | pont | idem |
 | Résidu tenons ↔ repères 234/454 | — | `ENDPIECE_AHEAD_MM = 8 ± 6`, **non corrigé** |
 
@@ -1795,3 +1800,54 @@ au double (6,8 % → 12,9 %). Recoupé par une voie indépendante de la pose à 
 **Arbitrages humains intégrés :** seuil proportionnel borné 3–5 mm (§5) · rotation de tête seulement en cas de doute (§4), **puis systématique en V1 (§14.2)** · contrat corrigé avant tout code · carte obligatoire en V1 (§14.1) · recoloriage 2,5 D en V2 (§14.3).
 
 **Divergence assumée avec le rapport :** le masquage du décentrement se décide sur l'incertitude **propagée** jusqu'au décentrement, et non sur `relError <= 0.02` comme le suggérait le rapport — ce seuil serait devenu inapplicable une fois la carte passée à 0,025 par B4. Justification complète au §5, règle 2.
+
+
+### 14.6 V1 — la pose verticale n'est plus une constante (`poseAnchorOf`)
+
+> « tu es quand même capable de poser une lunette en dedans sur le nez et à la
+> bonne position. Même en réel. »
+
+Exact, et c'est ce qui condamnait `VERTICAL_OFFSET_MM`. Elle ancrait le **centre
+du pont** à 3 mm sous le sellion. Or la grandeur que l'œil juge n'est pas le
+pont, ce sont les **centres optiques** — et sur une monture réelle ils sont
+nettement plus bas que le pont : **10,4 mm** sur la fiche `severine`, valeur lue
+dans son `spec.json`, et qui **change d'une monture à l'autre**.
+
+Résultat mesuré : les centres optiques tombaient ~13 mm sous la ligne des yeux.
+Vérifié deux fois, par deux voies indépendantes — l'arithmétique du `spec.json`,
+et le comptage de pixels sur la photo de vérification, où les pupilles se
+retrouvent tout en haut des verres. **Aucune valeur de cette constante ne
+pouvait corriger ça**, puisqu'elle ignorait l'écart pont ↔ centres optiques.
+
+**Ce qui la remplace** — `core/faceMetrics.ts`, `poseAnchorOf` — n'a aucun
+paramètre libre, et sépare les deux axes parce que la physique les sépare :
+
+| Axe | Référence | Pourquoi |
+|---|---|---|
+| X | sellion | le pont enjambe le nez : la monture **ne peut pas** coulisser latéralement. L'écart pupille ↔ centre optique en X reste donc une vraie mesure — le décentrement du §5 |
+| Y | ligne des yeux (4 canthi) | la monture **coulisse** sur l'arête du nez, et l'opticien règle les plaquettes pour amener le centre optique à hauteur de pupille |
+
+C'est pour ça qu'elle était incalibrable et pas seulement non calibrée : elle
+figeait un degré de liberté qui, dans la réalité, est **ajusté personne par
+personne**.
+
+🔴 **Les canthi, jamais les centres d'iris (468 / 473).** Un iris se déplace de
+plusieurs millimètres quand la personne regarde en haut ou en bas : ancrer
+dessus ferait glisser la monture au gré du regard. Les canthi sont accrochés au
+crâne.
+
+⚠️ **Hypothèse assumée, à garder écrite.** La monture est montrée telle qu'un
+opticien l'ajusterait, plaquettes réglées pour amener le centre optique à
+hauteur de pupille. Une monture dont les plaquettes ne le permettraient pas sur
+ce nez-là n'est pas modélisée. C'est une **convention de pose déclarée**, pas une
+constante cachée.
+
+**Conséquence sur le lot 8 :** il perd sa moitié. Il ne reste que
+`FACE_WIDTH_CORRECTION_MM`, et le §14.2 l'a déjà supplantée quand la mesure
+d'écart temporal aboutit.
+
+**Vérifié sur un vrai visage**, pas seulement sur vérité terrain de synthèse :
+photo du sujet réel, avant/après dans `docs/verification/`. Le banc du §8.3
+verrouille la règle par un contrôle sans paramètre libre — « centres optiques ↔
+ligne des yeux » — qui rougit si quiconque réintroduit un décalage constant,
+quelle que soit sa valeur.
