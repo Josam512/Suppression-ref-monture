@@ -10,3 +10,4 @@ public/wasm/
 __pycache__/
 *.pyc
 .venv/
+public/_v1/

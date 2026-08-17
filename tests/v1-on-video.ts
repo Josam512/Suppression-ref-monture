@@ -380,6 +380,15 @@ export async function runV1(
 
     sweep = cameraFromSweep(quads, l.w, l.h);
     const d = measureDistance(frontalQuad, sweep, l.w, l.h);
+    const longSide =
+      (Math.hypot(frontalQuad[1].x - frontalQuad[0].x, frontalQuad[1].y - frontalQuad[0].y) +
+        Math.hypot(frontalQuad[2].x - frontalQuad[3].x, frontalQuad[2].y - frontalQuad[3].y)) / 2;
+    console.log(
+      `   RECOUPEMENT — carte frontale ${longSide.toFixed(0)} px de long ; ` +
+        `à focale ${sweep.focalPx.toFixed(0)} px une carte de 85,6 mm vue de face y serait à ` +
+        `${((sweep.focalPx * 85.6) / longSide / 10).toFixed(1)} cm (borne SUPÉRIEURE : ` +
+        `l'inclinaison raccourcit) ; la pose rend ${(d.cardDistanceMm / 10).toFixed(1)} cm`,
+    );
     measured = { cardDistanceMm: d.cardDistanceMm, relError: d.relError };
     console.log(
       `   CARTE — ${quads.length} cadres suivis sur ${l.frames.length} images, ` +
