@@ -875,6 +875,17 @@ banc navigateur vert (23 contrôles).
 
 ## Journal
 
+- **2026-08-17** — Question « peut-il choisir entre une 46 et une 48 ? » tranchée et
+  chiffrée (`docs/distance-et-calibres.md`). Un pas de calibre vaut ~4 mm de largeur
+  totale. Le **rapport entre deux tailles** est rendu exactement, quelle que soit la
+  calibration — verrouillé sur un balayage de ±10 % de biais. Leur **rapport au visage**,
+  lui, se déplace en 1/calibration : la carte à 2,5 % vaut **0,8 pas de calibre**. Donc
+  départageables par comparaison, pas dans l'absolu. ⚠️ Une première rédaction affirmait
+  que l'erreur commune « ne brouille pas le choix » : **c'était faux, le test l'a démenti**
+  et la thèse a été corrigée, pas le test. Conséquence : le recoupement de la distance
+  caméra devient la **priorité n°1**, parce que c'est lui qui porte le biais de parallaxe
+  (12,9 % à 42 cm contre 6,8 % à 78 cm supposés, soit ~9 mm sur la largeur du visage).
+
 - **2026-08-17** — La branche **aboutit à l'oreille mesurée** (repères 162 / 389, identifiés
   en annotant 32 candidats sur une photo réelle, pas de mémoire). Sa longueur ne vient plus
   du sprite de profil, connue à ±20 % : les deux extrémités sont connues à l'écran, deux
