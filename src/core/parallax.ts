@@ -75,7 +75,7 @@ export function isUsableProbeView(v: RotatedView): boolean {
  * cos(yaw) — exactement comme `frameMetrics`. Elle n'entre que dans un terme
  * correctif du second ordre : une erreur de 10 % dessus vaut 0,5 % au total.
  */
-function frontalOffsetMm(v: RotatedView, faceWidthMm: number): number {
+export function frontalOffsetMm(v: RotatedView, faceWidthMm: number): number {
   const pxPerMm = faceWidthPx(v.lm, v.w, v.h) / Math.cos(v.yawRad) / faceWidthMm;
 
   const f = px(at(v.lm, FOREHEAD), v.w, v.h);
