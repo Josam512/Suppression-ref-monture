@@ -61,7 +61,16 @@ find src \( -name '*.ts' -o -name '*.tsx' \) -exec wc -l {} + \
   | awk '$2 != "total" && $1 > 300 { print "   " $2 " : " $1 " lignes"; found = 1 } END { exit !found }' \
   && fail "Fichier de plus de 300 lignes (§3) — le scinder"
 
-# ⚠️ Indispensable : sans ce exit 0, le code de retour du hook serait celui du
-# dernier grep, qui vaut 1 quand il ne trouve RIEN — c'est-à-dire quand tout va
-# bien. Le hook refuserait alors tous les commits sains.
+# — i. Aucun chemin de fichier servi ecrit en ABSOLU (deploiement sous-repertoire).
+#     Une barre initiale marche a la racine d'un domaine et rend un 404 silencieux
+#     des que le site vit dans un sous-chemin : la boucle ne demarre jamais et
+#     l'ecran reste sur « Chargement... » sans erreur rouge. Tout passe par
+#     src/ui/assetUrl.ts.
+grep -rnE "['\"\`]/(models|wasm|frames)/" src/ \
+  && fail "Chemin servi ecrit en absolu — passer par assetUrl() (src/ui/assetUrl.ts)"
+
+# ⚠️ INDISPENSABLE. Sans cette derniere ligne, le code de retour du hook serait
+# celui du dernier grep — lequel vaut 1 quand il ne trouve rien, c'est-a-dire
+# quand tout va bien. Le hook refuserait alors tous les commits sains, et la
+# reaction naturelle serait de le desinstaller.
 exit 0

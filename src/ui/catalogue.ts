@@ -9,6 +9,7 @@
 
 import { useEffect, useState } from 'react';
 import { parseFrameSpec, type FrameSpec } from '../core/frameSpec.js';
+import { assetUrl } from './assetUrl.js';
 
 export interface CatalogueEntry {
   spec: FrameSpec;
@@ -26,7 +27,7 @@ interface IndexFile {
 }
 
 async function loadSpec(slug: string): Promise<FrameSpec> {
-  const res = await fetch(`/frames/${slug}/spec.json`);
+  const res = await fetch(assetUrl(`frames/${slug}/spec.json`));
   if (!res.ok) throw new Error(`spec.json introuvable pour « ${slug} » (${res.status}).`);
   return parseFrameSpec(await res.json());
 }
@@ -39,7 +40,7 @@ export function useCatalogue(): CatalogueState {
 
     void (async () => {
       try {
-        const res = await fetch('/frames/index.json');
+        const res = await fetch(assetUrl('frames/index.json'));
         if (!res.ok) {
           throw new Error(
             `Aucun inventaire dans public/frames/index.json (${res.status}). ` +

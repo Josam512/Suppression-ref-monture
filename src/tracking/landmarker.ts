@@ -6,9 +6,10 @@
 
 import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 import type { Pt } from '../core/geom.js';
+import { assetUrl } from '../ui/assetUrl.js';
 
-const MODEL_URL = '/models/face_landmarker.task';
-const WASM_DIR = '/wasm';
+const MODEL_URL = assetUrl('models/face_landmarker.task');
+const WASM_DIR = assetUrl('wasm');
 
 /**
  * Contour de l'ovale facial (indices MediaPipe, dans l'ordre du tracé).

@@ -7,14 +7,15 @@
 
 import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 import type { NormalizedLandmark } from '../core/geom.js';
+import { assetUrl } from '../ui/assetUrl.js';
 
 let cached: FaceLandmarker | null = null;
 
 export async function imageLandmarker(): Promise<FaceLandmarker> {
   if (cached !== null) return cached;
-  const fileset = await FilesetResolver.forVisionTasks('/wasm');
+  const fileset = await FilesetResolver.forVisionTasks(assetUrl('wasm'));
   cached = await FaceLandmarker.createFromOptions(fileset, {
-    baseOptions: { modelAssetPath: '/models/face_landmarker.task', delegate: 'CPU' },
+    baseOptions: { modelAssetPath: assetUrl('models/face_landmarker.task'), delegate: 'CPU' },
     runningMode: 'IMAGE',
     numFaces: 1,
     outputFacialTransformationMatrixes: true,

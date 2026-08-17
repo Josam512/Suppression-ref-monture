@@ -105,6 +105,24 @@ describe('GARDE-FOU §0.0.1 — le code ne branche jamais sur la source', () => 
    * ça recasse ». La règle existait déjà dans le contrat mais rien ne la
    * vérifiait : trois fichiers l'avaient franchie sans que personne s'en avise.
    */
+  /**
+   * 🔴 Un chemin servi écrit en absolu marche à la racine d'un domaine et rend
+   * un 404 SILENCIEUX dès que le site vit dans un sous-répertoire — la boucle ne
+   * démarre jamais et l'écran reste sur « Chargement… » sans erreur rouge.
+   * C'est le §1 bug #4 sous une autre forme. Tout passe par `assetUrl()`.
+   */
+  it('aucun chemin de fichier servi n’est écrit en absolu', () => {
+    const fautifs: string[] = [];
+    for (const file of walk('src')) {
+      if (file.endsWith('assetUrl.ts')) continue;
+      const texte = readFileSync(file, 'utf8');
+      for (const m of texte.matchAll(/['"`]\/(models|wasm|frames)\//g)) {
+        fautifs.push(`${file} : ${m[0]}`);
+      }
+    }
+    expect(fautifs, fautifs.join(' | ')).toEqual([]);
+  });
+
   it('aucun fichier de src/ ne dépasse 300 lignes (§3)', () => {
     const LIMITE = 300;
     for (const file of walk('src')) {

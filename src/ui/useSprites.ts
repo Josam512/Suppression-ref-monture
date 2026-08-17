@@ -8,6 +8,7 @@
 import { useEffect, useState } from 'react';
 import type { FrameSpec } from '../core/frameSpec.js';
 import type { Sprites } from '../render/composite.js';
+import { assetUrl } from './assetUrl.js';
 
 export type SpritesState =
   | { status: 'idle' }
@@ -37,7 +38,7 @@ export function useSprites(spec: FrameSpec | null): SpritesState {
 
     void (async () => {
       try {
-        const base = `/frames/${spec.slug}`;
+        const base = assetUrl(`frames/${spec.slug}`);
         const [front, profile] = await Promise.all([
           loadImage(`${base}/${spec.front}`),
           loadImage(`${base}/${spec.profile}`),
