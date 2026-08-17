@@ -9,6 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { guideQuad, guideWidthPx } from '../src/core/cardGuide.js';
 import {
   GUIDE_TOLERANCE_RATIO,
   GuideLock,
@@ -16,9 +17,7 @@ import {
   MIN_GUIDE_EDGE_STEP,
   REQUIRED_MEASURED_EDGES,
   checkCardInGuide,
-  guideQuad,
-  guideWidthPx,
-} from '../src/core/cardGuide.js';
+} from '../src/core/cardGuideLock.js';
 import { CARD_H_MM, CARD_W_MM, type CardQuad } from '../src/core/cardPose.js';
 import { BROW_L, BROW_R, EYE_L, EYE_R, HAIRLINE, poseAnchorOf, rollRadOf } from '../src/core/faceMetrics.js';
 import { at, dist, midpoint, px, type NormalizedLandmark } from '../src/core/geom.js';
@@ -87,29 +86,39 @@ describe('la POSITION du cadre, elle, vient du visage — c’est là qu’est l
    * biais de parallaxe B4 : une carte dans le plan du visage n'est plus 54 mm
    * devant les repères qui le mesurent. Il n'y a plus d'écart à corriger.
    */
-  it('il est ancré exactement où la monture se posera', () => {
+  it('il est aligné horizontalement sur l’ancrage de la monture', () => {
     const lm = face();
     const centre = midpoint(midpoint(guide[0], guide[2]), midpoint(guide[1], guide[3]));
-    const ancre = poseAnchorOf(lm, W, H, rollRadOf(lm, W, H));
-    expect(centre.x).toBeCloseTo(ancre.x, 6);
-    expect(centre.y).toBeCloseTo(ancre.y, 6);
+    expect(centre.x).toBeCloseTo(poseAnchorOf(lm, W, H, rollRadOf(lm, W, H)).x, 6);
   });
 
-  it('…c’est-à-dire à hauteur des yeux, et loin de la lisière des cheveux', () => {
+  /**
+   * 🔴 LE test qui protège la mesure elle-même.
+   *
+   * Une carte devant les yeux ne fait pas perdre le visage à MediaPipe : le
+   * modèle rend quand même 478 points, en INVENTANT ceux qu'il ne voit plus.
+   * `faceWidthPx` — la grandeur qui est la mesure — serait alors lue sur des
+   * repères hallucinés, sans le moindre signal. Le bord haut du cadre doit donc
+   * rester sous la ligne des yeux, et le cadre entier sous la lisière.
+   */
+  it('il laisse les YEUX visibles : son bord haut tombe sur la ligne des yeux', () => {
     const lm = face();
-    const centre = midpoint(midpoint(guide[0], guide[2]), midpoint(guide[1], guide[3]));
     const eyeY = (px(at(lm, EYE_L), W, H).y + px(at(lm, EYE_R), W, H).y) / 2;
     const browY = (px(at(lm, BROW_L), W, H).y + px(at(lm, BROW_R), W, H).y) / 2;
     const hairY = px(at(lm, HAIRLINE), W, H).y;
 
-    expect(centre.y).toBeCloseTo(eyeY, 6); // sur la ligne des yeux
-    expect(centre.y).toBeGreaterThan(browY); // sous les sourcils
-
-    // Quatre tentatives de détection se sont brisées sur la lisière des cheveux.
-    // La propriété qui compte n'est pas « le centre en est loin » — ce serait un
-    // seuil inventé — mais que le cadre TOUT ENTIER reste en dessous d'elle.
     const bordHaut = Math.min(...guide.map((p) => p.y));
-    expect(bordHaut).toBeGreaterThan(hairY);
+    expect(bordHaut).toBeGreaterThanOrEqual(eyeY - 1); // jamais AU-DESSUS des yeux
+    expect(bordHaut).toBeGreaterThan(browY); // ni sur les sourcils
+    expect(bordHaut).toBeGreaterThan(hairY); // ni sur les cheveux
+  });
+
+  it('…et le décalage vaut exactement une demi-hauteur de carte, sans constante', () => {
+    const lm = face();
+    const centre = midpoint(midpoint(guide[0], guide[2]), midpoint(guide[1], guide[3]));
+    const ancre = poseAnchorOf(lm, W, H, rollRadOf(lm, W, H));
+    const demiHauteur = (guideWidthPx(W) * CARD_H_MM) / CARD_W_MM / 2;
+    expect(centre.y - ancre.y).toBeCloseTo(demiHauteur, 6);
   });
 
   it('il suit la tête quand elle se déplace dans l’image', () => {
@@ -177,6 +186,37 @@ describe('c’est le PIRE coin qui décide, jamais la moyenne', () => {
     // moyenne. C'est pourtant une carte de travers.
     const tordu = [guide[0], guide[1], { x: guide[2].x + 4 * tolPx, y: guide[2].y }, guide[3]] as unknown as CardQuad;
     expect(checkCardInGuide(tordu, guide, 4, 3 * MIN_GUIDE_EDGE_STEP).ok).toBe(false);
+  });
+});
+
+/**
+ * 🔴 Le seuil de contraste est FIGÉ SUR MESURE, et ce test l'y maintient.
+ *
+ * Les deux bornes viennent de la séquence webcam réelle du sujet, 179 images,
+ * relevées avec la fonction de production elle-même (`tests/guide-on-video.ts`,
+ * 2026-08-17). Elles ne sont pas des préférences : ce sont des mesures.
+ *
+ * Sans ce test, `MIN_GUIDE_EDGE_STEP` est le paramètre le plus facile à pousser
+ * dans un sens ou dans l'autre pour « faire marcher » un cas particulier — vers
+ * le bas on verrouille sur du front nu, vers le haut le client n'y arrive jamais.
+ */
+describe('le seuil de contraste reste entre le fond et le signal MESURÉS', () => {
+  /** Plafond de la marche sur peau nue, sans aucune carte. 179 images. */
+  const FOND_MESURE = 7.6;
+  /** Médiane de la marche sur une carte accrochée sur ses 4 bords. 9 images. */
+  const SIGNAL_MESURE = 27.0;
+
+  it('il est au-dessus du fond, avec une marge réelle', () => {
+    expect(MIN_GUIDE_EDGE_STEP).toBeGreaterThan(FOND_MESURE * 1.5);
+  });
+
+  it('il est sous le signal, avec la même marge', () => {
+    expect(MIN_GUIDE_EDGE_STEP).toBeLessThan(SIGNAL_MESURE / 1.5);
+  });
+
+  it('il est posé à la moyenne géométrique des deux — même facteur de part et d’autre', () => {
+    const geo = Math.sqrt(FOND_MESURE * SIGNAL_MESURE);
+    expect(Math.abs(MIN_GUIDE_EDGE_STEP - geo)).toBeLessThan(1);
   });
 });
 

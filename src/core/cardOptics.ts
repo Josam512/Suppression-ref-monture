@@ -52,13 +52,32 @@ export function estimateDistanceMm(cardWidthPx: number, imageWidthPx: number): n
 }
 
 /**
- * Profondeur carte (sur le front) ↔ repères 234/454 (sur le contour), en mm.
+ * Profondeur du plan de la CARTE ↔ repères 234/454 (sur le contour), en mm.
  *
  * A priori, utilisé UNIQUEMENT tant que la rotation de tête n'a pas mesuré la
  * vraie valeur (`core/parallax.ts`). Dès qu'elle l'a fait, c'est la mesure qui
  * gouverne et cette constante ne sert plus.
+ *
+ * 🔴 **Corrigé le 2026-08-17, et il faut dire pourquoi.** La carte a été
+ * déplacée du front vers le bas du visage, sous la ligne des yeux
+ * (`core/cardGuide.ts`). Le raisonnement qui accompagnait ce déplacement
+ * annonçait que la parallaxe « disparaissait », le visage étant enfin dans son
+ * propre plan. **C'était faux**, et les profondeurs déjà MESURÉES sur ce sujet
+ * le disent (`core/framePlane.ts`) : l'arête du nez ressort de plus en plus vers
+ * le bas — 40,6 mm au repère 6, 45,9 au 197, 50,8 au 195 devant les coins des
+ * yeux, plus 12 mm jusqu'aux tempes. Une carte à plat sous les yeux porte sur le
+ * nez, donc à **52–63 mm** devant 234/454 : autant, voire un peu plus, que sur
+ * le front.
+ *
+ * Le déplacement reste justifié — il l'est par la DÉTECTION (quatre bords sur de
+ * la peau au lieu d'un bord contre les cheveux) et par le fait que les yeux
+ * doivent rester visibles, sans quoi MediaPipe invente les repères sur lesquels
+ * la mesure est prise. Mais il n'apporte rien sur la parallaxe, et le prétendre
+ * aurait fait annoncer au client une marge qu'on n'a pas.
  */
-export const CARD_TO_TEMPLE_DEPTH_MM = 54;
+export const CARD_TO_TEMPLE_DEPTH_MM = 57;
+/** Dispersion de la valeur ci-dessus, un seul sujet. */
+export const CARD_TO_TEMPLE_DEPTH_SD_MM = 8;
 
 /**
  * ⭐ Ce qui REMPLACE `isTooCloseForCard` — et pourquoi.

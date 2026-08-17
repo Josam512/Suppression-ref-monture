@@ -1,14 +1,16 @@
 /**
  * ui/RotationStep.tsx — « tournez lentement la tête à gauche, puis à droite ».
  *
- * Deux secondes de plus après la carte, et deux choses deviennent mesurables au
- * lieu d'être supposées :
+ * Deux secondes de plus après la carte, pour mesurer l'ÉCART TEMPORAL au lieu de
+ * le supposer : les pixels de la tête bougent quand elle tourne, ceux du mur
+ * derrière non.
  *
- *  · la PROFONDEUR entre la carte, posée sur le front, et vos tempes — sans
- *    quoi la carte est vue « trop grande » et le visage sort trop petit de 3 à
- *    7 % (correctif B4) ;
- *  · l'ÉCART TEMPORAL lui-même, parce que les pixels de votre tête bougent
- *    quand vous tournez, et pas ceux du mur derrière vous.
+ * Elle mesure AUSSI la profondeur carte ↔ tempes (correctif B4), qui reste
+ * entière : la carte, désormais tenue sous les yeux, porte sur le nez, lequel
+ * ressort autant que le front. Rien n'a été gagné de ce côté-là.
+ *
+ * ⭐ En revanche la carte est déjà rangée à ce stade — cette étape ne demande
+ * plus aucun accessoire.
  *
  * ⚠️ On peut passer outre. La mesure reste alors celle de la carte seule, avec
  * sa marge annoncée pour ce qu'elle est. On n'a jamais le droit de bloquer un
@@ -30,9 +32,9 @@ export function RotationStep(props: RotationStepProps): JSX.Element {
     <section>
       <h2>Tournez lentement la tête à gauche, puis à droite</h2>
       <p>
-        Gardez la carte sur le front et les yeux vers l’écran. Une vingtaine de degrés de chaque
-        côté suffisent — c’est ce qui permet de mesurer la largeur de votre tête aux tempes au lieu
-        de l’estimer.
+        <strong>Merci, vous pouvez ranger votre carte.</strong> Gardez simplement les yeux vers
+        l’écran. Une vingtaine de degrés de chaque côté suffisent — c’est ce qui permet de mesurer
+        la largeur de votre tête aux tempes au lieu de l’estimer.
       </p>
 
       <p>

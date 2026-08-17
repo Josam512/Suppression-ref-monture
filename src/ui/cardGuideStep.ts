@@ -15,13 +15,13 @@
  * ne dessinait pas, `putImageData` qui remplaçait au lieu de composer.
  */
 
+import { guideQuad } from '../core/cardGuide.js';
 import {
   GuideLock,
   checkCardInGuide,
   guideEdgeStep,
-  guideQuad,
   type GuideCheck,
-} from '../core/cardGuide.js';
+} from '../core/cardGuideLock.js';
 import { refineQuadDetailed } from '../core/cardEdges.js';
 import type { CardQuad } from '../core/cardPose.js';
 import type { NormalizedLandmark } from '../core/geom.js';
