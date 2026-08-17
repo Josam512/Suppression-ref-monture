@@ -875,6 +875,20 @@ banc navigateur vert (23 contrôles).
 
 ## Journal
 
+- **2026-08-17** — **La contrainte de tournage est retirée.** `isTooCloseForCard` et le
+  « reculez, il faut au moins 60 cm » (bouton de validation désactivé) sont **supprimés** :
+  c'était un problème de mesure converti en contrainte imposée au client, l'erreur n°11 du
+  journal, reprochée à juste titre. Remplacés par `parallaxRelErrorAt` — le biais Δz/z est
+  **chiffré** et part grossir la marge affichée. Rien ne bloque plus.
+  **Défaut trouvé sur la vraie photo du sujet** : `focalSpread` était calculé, exporté et
+  **consommé par rien** dans `src/`. La chaîne rendait « 134 cm » avec **89 % de désaccord
+  entre ses deux estimations internes**, sans que rien ne l'arrête. Garde-fou
+  `MAX_FOCAL_SPREAD = 0.25` ajouté, avec trois tests de non-régression bâtis sur les coins
+  réels de cette photo.
+  **Carte Vitale** (et CNI, permis, carte de transport) explicitement acceptées : toutes au
+  format ISO 7810 ID-1, donc strictement équivalentes. La Vitale est même recommandée en
+  premier — aucun numéro de paiement dessus.
+
 - **2026-08-17** — Question « peut-il choisir entre une 46 et une 48 ? » tranchée et
   chiffrée (`docs/distance-et-calibres.md`). Un pas de calibre vaut ~4 mm de largeur
   totale. Le **rapport entre deux tailles** est rendu exactement, quelle que soit la

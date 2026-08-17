@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { cameraFromCard } from '../src/core/cardPose.js';
+import { cameraFromCard, cardDistanceWithFocal, type CardQuad } from '../src/core/cardPose.js';
 import { CalibrationError } from '../src/core/geom.js';
 import {
   ADULTE,
@@ -176,5 +176,41 @@ describe('ce que la carte vaut face au bruit de pointage', () => {
     }
     expect(med(essais)).toBeCloseTo(1, 1); // sans biais
     expect(mad(essais)).toBeLessThan(0.08); // ±8 %, contre ±17 % pour l'a priori
+  });
+});
+
+/**
+ * ⭐ Non-régression sur une VRAIE photo : carte tenue à plat sur le front,
+ * quasi frontale, coin bas-droit sous le doigt du sujet.
+ *
+ * Les quatre coins ci-dessous sortent de l'accrochage sous-pixel du dépôt
+ * (`refineQuad`) sur cette image. Sur ces coins, `cameraFromCard` rendait
+ * « 134 cm » avec 89 % de désaccord entre ses deux estimations internes — et
+ * RIEN ne l'arrêtait, parce que `focalSpread` n'était consommé nulle part dans
+ * `src/`. C'est le mode d'échec que ce dépôt combat : plausible, stable, faux,
+ * silencieux.
+ */
+describe('une vue quasi frontale ne doit pas fabriquer une distance', () => {
+  const VRAIE_PHOTO: CardQuad = [
+    { x: 1319.23, y: 1061.82 },
+    { x: 1831.67, y: 1080.22 },
+    { x: 1813.98, y: 1394.02 },
+    { x: 1310.61, y: 1368.55 },
+  ];
+
+  it('GARDE-FOU : elle est REFUSÉE, pas convertie en 134 cm', () => {
+    expect(() => cameraFromCard(VRAIE_PHOTO, 2544, 3392)).toThrow(CalibrationError);
+  });
+
+  it('…et le refus nomme la cause, il ne dit pas juste « erreur »', () => {
+    expect(() => cameraFromCard(VRAIE_PHOTO, 2544, 3392)).toThrow(/divergent|perspective|frontale/i);
+  });
+
+  it('la focale une fois connue, la MÊME vue donne une distance plausible', () => {
+    // C'est tout l'intérêt de la séparation : la distance à focale connue est du
+    // premier ordre, donc robuste — même sur une vue qui ne porte pas la focale.
+    const d = cardDistanceWithFocal(VRAIE_PHOTO, 2544, 3392, 1.0 * 2544);
+    expect(d).toBeGreaterThan(300);
+    expect(d).toBeLessThan(600);
   });
 });

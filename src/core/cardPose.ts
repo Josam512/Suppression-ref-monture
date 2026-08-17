@@ -59,19 +59,24 @@ const MODEL: CardQuad = [
  * Inclinaison minimale exigée de la carte, en « pixels de fuite ».
  *
  * 🔴 Une carte vue parfaitement de face ne dit RIEN de la focale : son
- * homographie est alors une simple similitude, les deux termes de fuite sont
- * nuls, et `f²` sort d'un rapport 0/0. C'est le mode de défaillance à ne
- * surtout pas laisser passer en silence — il rendrait une focale absurde avec
- * l'air d'une mesure. Il faut de la PERSPECTIVE, donc de l'inclinaison.
- *
- * Le front en fournit naturellement : il est incliné vers l'arrière, et il
- * tourne pendant le balayage. Mais on le vérifie au lieu de l'espérer.
+ * homographie est une similitude, et `f²` sort d'un 0/0 qui aurait l'air d'une
+ * mesure. Le front en fournit naturellement pendant le balayage ; on le vérifie
+ * au lieu de l'espérer.
  */
 export const MIN_PERSPECTIVE = 0.004;
 
 /** Bornes de plausibilité de la focale, en fraction de la largeur d'image. */
 export const FOCAL_MIN_REL = 0.4; // très grand angle
 export const FOCAL_MAX_REL = 4.0; // téléobjectif improbable sur une webcam
+
+/**
+ * Désaccord maximal toléré entre les DEUX estimations de focale d'une même vue.
+ *
+ * Elles viennent de deux faits indépendants sur le même rectangle
+ * (orthogonalité, égalité des longueurs). Au-delà de ce seuil, elles ne
+ * mesurent plus la même chose et la vue est écartée.
+ */
+export const MAX_FOCAL_SPREAD = 0.25;
 
 /**
  * Résout `A x = b` par élimination de Gauss avec pivot partiel.
@@ -251,6 +256,23 @@ export function cameraFromCard(quad: CardQuad, w: number, h: number): CameraFrom
     candidates.length === 2
       ? Math.abs(Math.sqrt(candidates[0] ?? 0) - Math.sqrt(candidates[1] ?? 0)) / focalPx
       : Number.NaN;
+
+  // 🔴 Les deux estimations doivent CONCORDER, sinon le chiffre ne vaut rien.
+  // Elles mesurent la même focale par deux chemins indépendants ; leur écart
+  // n'est pas du bruit à moyenner, c'est l'hypothèse qui lâche.
+  //
+  // ⚠️ Ce contrôle MANQUAIT : `focalSpread` était calculé, exporté, consommé par
+  // rien dans `src/`. Sur une vraie photo, la chaîne a rendu « 134 cm » avec
+  // 89 % de désaccord interne, sans que rien ne l'arrête — plausible, stable,
+  // faux, silencieux.
+  if (Number.isFinite(focalSpread) && focalSpread > MAX_FOCAL_SPREAD) {
+    throw new CalibrationError(
+      `Les deux mesures d'objectif issues de cette vue divergent de ` +
+        `${(100 * focalSpread).toFixed(0)} % (limite ${(100 * MAX_FOCAL_SPREAD).toFixed(0)} %). ` +
+        `Une seule vue de carte quasi frontale ne porte pas la focale : ` +
+        `c'est le balayage qui la donne (core/cardSweep.ts).`,
+    );
+  }
 
   if (focalPx < FOCAL_MIN_REL * w || focalPx > FOCAL_MAX_REL * w) {
     throw new CalibrationError(
