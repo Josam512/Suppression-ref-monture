@@ -8,6 +8,8 @@
 
 import type { NormalizedLandmark } from '../../src/core/geom.js';
 import {
+  BROW_L,
+  BROW_R,
   EAR_L,
   EAR_R,
   EYE_L,
@@ -16,6 +18,7 @@ import {
   EYE_R_INNER,
   FACE_L,
   FACE_R,
+  HAIRLINE,
   SELLION,
 } from '../../src/core/faceMetrics.js';
 
@@ -87,6 +90,12 @@ export function makeFace(opts: FaceOptions): NormalizedLandmark[] {
   lm[EYE_L_INNER] = at(-halfPx * 0.22, eyeDy);
   lm[EYE_R_INNER] = at(halfPx * 0.22, eyeDy);
   lm[SELLION] = at(0, eyeDy);
+
+  // La bande du front : sourcils juste au-dessus des yeux, cheveux bien plus haut.
+  // Fractions de la largeur du visage, donc cohérentes à toute distance.
+  lm[BROW_L] = at(-halfPx * 0.5, -0.14 * opts.faceWidthPx);
+  lm[BROW_R] = at(halfPx * 0.5, -0.14 * opts.faceWidthPx);
+  lm[HAIRLINE] = at(0, -0.48 * opts.faceWidthPx);
 
   // ⭐ Les oreilles, seuls points nettement EN ARRIÈRE du plan du visage.
   //

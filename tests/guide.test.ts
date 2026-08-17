@@ -20,10 +20,22 @@ import {
   guideWidthPx,
 } from '../src/core/cardGuide.js';
 import { CARD_H_MM, CARD_W_MM, type CardQuad } from '../src/core/cardPose.js';
+import { BROW_L, BROW_R, EYE_L, EYE_R, HAIRLINE, poseAnchorOf, rollRadOf } from '../src/core/faceMetrics.js';
+import { at, dist, midpoint, px, type NormalizedLandmark } from '../src/core/geom.js';
+import { H, W, makeFace, type FaceOptions } from './fixtures/landmarks.js';
 
-const W = 720;
-const H = 1280;
-const guide = guideQuad(W, H);
+/** Visage de référence pour ce fichier. */
+
+/**
+ * ⚠️ Les dimensions viennent du fixture, jamais d'un couple choisi ici.
+ * `makeFace` normalise ses points contre SES W/H ; en normaliser d'autres
+ * appliquerait une anisotropie qui déforme le roll — piège rencontré à
+ * l'écriture de ce fichier, et qui faisait échouer le test d'inclinaison.
+ */
+const face = (over: Partial<FaceOptions> = {}): NormalizedLandmark[] =>
+  makeFace({ faceWidthPx: 0.42 * W, ...over });
+
+const guide = guideQuad(face(), W, H);
 
 /** Décale les quatre coins d'un quadrilatère. */
 const shift = (q: CardQuad, dx: number, dy: number): CardQuad =>
@@ -36,10 +48,84 @@ describe('le cadre porte le rapport ISO, donc une carte qui le remplit est à la
     expect(w / h).toBeCloseTo(CARD_W_MM / CARD_H_MM, 9);
   });
 
-  it('il est centré, et sa largeur suit celle de l’image', () => {
-    expect((guide[0].x + guide[1].x) / 2).toBeCloseTo(W / 2, 9);
-    expect((guide[0].y + guide[3].y) / 2).toBeCloseTo(H / 2, 9);
-    expect(guide[1].x - guide[0].x).toBeCloseTo(guideWidthPx(W), 9);
+  it('sa largeur est celle prescrite par l’image', () => {
+    expect(dist(guide[0], guide[1])).toBeCloseTo(guideWidthPx(W), 9);
+  });
+});
+
+/**
+ * 🔴 LE garde-fou de ce fichier, et le plus lourd de conséquences.
+ *
+ * Dimensionner le cadre en fraction du VISAGE rendrait la calibration
+ * circulaire : remplir le cadre imposerait `carteEnPx = k × visageEnPx`, donc
+ * `largeurVisageMm = CARD_W_MM / k` — la même valeur pour tout le monde. Un
+ * enfant et un adulte à forte carrure rendraient le même chiffre, et rien à
+ * l'écran ne le signalerait.
+ *
+ * Le test balaie un DOMAINE de largeurs de visage, jamais un point : c'est la
+ * leçon de B2 et S4 (§8.2). Une seule fixture laisserait passer la faute.
+ */
+describe('la TAILLE du cadre ne doit rien devoir au visage', () => {
+  it('elle est identique pour un visage d’enfant et pour une forte carrure', () => {
+    const widths = [0.18, 0.24, 0.32, 0.42, 0.55, 0.70].map((r) => r * W);
+    const tailles = widths.map((faceWidthPx) => dist(guideQuad(face({ faceWidthPx }), W, H)[0], guideQuad(face({ faceWidthPx }), W, H)[1]));
+    for (const t of tailles) expect(t, `largeurs rendues : ${tailles.join(', ')}`).toBeCloseTo(guideWidthPx(W), 9);
+  });
+
+  it('…et elle ne dépend pas non plus de l’inclinaison de la tête', () => {
+    for (const rollRad of [-0.3, -0.1, 0, 0.1, 0.3]) {
+      const q = guideQuad(face({ rollRad }), W, H);
+      expect(dist(q[0], q[1]), `roll=${rollRad}`).toBeCloseTo(guideWidthPx(W), 9);
+      expect(dist(q[1], q[2]), `roll=${rollRad}`).toBeCloseTo((guideWidthPx(W) * CARD_H_MM) / CARD_W_MM, 9);
+    }
+  });
+});
+
+describe('la POSITION du cadre, elle, vient du visage — c’est là qu’est la carte', () => {
+  /**
+   * 🔴 Le cadre tombe LÀ OÙ IRONT LES LUNETTES, et c'est ce qui supprime le
+   * biais de parallaxe B4 : une carte dans le plan du visage n'est plus 54 mm
+   * devant les repères qui le mesurent. Il n'y a plus d'écart à corriger.
+   */
+  it('il est ancré exactement où la monture se posera', () => {
+    const lm = face();
+    const centre = midpoint(midpoint(guide[0], guide[2]), midpoint(guide[1], guide[3]));
+    const ancre = poseAnchorOf(lm, W, H, rollRadOf(lm, W, H));
+    expect(centre.x).toBeCloseTo(ancre.x, 6);
+    expect(centre.y).toBeCloseTo(ancre.y, 6);
+  });
+
+  it('…c’est-à-dire à hauteur des yeux, et loin de la lisière des cheveux', () => {
+    const lm = face();
+    const centre = midpoint(midpoint(guide[0], guide[2]), midpoint(guide[1], guide[3]));
+    const eyeY = (px(at(lm, EYE_L), W, H).y + px(at(lm, EYE_R), W, H).y) / 2;
+    const browY = (px(at(lm, BROW_L), W, H).y + px(at(lm, BROW_R), W, H).y) / 2;
+    const hairY = px(at(lm, HAIRLINE), W, H).y;
+
+    expect(centre.y).toBeCloseTo(eyeY, 6); // sur la ligne des yeux
+    expect(centre.y).toBeGreaterThan(browY); // sous les sourcils
+
+    // Quatre tentatives de détection se sont brisées sur la lisière des cheveux.
+    // La propriété qui compte n'est pas « le centre en est loin » — ce serait un
+    // seuil inventé — mais que le cadre TOUT ENTIER reste en dessous d'elle.
+    const bordHaut = Math.min(...guide.map((p) => p.y));
+    expect(bordHaut).toBeGreaterThan(hairY);
+  });
+
+  it('il suit la tête quand elle se déplace dans l’image', () => {
+    // Le défaut d'origine centrait le cadre dans l'IMAGE : il ne bougeait pas.
+    const bas = guideQuad(face(), W, H);
+    const lm = face();
+    const monte = lm.map((p) => ({ x: p.x, y: p.y - 0.1 }));
+    const haut = guideQuad(monte, W, H);
+    expect(haut[0].y - bas[0].y).toBeCloseTo(-0.1 * H, 6);
+  });
+
+  it('il penche avec la tête, comme le fera la monture', () => {
+    for (const rollRad of [-0.25, 0.25]) {
+      const q = guideQuad(face({ rollRad }), W, H);
+      expect(Math.atan2(q[1].y - q[0].y, q[1].x - q[0].x), `roll=${rollRad}`).toBeCloseTo(rollRad, 6);
+    }
   });
 });
 

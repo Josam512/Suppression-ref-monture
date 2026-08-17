@@ -9,7 +9,6 @@
  */
 
 import type { FrameSpec } from '../core/frameSpec.js';
-import type { CardQuad } from '../core/cardPose.js';
 import { CardCalibration } from './CardCalibration.js';
 import { RotationStep } from './RotationStep.js';
 import { WornFrameCalibration } from './WornFrameCalibration.js';
@@ -17,7 +16,7 @@ import { WornFrameCalibration } from './WornFrameCalibration.js';
 export type Phase =
   | { kind: 'loading'; ratio: number }
   | { kind: 'error'; message: string }
-  | { kind: 'mesure-carte'; frozen: HTMLCanvasElement }
+  | { kind: 'mesure-carte'; fill: number }
   | { kind: 'mesure-rotation'; ratio: number; degrees: { left: number; right: number } }
   | { kind: 'mesure-monture'; frozen: HTMLCanvasElement }
   | { kind: 'essayage' };
@@ -26,7 +25,6 @@ export interface CalibrationPanelProps {
   phase: Phase;
   /** Toutes les montures, pour désigner celle qui est physiquement portée (V2). */
   catalogue: readonly FrameSpec[];
-  onCardValidated(cardWidthPx: number, quad: CardQuad, frozen: HTMLCanvasElement): void;
   onSkipRotation(): void;
   onWornFrameValidated(widthPx: number, spec: FrameSpec): void;
   onCancel(): void;
@@ -44,13 +42,7 @@ export function CalibrationPanel(props: CalibrationPanelProps): JSX.Element | nu
   }
 
   if (phase.kind === 'mesure-carte') {
-    return (
-      <CardCalibration
-        frozen={phase.frozen}
-        onCancel={props.onCancel}
-        onValidate={(cardWidthPx, quad) => props.onCardValidated(cardWidthPx, quad, phase.frozen)}
-      />
-    );
+    return <CardCalibration fill={phase.fill} onCancel={props.onCancel} />;
   }
 
   if (phase.kind === 'mesure-rotation') {

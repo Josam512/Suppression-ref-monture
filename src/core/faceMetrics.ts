@@ -30,6 +30,18 @@ export const SELLION = 168; // creux du nez, entre les yeux → ancrage
 export const EAR_L = 162;
 export const EAR_R = 389;
 
+/**
+ * La bande du FRONT — là où la carte de calibration se pose (§14.1).
+ *
+ * ⚠️ Ces trois points bornent la bande, ils ne la mesurent pas. Ils servent à
+ * dire OÙ regarder, jamais COMBIEN mesure quoi que ce soit : la taille de la
+ * carte ne doit à aucun moment se déduire du visage, sous peine de rendre la
+ * calibration circulaire (voir `core/cardGuide.ts`).
+ */
+export const BROW_L = 105;
+export const BROW_R = 334; // sommets des sourcils → bas du front
+export const HAIRLINE = 10; // haut de l'ovale facial → haut du front
+
 // Contours d'iris (points 468–477) : c'est la raison d'être du modèle à 478 points.
 export const IRIS_L_OUTER = 469;
 export const IRIS_L_INNER = 471; // extrêmes HORIZONTAUX de l'iris gauche

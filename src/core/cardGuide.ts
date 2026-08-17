@@ -6,32 +6,41 @@
  * L'ancien parcours demandait au client de **traîner un rectangle sur la carte**.
  * Lent, fastidieux, et c'était le seul geste long de la calibration.
  *
- * Trois tentatives de détection automatique ont échoué sur une vraie photo :
- * rectangles candidats notés au rapport ISO (36 % d'erreur d'échelle), contours
- * fermés à la mode « scanner de document » (0 candidat — le contour de la carte
- * n'est pas fermé sur un front éclairé), assemblage de segments de droite
- * (57 % d'erreur). La cause commune : sur un visage, **la lisière des cheveux
- * est un bord plus franc que la carte**.
+ * Quatre tentatives de détection automatique ont échoué sur de vraies images —
+ * rapport ISO noté (36 % d'erreur), contours fermés (0 candidat), segments de
+ * droite (57 %), recherche contrainte au front (22 % de dispersion). Toutes sur
+ * la même cause : **la lisière des cheveux est un bord plus franc que la carte**.
+ * Le détail et les mesures sont dans `tests/cardFind.atelier.ts`, pour que
+ * personne n'en tente une cinquième.
  *
  * D'où le renversement, qui est celui de tous les scanners de carte en
  * production : au lieu de chercher où est la carte, **on dit où la mettre**.
- * L'app affiche un cadre au rapport ISO, le client avance ou recule la tête
- * jusqu'à ce que la carte le remplisse.
  *
  * 🔴 Le point clé : **le cadre EST la graine de l'accrochage**. On n'a donc plus
  * rien à détecter — `refineQuad` part du cadre et ne converge que si la carte
  * est réellement là. Le geste du client et la mesure sont le même acte.
- *
- * Bénéfice secondaire : remplir un cadre de taille fixe **fixe la distance**.
- * Une inconnue disparaît au lieu de s'ajouter.
  */
 
-import type { Pt } from './geom.js';
+import { type NormalizedLandmark, type Pt } from './geom.js';
+import { poseAnchorOf, rollRadOf } from './faceMetrics.js';
 import { luma, type ImageBuffer } from './silhouette.js';
 import { CARD_H_MM, CARD_W_MM, type CardQuad } from './cardPose.js';
 
-/** Fraction de la largeur de l'image occupée par le cadre. */
-export const GUIDE_WIDTH_RATIO = 0.55;
+/**
+ * Fraction de la largeur de l'image occupée par le cadre.
+ *
+ * ⚠️ Elle fixe la DISTANCE de travail : `d = CARD_W_MM × focale / largeurCadre`.
+ * L'ancienne valeur (0,55) n'avait jamais été confrontée à cette formule — elle
+ * plaçait le client entre 11 et 22 cm de l'objectif selon l'optique, où le
+ * visage ne tient même plus dans le cadre.
+ *
+ * 0,35 correspond à une tête cadrée naturellement, bras replié. La distance
+ * exacte n'est plus critique depuis que la carte se porte dans le plan du visage
+ * (voir `guideQuad`) : le terme de parallaxe, qui était la seule raison d'exiger
+ * du recul, a disparu. Il ne reste qu'à avoir assez de pixels sur la carte pour
+ * l'accrochage sous-pixel — 0,35 en donne près de 400 sur une image de 1080.
+ */
+export const GUIDE_WIDTH_RATIO = 0.35;
 
 /**
  * Écart maximal admis entre un coin accroché et le coin du cadre, en fraction
@@ -55,26 +64,78 @@ export const GUIDE_TOLERANCE_RATIO = 0.06;
 export const LOCK_FRAMES = 3;
 
 /**
- * ⚠️ DÉFAUT CONNU, trouvé sur la vidéo réelle du sujet : ce cadre est centré
- * dans l'IMAGE, donc sur les yeux. La carte, elle, est posée en HAUT DU FRONT.
- * Les deux ne se croisent jamais, et rien ne peut verrouiller.
+ * Cadre au rapport ISO, posé LÀ OÙ IRONT LES LUNETTES, et incliné comme la tête.
  *
- * 🔴 Le placement doit venir des REPÈRES DU VISAGE — milieu du front, entre les
- * sourcils et la naissance des cheveux — pas du centre de l'image. Tant que ce
- * n'est pas fait, cette fonction ne doit pas être branchée dans l'application.
+ * ## 🔴 Pourquoi le plan des yeux, et pas le front
+ *
+ * Le front a été essayé, et c'est une fausse bonne idée sur les deux tableaux :
+ *
+ * 1. **Métrologie.** Une carte sur le front est ~54 mm DEVANT les repères
+ *    234/454 qui mesurent le visage. En projection perspective l'échelle varie
+ *    en 1/z : à 40 cm, cela fait **13 % de biais systématique** — le correctif
+ *    B4, toute la machinerie de `core/parallax.ts`, et une rotation de tête
+ *    demandée au client pour mesurer un écart de profondeur. Dans le plan du
+ *    visage, **il n'y a plus d'écart à mesurer**. Le problème n'est pas corrigé,
+ *    il n'existe pas.
+ * 2. **Détection.** Sur le front, la carte se cale contre les cheveux : son bord
+ *    haut devient sombre sur sombre et n'a plus de contraste. Quatre tentatives
+ *    de détection s'y sont cassées, toujours sur la lisière (cf.
+ *    `tests/cardFind.atelier.ts`). Au niveau des yeux, les quatre bords tombent
+ *    sur de la peau.
+ *
+ * La consigne devient donc la plus simple possible : **« posez la carte là où
+ * seront vos lunettes »** — et le cadre est ancré exactement sur `poseAnchorOf`,
+ * l'ancrage que la monture utilisera ensuite (§14.6).
+ *
+ * ## 🔴 La séparation qui empêche la mesure d'être circulaire
+ *
+ * Deux grandeurs, deux origines, à ne JAMAIS échanger :
+ *
+ * | Grandeur | Vient de | Pourquoi |
+ * |---|---|---|
+ * | **Position** et **inclinaison** | les repères du visage | la carte se pose sur le visage, et elle penche avec la tête |
+ * | **Taille** | l'IMAGE seule (`GUIDE_WIDTH_RATIO`) | voir ci-dessous |
+ *
+ * ⚠️ **Le piège, et il est mortel.** Dimensionner le cadre en fraction de la
+ * largeur du visage paraît plus élégant — le cadre suivrait la personne. Mais
+ * alors, remplir le cadre imposerait `carteEnPx = k × visageEnPx`, donc
+ *
+ *     largeurVisageMm = CARD_W_MM × visageEnPx / carteEnPx = CARD_W_MM / k
+ *
+ * c'est-à-dire **la même largeur de visage pour tout le monde**, enfant compris.
+ * L'application rendrait une constante déguisée en mesure — exactement le mode
+ * d'échec que tout ce dépôt combat (§0.0.3). La taille du cadre doit donc rester
+ * étrangère au visage, et c'est ce qui laisse `visageEnPx` libre de varier d'une
+ * personne à l'autre. C'est là que la mesure a lieu.
+ *
+ * Bénéfice au passage : à taille de cadre fixée dans l'image, remplir le cadre
+ * **fixe la distance à la caméra**. Une inconnue disparaît au lieu de s'ajouter.
+ *
+ * ## Le cadre est une CONSIGNE, pas une prédiction
+ *
+ * Il ne cherche pas à deviner où le client aurait spontanément mis sa carte : il
+ * lui dit où la mettre. C'est le renversement décrit en tête de fichier, et
+ * c'est ce que font tous les scanners de carte en production.
  */
-/** Cadre au rapport ISO, centré dans l'image. Coins dans l'ordre de `CardQuad`. */
-export function guideQuad(imageWidthPx: number, imageHeightPx: number): CardQuad {
-  const w = GUIDE_WIDTH_RATIO * imageWidthPx;
-  const h = (w * CARD_H_MM) / CARD_W_MM;
-  const cx = imageWidthPx / 2;
-  const cy = imageHeightPx / 2;
-  return [
-    { x: cx - w / 2, y: cy - h / 2 },
-    { x: cx + w / 2, y: cy - h / 2 },
-    { x: cx + w / 2, y: cy + h / 2 },
-    { x: cx - w / 2, y: cy + h / 2 },
-  ];
+export function guideQuad(
+  lm: readonly NormalizedLandmark[],
+  imageWidthPx: number,
+  imageHeightPx: number,
+): CardQuad {
+  // Le cadre penche avec la tête, et se pose à l'ancrage même de la monture.
+  const roll = rollRadOf(lm, imageWidthPx, imageHeightPx);
+  const c = poseAnchorOf(lm, imageWidthPx, imageHeightPx, roll);
+  const ux = { x: Math.cos(roll), y: Math.sin(roll) }; // le long de la ligne des yeux
+  const uy = { x: -Math.sin(roll), y: Math.cos(roll) }; // vers le bas du visage
+
+  const halfW = guideWidthPx(imageWidthPx) / 2; // ⚠️ de l'IMAGE, jamais du visage
+  const halfH = (halfW * CARD_H_MM) / CARD_W_MM;
+
+  const corner = (sx: number, sy: number): Pt => ({
+    x: c.x + ux.x * sx * halfW + uy.x * sy * halfH,
+    y: c.y + ux.y * sx * halfW + uy.y * sy * halfH,
+  });
+  return [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)];
 }
 
 /** Largeur du cadre, en pixels. */
