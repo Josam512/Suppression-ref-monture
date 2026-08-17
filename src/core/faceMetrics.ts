@@ -18,6 +18,18 @@ export const EYE_L_INNER = 133; // coin interne de l'œil gauche → centre de l
 export const EYE_R_INNER = 362; // coin interne de l'œil droit
 export const SELLION = 168; // creux du nez, entre les yeux → ancrage
 
+/**
+ * Jonction haut de l'oreille ↔ crâne — là où une branche se coude.
+ *
+ * ⚠️ Indices IDENTIFIÉS PAR LA MESURE, pas de mémoire : sonde MediaPipe sur une
+ * photo réelle, les 32 candidats du contour annotés puis lus à l'œil. 389 tombe
+ * exactement à la racine de l'hélix ; 162 est son miroir. Le journal du projet
+ * retient déjà une erreur de ce type (234/454 pris pour des points physiques
+ * alors qu'ils glissent) — d'où la mesure plutôt que le souvenir.
+ */
+export const EAR_L = 162;
+export const EAR_R = 389;
+
 // Contours d'iris (points 468–477) : c'est la raison d'être du modèle à 478 points.
 export const IRIS_L_OUTER = 469;
 export const IRIS_L_INNER = 471; // extrêmes HORIZONTAUX de l'iris gauche
@@ -114,6 +126,12 @@ export interface FrameMetrics {
    * l'ancienne sémantique sans s'en apercevoir.
    */
   poseAnchor: Pt;
+  /**
+   * ⭐ Jonction oreille ↔ crâne, à l'écran, des deux côtés. C'est là que la
+   * branche doit ABOUTIR. Mesurée sur ce visage-ci au lieu d'être déduite d'une
+   * longueur de branche nominale, connue à ±20 % seulement.
+   */
+  ear: { left: Pt; right: Pt };
 }
 
 /** Largeur apparente du visage, en pixels image. Exportée car les tests en ont besoin. */
@@ -169,6 +187,7 @@ export function frameMetrics(
     rollRad: rollRadOf(lm, w, h),
     yawRad,
     poseAnchor: poseAnchorOf(lm, w, h, rollRadOf(lm, w, h)),
+    ear: { left: px(at(lm, EAR_L), w, h), right: px(at(lm, EAR_R), w, h) },
   };
 }
 // ⚠️ NE PAS ajouter `faceWidthMm` au retour : ce serait une simple recopie de la

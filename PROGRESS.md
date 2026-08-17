@@ -875,6 +875,18 @@ banc navigateur vert (23 contrôles).
 
 ## Journal
 
+- **2026-08-17** — La branche **aboutit à l'oreille mesurée** (repères 162 / 389, identifiés
+  en annotant 32 candidats sur une photo réelle, pas de mémoire). Sa longueur ne vient plus
+  du sprite de profil, connue à ±20 % : les deux extrémités sont connues à l'écran, deux
+  points fixent la similitude. Le raccourci en sin(yaw) n'est pas perdu, il est porté par
+  l'écart charnière ↔ oreille, qui est lui-même le long de l'axe avant-arrière.
+  ⚠️ **Trois tests rectifiés**, tous parce qu'ils verrouillaient le modèle NOMINAL et non
+  un invariant physique : « suit sin(yaw) » (remplacé par « le bout tombe sur l'oreille »,
+  balayé sur 7 yaw), « longueur nulle de face » (elle est petite, pas nulle), « symétrique
+  à tout yaw » (fausse : de trois quarts une branche s'allonge et l'autre se dérobe).
+  ⚠️ **Non vérifié sur un vrai visage tourné** — il manque une photo de trois quarts, tête
+  nue. Les tests ne portent que sur la fixture de synthèse.
+
 - **2026-08-17** — Audit de la borne d'information (`core/ocularPrior.ts`), demandé pour
   vérifier si elle était mal posée. **Structure correcte** (information de Fisher), et
   conclusion robuste : sur tout le domaine de corrélations défendable elle reste entre

@@ -183,21 +183,6 @@ export function renderedFrameHeightPx(spec: FrameSpec, m: FrameMetrics): number 
  * @param side +1 si la branche visible est celle de droite du sprite, -1 sinon.
  */
 export function templeAffine(spec: FrameSpec, m: FrameMetrics, side: 1 | -1): Affine {
-  const profileScale = spec.profilePxPerMm ?? spec.spritePxPerMm;
-  const s = m.livePxPerMm / profileScale;
-
-  // ⭐ Le sin, symetrique du cos de la face : la branche apparait en tournant.
-  const sx = s * Math.sin(Math.abs(m.yawRad)) * side;
-  const sy = s;
-
-  const cosR = Math.cos(m.rollRad);
-  const sinR = Math.sin(m.rollRad);
-
-  const a = cosR * sx;
-  const b = sinR * sx;
-  const c = -sinR * sy;
-  const d = cosR * sy;
-
   // La charniere sur la FACE : bord externe de la bbox alpha, a hauteur du pont.
   const hingeOnFront = {
     x: side > 0 ? spec.alphaBBox.x + spec.alphaBBox.w : spec.alphaBBox.x,
@@ -205,7 +190,40 @@ export function templeAffine(spec: FrameSpec, m: FrameMetrics, side: 1 | -1): Af
   };
   const anchor = spriteToScreen(hingeOnFront, spec, m);
 
-  // Sur le sprite de profil, la charniere est le bord gauche (x = 0).
+  // ⭐ La branche ABOUTIT à l'oreille, mesurée sur ce visage-ci.
+  //
+  // Avant, sa longueur venait du sprite de profil — connue à ±20 %, et le bout
+  // flottait donc devant ou derrière l'oreille dès que la tête tournait. Or les
+  // deux extrémités sont CONNUES à l'écran : la charnière est projetée par
+  // l'affine de la face, l'oreille est un repère mesuré. Deux points suffisent à
+  // fixer la similitude — plus rien n'est deduit d'une longueur nominale.
+  //
+  // 🔴 Le raccourci en sin(yaw) n'est pas perdu, il est MESURÉ : l'écart
+  // charnière ↔ oreille à l'écran le porte déjà, puisqu'il est lui-même le long
+  // de l'axe avant-arrière de la tête. De face il tend vers zéro et la branche
+  // disparaît toute seule — ce que `render/temple.ts` masque de toute façon.
+  const ear = side > 0 ? m.ear.right : m.ear.left;
+  const vx = ear.x - anchor.x;
+  const vy = ear.y - anchor.y;
+
+  // Sur le sprite de profil, la branche part de la charniere et court vers +x.
+  const profileScale = spec.profilePxPerMm ?? spec.spritePxPerMm;
+  const lengthPx = templeLengthMm(spec) * profileScale;
+  if (lengthPx <= 0) {
+    throw new CalibrationError(
+      `Longueur de branche nulle sur "${spec.slug}" : sprite de profil non préparé.`,
+    );
+  }
+
+  // Similitude qui envoie (hinge → hinge + lengthPx·x̂) sur (anchor → ear).
+  const a = vx / lengthPx;
+  const b = vy / lengthPx;
+  // L'épaisseur de la branche, elle, reste à l'échelle réelle et ne s'écrase
+  // pas : un raccourci de perspective raccourcit, il n'amincit pas.
+  const sy = m.livePxPerMm / profileScale;
+  const c = (-vy / Math.hypot(vx, vy || 1)) * sy;
+  const d = (vx / Math.hypot(vx, vy || 1)) * sy;
+
   const hx = spec.hingeProfile.x;
   const hy = spec.hingeProfile.y;
 
@@ -219,8 +237,24 @@ export function templeAffine(spec: FrameSpec, m: FrameMetrics, side: 1 | -1): Af
   };
 }
 
-/** Longueur de branche rendue a l'ecran, en pixels. Nulle de face. */
-export function renderedTempleLengthPx(spec: FrameSpec, m: FrameMetrics, widthPx: number): number {
-  const profileScale = spec.profilePxPerMm ?? spec.spritePxPerMm;
-  return (widthPx * m.livePxPerMm * Math.sin(Math.abs(m.yawRad))) / profileScale;
+/** Longueur de branche du sprite de profil, en mm. Redressée si elle l'a été. */
+export function templeLengthMm(spec: FrameSpec): number {
+  return spec.templeRectifiedMm ?? spec.brancheMm;
+}
+
+/**
+ * Longueur de branche RÉELLEMENT peinte a l'ecran, en pixels.
+ *
+ * ⚠️ C'est desormais la distance charniere ↔ oreille mesuree, et non plus
+ * `longueur nominale × sin(yaw)`. Une seule definition de la longueur, celle
+ * qu'applique `templeAffine` — deux notions divergeraient (T3).
+ */
+export function renderedTempleLengthPx(spec: FrameSpec, m: FrameMetrics, side: 1 | -1): number {
+  const hingeOnFront = {
+    x: side > 0 ? spec.alphaBBox.x + spec.alphaBBox.w : spec.alphaBBox.x,
+    y: spec.bridgeCenter.y,
+  };
+  const anchor = spriteToScreen(hingeOnFront, spec, m);
+  const ear = side > 0 ? m.ear.right : m.ear.left;
+  return Math.hypot(ear.x - anchor.x, ear.y - anchor.y);
 }

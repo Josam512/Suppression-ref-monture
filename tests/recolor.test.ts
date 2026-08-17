@@ -68,6 +68,7 @@ const metrics: FrameMetrics = {
   rollRad: 0,
   yawRad: 0,
   poseAnchor: { x: W / 2, y: H / 2 },
+  ear: { left: { x: W / 2 - 200, y: H / 2 }, right: { x: W / 2 + 200, y: H / 2 } },
 };
 
 /**

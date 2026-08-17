@@ -15,8 +15,14 @@ import {
   calibrateWithWornFrame,
 } from '../src/core/calibration.js';
 import { haloOffsets, OVERLAY_PADDING_MM } from '../src/render/composite.js';
-import { frameMetrics } from '../src/core/faceMetrics.js';
-import { renderedTempleLengthPx, spriteAffine, templeAffine } from '../src/core/transform.js';
+import { faceWidthPx, frameMetrics } from '../src/core/faceMetrics.js';
+import {
+  apply,
+  renderedTempleLengthPx,
+  spriteAffine,
+  templeAffine,
+  templeLengthMm,
+} from '../src/core/transform.js';
 import { totalFrameWidthMm } from '../src/core/frameSpec.js';
 import { verdict } from '../src/core/verdict.js';
 
@@ -87,24 +93,49 @@ describe('V2-2 — dilatation du sprite sur la monture réelle (§11.6)', () => 
 });
 
 describe('Lot 7 — la branche est perpendiculaire à la face', () => {
-  it('sa longueur rendue est NULLE de face et maximale de profil', () => {
+  it('sa longueur rendue croît avec le yaw, et reste quasi nulle de face', () => {
     const spec = specForTotalWidthMm(132);
     const at = (yaw: number): number =>
-      renderedTempleLengthPx(spec, frameMetrics(makeFaceAtYaw(yaw), W, H, makeCal(), yaw), 800);
+      renderedTempleLengthPx(spec, frameMetrics(makeFaceAtYaw(yaw), W, H, makeCal(), yaw), 1);
 
-    expect(at(0)).toBeCloseTo(0, 9);
-    expect(at(Math.PI / 6)).toBeGreaterThan(0);
+    // ⚠️ Plus « exactement zéro » : de face la charnière et l'oreille ne sont
+    // pas confondues à l'écran, elles sont seulement très proches. C'est la
+    // réalité mesurée, et `render/temple.ts` masque de toute façon la branche
+    // en dessous de 0,10 rad. Le seuil est exprimé en largeurs de visage pour
+    // ne pas réintroduire une constante de taille (§0.0.3).
+    const m0 = frameMetrics(makeFaceAtYaw(0), W, H, makeCal(), 0);
+    expect(at(0)).toBeLessThan(0.1 * faceWidthPx(makeFaceAtYaw(0), W, H));
+    expect(m0.livePxPerMm).toBeGreaterThan(0);
+    expect(at(Math.PI / 6)).toBeGreaterThan(at(0));
     expect(at(Math.PI / 3)).toBeGreaterThan(at(Math.PI / 6));
   });
 
-  it('elle suit sin(yaw), là où la face suit cos(yaw)', () => {
-    // C'est la signature du bug corrigé : appliquer à la branche l'affine de la
-    // face la faisait RÉTRÉCIR quand la tête tourne, soit l'inverse du réel.
+  /**
+   * ⭐ Ce test REMPLACE « elle suit sin(yaw) ».
+   *
+   * L'ancien verrouillait un modèle NOMINAL : longueur du sprite × sin(yaw).
+   * C'est ce modèle qui laissait la branche fausse de ±20 %, parce que la
+   * longueur venait du sprite et non du visage. Elle est désormais MESURÉE —
+   * la branche relie deux points connus à l'écran — et c'est cette propriété
+   * là qu'il faut verrouiller, sur un balayage et non sur un point.
+   *
+   * Le raccourci en sin(yaw) n'est pas perdu pour autant : il est porté par
+   * l'écart charnière ↔ oreille, qui est lui-même le long de l'axe
+   * avant-arrière de la tête.
+   */
+  it('GARDE-FOU : le bout de la branche tombe SUR l’oreille, à tout yaw', () => {
     const spec = specForTotalWidthMm(132);
-    const yaw = Math.PI / 6;
-    const m = frameMetrics(makeFaceAtYaw(yaw), W, H, makeCal(), yaw);
-    const ratio = renderedTempleLengthPx(spec, m, 800) / (800 * m.livePxPerMm / spec.spritePxPerMm);
-    expect(ratio).toBeCloseTo(Math.sin(yaw), 6);
+    for (const yaw of [0.15, 0.3, Math.PI / 6, 0.7, Math.PI / 3, -0.4, -Math.PI / 6]) {
+      const m = frameMetrics(makeFaceAtYaw(yaw), W, H, makeCal(), yaw);
+      const side: 1 | -1 = yaw >= 0 ? -1 : 1;
+      const t = templeAffine(spec, m, side);
+      const tip = apply(t, {
+        x: spec.hingeProfile.x + templeLengthMm(spec) * (spec.profilePxPerMm ?? spec.spritePxPerMm),
+        y: spec.hingeProfile.y,
+      });
+      const ear = side > 0 ? m.ear.right : m.ear.left;
+      expect(Math.hypot(tip.x - ear.x, tip.y - ear.y), `yaw=${yaw}`).toBeLessThan(0.5);
+    }
   });
 
   it('elle est ancrée à la CHARNIÈRE, pas au centre du pont', () => {
@@ -120,10 +151,24 @@ describe('Lot 7 — la branche est perpendiculaire à la face', () => {
     expect(ecartPx).toBeGreaterThan(60 * m.livePxPerMm);
   });
 
-  it('les deux côtés sont symétriques', () => {
+  it('les deux côtés sont symétriques DE FACE — et pas de trois quarts', () => {
     const spec = specForTotalWidthMm(132);
+
+    // De face, rien ne distingue les deux côtés : la symétrie doit être exacte.
+    const m0 = frameMetrics(makeFaceAtYaw(0), W, H, makeCal(), 0);
+    expect(templeAffine(spec, m0, 1).a).toBeCloseTo(-templeAffine(spec, m0, -1).a, 9);
+
+    // ⚠️ Ce test exigeait auparavant la même symétrie À TOUT YAW. C'était une
+    // propriété du modèle NOMINAL (±longueur·sin|yaw|), pas du réel : quand la
+    // tête tourne, une branche s'allonge et l'autre se dérobe. L'exiger
+    // revenait à verrouiller le modèle qu'on vient justement de remplacer par
+    // une mesure. On vérifie donc l'inverse : de trois quarts, les deux côtés
+    // NE sont plus symétriques.
     const yaw = Math.PI / 6;
     const m = frameMetrics(makeFaceAtYaw(yaw), W, H, makeCal(), yaw);
-    expect(templeAffine(spec, m, 1).a).toBeCloseTo(-templeAffine(spec, m, -1).a, 9);
+    expect(Math.abs(templeAffine(spec, m, 1).a)).not.toBeCloseTo(
+      Math.abs(templeAffine(spec, m, -1).a),
+      3,
+    );
   });
 });
