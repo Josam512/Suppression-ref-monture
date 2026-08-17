@@ -137,11 +137,11 @@ try {
     /Retirez vos lunettes/i.test(texteV1),
   );
 
-  // ⭐ La carte se pose DANS LE PLAN DU VISAGE, pas sur le front : c'est ce qui
-  // supprime le biais de parallaxe B4 au lieu de le corriger.
+  // ⭐ La carte se tient SOUS les yeux : une carte qui les masque fait inventer
+  // a MediaPipe les reperes sur lesquels la mesure est prise.
   check(
-    'V1 : la carte est demandee a hauteur des yeux, pas sur le front',
-    /hauteur des yeux/i.test(texteV1) && !/sur votre front/i.test(texteV1),
+    'V1 : la carte est demandee sous les yeux, pas sur le front ni devant',
+    /sous les yeux/i.test(texteV1) && !/sur votre front/i.test(texteV1),
   );
 
   // 🔴 Le livrable : la mesure se prend seule. Un bouton « Valider » signifierait

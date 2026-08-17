@@ -93,7 +93,7 @@
  */
 
 import { refineQuadDetailed } from '../src/core/cardEdges.js';
-import { guideEdgeStep } from '../src/core/cardGuide.js';
+import { guideEdgeStep } from '../src/core/cardGuideLock.js';
 import { CARD_H_MM, CARD_W_MM, type CardQuad } from '../src/core/cardPose.js';
 import { FACE_WIDTH_MAX_MM, FACE_WIDTH_MIN_MM } from '../src/core/calibration.js';
 import { BROW_L, BROW_R, HAIRLINE, faceWidthPx, rollRadOf } from '../src/core/faceMetrics.js';

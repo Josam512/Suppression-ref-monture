@@ -74,7 +74,8 @@ try {
   await page.goto(`${BASE}/tests/guide-on-video.html`, { waitUntil: 'load' });
   await page.waitForFunction(() => typeof window.__SURVEYGUIDE__ === 'function', { timeout: 20000 });
 
-  const s = await page.evaluate((u) => window.__SURVEYGUIDE__(u), '/_guide/manifest.json');
+  const only = argv.includes('--only') ? Number(argv[argv.indexOf('--only') + 1]) : undefined;
+  const s = await page.evaluate(({ u, n }) => window.__SURVEYGUIDE__(u, n), { u: '/_guide/manifest.json', n: only });
 
   console.log(`  dimensions        : ${s.w} x ${s.h}`);
   console.log(`  images parcourues : ${s.stepped}`);

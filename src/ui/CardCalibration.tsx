@@ -47,16 +47,18 @@ export function CardCalibration(props: CardCalibrationProps): JSX.Element {
       </p>
 
       <p>
-        Tenez la carte <strong>à hauteur des yeux</strong>, contre votre visage, et amenez-la dans
-        le cadre. Ça se prend tout seul, en une seconde — vous n’avez rien à valider.
+        Tenez la carte <strong>à plat contre votre visage, juste sous les yeux</strong>, et
+        amenez-la dans le cadre. Laissez vos yeux dégagés. Ça se prend tout seul, en une seconde —
+        vous n’avez rien à valider.
       </p>
 
       {/*
-        🔴 La carte se porte dans le PLAN DU VISAGE, et pas sur le front. Ce n'est
-        pas un détail de confort : sur le front elle est ~54 mm devant les repères
-        qui mesurent le visage, ce qui introduit 13 % de biais systématique à
-        40 cm (correctif B4). Là où iront les lunettes, il n'y a plus d'écart de
-        profondeur — donc plus rien à corriger, et plus rien à supposer.
+        🔴 La carte se tient SOUS la ligne des yeux, jamais devant. Une carte qui
+        masque les yeux ne fait pas perdre le visage à MediaPipe : le modèle rend
+        quand même ses 478 points, en inventant ceux qu'il ne voit plus — et la
+        largeur du visage, qui EST la mesure, serait lue sur ces points-là.
+        (Ce placement n'annule PAS la parallaxe : le nez ressort autant que le
+        front. C'est la rotation qui la mesure. Voir CARD_TO_TEMPLE_DEPTH_MM.)
       */}
       <p style={{ opacity: 0.75 }}>
         Vous pouvez utiliser {ISO_ID1_OBJECTS[0]}, {ISO_ID1_OBJECTS[1]}, {ISO_ID1_OBJECTS[2]} ou{' '}

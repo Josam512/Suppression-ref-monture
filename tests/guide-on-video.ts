@@ -17,13 +17,25 @@
  */
 
 import { refineQuadDetailed } from '../src/core/cardEdges.js';
-import { checkCardInGuide, guideEdgeStep, guideQuad } from '../src/core/cardGuide.js';
+import { guideQuad } from '../src/core/cardGuide.js';
+import { checkCardInGuide, guideEdgeStep } from '../src/core/cardGuideLock.js';
 import type { CardQuad } from '../src/core/cardPose.js';
-import { findCardOnForehead } from './cardFind.atelier.js';
 import { faceWidthPx, rollRadOf } from '../src/core/faceMetrics.js';
-import type { NormalizedLandmark } from '../src/core/geom.js';
-import type { ImageBuffer } from '../src/core/silhouette.js';
+import type { NormalizedLandmark, Pt } from '../src/core/geom.js';
+import { luma, type ImageBuffer } from '../src/core/silhouette.js';
 import { createLandmarker } from '../src/tracking/landmarker.js';
+
+/**
+ * Coins de la carte sur la PREMIÈRE image, pointés à la main sur une grille de
+ * coordonnées. C'est le geste d'un opticien : deux clics, pas un algorithme.
+ * Tout le reste de la séquence est ensuite accroché de proche en proche.
+ */
+const SEED_QUAD: CardQuad = [
+  { x: 405, y: 537 },
+  { x: 722, y: 563 },
+  { x: 718, y: 700 },
+  { x: 402, y: 707 },
+];
 
 /** Pas d'échantillonnage : toutes les images utiles, sans exiger le temps réel. */
 const STEP_S = 1 / 30;
@@ -60,6 +72,20 @@ export interface GuideRow {
    * accroche autre chose fait exploser la dispersion de ce rapport.
    */
   facePx: number;
+  /**
+   * Les QUATRE marches de la carte, bord par bord, dans l'ordre haut/droite/bas/gauche.
+   *
+   * 🔴 Indispensable ici : dans cette séquence la carte est calée contre les
+   * cheveux, donc son bord HAUT est sombre sur sombre. Le minimum sur quatre
+   * bords s'effondre alors pour une raison qui n'existe plus quand la carte est
+   * portée à hauteur des yeux, peau tout autour. Sans ce détail, on figerait un
+   * seuil sur le handicap d'un seul bord.
+   */
+  cardEdgeSteps: number[] | null;
+  /** Le cadre proposé, en pixels — pour rejouer la scène hors ligne. */
+  guideQuadPx: CardQuad;
+  /** Le quadrilatère suivi, pour le tracé de contrôle. */
+  cardQuad: CardQuad | null;
   /** Largeur du cadre à cette image, en px — pour rapporter la précédente. */
   guideWidthPx: number;
 }
@@ -118,6 +144,35 @@ async function open(manifestUrl: string): Promise<Ready> {
   return { load, count: n, fps, canvas, ctx, w, h };
 }
 
+/**
+ * Les quatre marches d'un quadrilatère, séparément.
+ *
+ * ⚠️ Reprend la géométrie de `guideEdgeStep` (même sonde à ±6 px, mêmes 23
+ * échantillons) mais SANS le minimum final. C'est un instrument d'atelier : il
+ * regarde ce que la fonction de production réduit à un seul nombre.
+ */
+function edgeStepsOf(buf: ImageBuffer, q: CardQuad): number[] {
+  const PROBE_PX = 6; // identique à core/cardGuide.ts
+  return [0, 1, 2, 3].map((e) => {
+    const a = q[e] as Pt;
+    const b = q[(e + 1) % 4] as Pt;
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (len < 1) return 0;
+    const nx = -(b.y - a.y) / len;
+    const ny = (b.x - a.x) / len;
+    let sum = 0;
+    for (let i = 1; i < 24; i++) {
+      const t = i / 24;
+      const cx = a.x + (b.x - a.x) * t;
+      const cy = a.y + (b.y - a.y) * t;
+      const inside = luma(buf, Math.round(cx - nx * PROBE_PX), Math.round(cy - ny * PROBE_PX));
+      const outside = luma(buf, Math.round(cx + nx * PROBE_PX), Math.round(cy + ny * PROBE_PX));
+      sum += Math.abs(outside - inside);
+    }
+    return sum / 23;
+  });
+}
+
 function strokeQuad(ctx: CanvasRenderingContext2D, q: CardQuad, color: string, width: number): void {
   ctx.save();
   ctx.strokeStyle = color;
@@ -130,8 +185,9 @@ function strokeQuad(ctx: CanvasRenderingContext2D, q: CardQuad, color: string, w
   ctx.restore();
 }
 
-export async function surveyGuide(manifestUrl: string): Promise<GuideSurvey> {
-  const { load, count, fps, canvas, ctx, w, h } = await open(manifestUrl);
+export async function surveyGuide(manifestUrl: string, only?: number): Promise<GuideSurvey> {
+  const { load, count: total, fps, canvas, ctx, w, h } = await open(manifestUrl);
+  const count = only === undefined ? total : Math.min(total, only);
   const landmarker = await createLandmarker();
 
   const rows: GuideRow[] = [];
@@ -139,6 +195,7 @@ export async function surveyGuide(manifestUrl: string): Promise<GuideSurvey> {
   let stepped = 0;
   let detected = 0;
   let ts = 0;
+  let track: CardQuad | null = null;
 
   for (let i = 0; i < count; i++) {
     const t = i / fps;
@@ -169,7 +226,21 @@ export async function surveyGuide(manifestUrl: string): Promise<GuideSurvey> {
     }
     const check = checkCardInGuide(snapped, guide, measured, edgeStep);
 
-    const found = findCardOnForehead(buf, lm, w, h);
+    // ⭐ La carte est SUIVIE : chaque image repart du résultat de la précédente.
+    // Aucune détection — le seul apport humain est le pointage de l'image 0.
+    let card: CardQuad | null = null;
+    let cardMeasured = 0;
+    try {
+      const r = refineQuadDetailed(buf, track ?? SEED_QUAD);
+      if (r.measured >= 2) {
+        card = r.quad;
+        cardMeasured = r.measured;
+        track = r.quad;
+      }
+    } catch {
+      card = null; // suivi perdu : on repartira de la graine à l'image suivante.
+      track = null;
+    }
 
     rows.push({
       t,
@@ -178,10 +249,16 @@ export async function surveyGuide(manifestUrl: string): Promise<GuideSurvey> {
       worstOffsetPx: check.worstOffsetPx,
       fill: check.fill,
       ok: check.ok,
-      foundWidthPx: found === null ? null : found.widthPx,
-      foundEdgeStep: found === null ? null : found.edgeStep,
-      foundMeasured: found === null ? null : found.measured,
-      foundRollVsHeadDeg: found === null ? null : ((found.rollRad - rollRadOf(lm, w, h)) * 180) / Math.PI,
+      foundWidthPx: card === null ? null : Math.hypot(card[1].x - card[0].x, card[1].y - card[0].y),
+      foundEdgeStep: card === null ? null : guideEdgeStep(buf, card),
+      foundMeasured: card === null ? null : cardMeasured,
+      foundRollVsHeadDeg:
+        card === null
+          ? null
+          : ((Math.atan2(card[1].y - card[0].y, card[1].x - card[0].x) - rollRadOf(lm, w, h)) * 180) / Math.PI,
+      guideQuadPx: guide,
+      cardEdgeSteps: card === null ? null : edgeStepsOf(buf, card),
+      cardQuad: card,
       facePx: faceWidthPx(lm, w, h),
       guideWidthPx: Math.hypot(guide[1].x - guide[0].x, guide[1].y - guide[0].y),
     });
@@ -202,11 +279,9 @@ export async function surveyGuide(manifestUrl: string): Promise<GuideSurvey> {
     ctx.drawImage(await load(Math.round(p.t * fps)), 0, 0, w, h);
     const entry = keep.find((k) => k.t === p.t);
     if (entry !== undefined) {
-      const raw = ctx.getImageData(0, 0, w, h);
-      const buf: ImageBuffer = { data: raw.data, width: raw.width, height: raw.height };
       strokeQuad(ctx, guideQuad(entry.lm, w, h), '#ff2d55', 5); // le cadre proposé
-      const found = findCardOnForehead(buf, entry.lm, w, h);
-      if (found !== null) strokeQuad(ctx, found.quad, '#34c759', 5); // la carte trouvée
+      const row = rows.find((r) => r.t === p.t);
+      if (row?.cardQuad != null) strokeQuad(ctx, row.cardQuad, '#34c759', 5); // la carte suivie
     }
     samples.push({ label: p.label, t: p.t, png: canvas.toDataURL('image/png') });
   }
@@ -216,7 +291,7 @@ export async function surveyGuide(manifestUrl: string): Promise<GuideSurvey> {
 
 declare global {
   interface Window {
-    __SURVEYGUIDE__?: (url: string) => Promise<GuideSurvey>;
+    __SURVEYGUIDE__?: (url: string, only?: number) => Promise<GuideSurvey>;
   }
 }
 window.__SURVEYGUIDE__ = surveyGuide;
