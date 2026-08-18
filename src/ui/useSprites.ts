@@ -38,10 +38,12 @@ export function useSprites(spec: FrameSpec | null): SpritesState {
 
     void (async () => {
       try {
-        const base = assetUrl(`frames/${spec.slug}`);
+        // ⚠️ `assetUrl` reçoit le chemin COMPLET du fichier, jamais un
+        // répertoire auquel on concaténerait un nom : une page autonome sert
+        // ses fichiers en `blob:`, et un `blob:…/front.png` ne mène nulle part.
         const [front, profile] = await Promise.all([
-          loadImage(`${base}/${spec.front}`),
-          loadImage(`${base}/${spec.profile}`),
+          loadImage(assetUrl(`frames/${spec.slug}/${spec.front}`)),
+          loadImage(assetUrl(`frames/${spec.slug}/${spec.profile}`)),
         ]);
         if (cancelled) return;
         setState({
