@@ -1,35 +1,39 @@
 /**
- * ui/CardCalibration.tsx — V1, l'étape carte : la consigne, et rien d'autre.
+ * ui/CardCalibration.tsx — V1, premier écran : « quand vous êtes prêt, appuyez ».
  *
- * ## Ce que ce composant NE fait plus
+ * ## Ce que ce composant ne fait plus, et pourquoi
  *
- * Il affichait une image figée, deux poignées à traîner sur les bords de la
- * carte, et un bouton « Valider ». C'était le seul geste long de la calibration,
- * et il demandait au client d'être précis — ce qui est exactement ce qu'on ne
- * peut pas exiger d'une personne seule chez elle.
+ * Il a porté deux parcours, tous deux abandonnés à l'usage :
  *
- * Le cadre affiché en direct sur la vidéo l'a remplacé (`ui/cardGuideStep.ts`) :
- * le client pose sa carte là où seront ses lunettes, et la mesure se prend
- * d'elle-même. **Aucun bouton, aucune validation, aucun réglage.** La jauge dit
- * seulement où il en est.
+ *   1. **Deux poignées sur image figée, d'entrée de jeu.** Le seul geste long de
+ *      la calibration, et il demandait au client d'être précis avant même de
+ *      savoir de quoi il s'agissait.
+ *   2. **Un cadre à remplir, en direct, avec verrouillage automatique.** Pire :
+ *      le cadre était ancré sur le visage, donc il bougeait avec la tête. Le
+ *      client courait après une cible mouvante, sans savoir ce qui manquait, et
+ *      c'est la machine qui décidait quand c'était bon.
  *
- * ⚠️ Ce composant ne mesure rien. Il affiche du texte et un pourcentage.
+ * 🔴 **Arbitrage humain du 2026-08-18 : c'est le client qui décide.** Il n'y a
+ * plus rien à remplir, plus rien à viser, plus aucun verrouillage. Il place sa
+ * carte comme il l'entend et appuie. Ce que la machine sait faire — accrocher un
+ * bord au dixième de pixel — se fait ensuite, sur ses repères, sans lui demander
+ * de la précision qu'il n'a pas à fournir.
+ *
+ * ⚠️ Ce composant ne mesure rien. Il affiche du texte et deux boutons.
  */
 
 import { ISO_ID1_OBJECTS } from '../core/calibration.js';
 
 export interface CardCalibrationProps {
-  /** Avancement du verrouillage, 0 → 1. Vient de `core/cardGuide.ts`. */
-  fill: number;
-  /** « Je n'y arrive pas » — bascule sans attendre le délai. */
-  onManual(): void;
+  /** « Ma carte est en place » — fige l'image et passe au pointage. */
+  onReady(): void;
   onCancel(): void;
 }
 
 export function CardCalibration(props: CardCalibrationProps): JSX.Element {
   return (
     <section>
-      <h2>Posez votre carte là où seront vos lunettes</h2>
+      <h2>Prenez une carte, et dites-moi quand vous êtes prêt</h2>
 
       {/*
         ⚠️ Première consigne, avant toute autre. Un client qui garde ses lunettes
@@ -48,11 +52,20 @@ export function CardCalibration(props: CardCalibrationProps): JSX.Element {
         </span>
       </p>
 
-      <p>
-        Tenez la carte <strong>à plat contre votre visage, juste sous les yeux</strong>, et
-        amenez-la dans le cadre. Laissez vos yeux dégagés. Ça se prend tout seul, en une seconde —
-        vous n’avez rien à valider.
-      </p>
+      <ol>
+        <li>
+          Tenez la carte <strong>à plat contre votre visage, juste sous les yeux</strong>, bien
+          visible en entier. Laissez vos yeux dégagés.
+        </li>
+        <li>
+          Appuyez sur <strong>« Ma carte est en place »</strong>. J’arrête l’image et vous placez
+          deux repères sur ses bords, tranquillement.
+        </li>
+        <li>
+          Ensuite vous filmez : de face, puis de profil d’un côté et de l’autre.{' '}
+          <strong>Vous gardez la carte en main</strong>, et vous arrêtez quand vous voulez.
+        </li>
+      </ol>
 
       {/*
         🔴 La carte se tient SOUS la ligne des yeux, jamais devant. Une carte qui
@@ -63,24 +76,13 @@ export function CardCalibration(props: CardCalibrationProps): JSX.Element {
         front. C'est la rotation qui la mesure. Voir CARD_TO_TEMPLE_DEPTH_MM.)
       */}
       <p style={{ opacity: 0.75 }}>
-        Vous pouvez utiliser {ISO_ID1_OBJECTS[0]}, {ISO_ID1_OBJECTS[1]}, {ISO_ID1_OBJECTS[2]} ou{' '}
-        {ISO_ID1_OBJECTS[3]} : toutes font exactement le même format normalisé.{' '}
+        {ISO_ID1_OBJECTS[0]}, {ISO_ID1_OBJECTS[1]}, {ISO_ID1_OBJECTS[2]} ou {ISO_ID1_OBJECTS[3]} :
+        toutes font exactement le même format normalisé.{' '}
         <em>La carte Vitale est la plus sûre — elle ne porte aucun numéro de paiement.</em>
       </p>
 
-      <p aria-live="polite">
-        {props.fill >= 1
-          ? 'C’est bon, ne bougez plus…'
-          : `Cadrage : ${Math.round(100 * props.fill)} %`}
-      </p>
-
-      {/*
-        🔴 Toujours présent, dès la première seconde. Un client qui n'y arrive
-        pas ne doit pas avoir à deviner qu'un délai finira par le sauver — et il
-        ne doit jamais se retrouver avec « Annuler » pour seule issue.
-      */}
-      <button type="button" onClick={props.onManual}>
-        Ça n’accroche pas — placer les repères moi-même
+      <button type="button" onClick={props.onReady} style={{ fontWeight: 700 }}>
+        Ma carte est en place
       </button>{' '}
       <button type="button" onClick={props.onCancel}>
         Annuler

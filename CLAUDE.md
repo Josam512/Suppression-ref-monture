@@ -1851,3 +1851,79 @@ photo du sujet réel, avant/après dans `docs/verification/`. Le banc du §8.3
 verrouille la règle par un contrôle sans paramètre libre — « centres optiques ↔
 ligne des yeux » — qui rougit si quiconque réintroduit un décalage constant,
 quelle que soit sa valeur.
+
+
+### 14.7 V1 — la séance est FILMÉE, et c'est le client qui l'arrête (2026-08-18)
+
+> « c'est n'importe quoi ton système de cadrage, fais juste une vidéo où j'ai la
+> main pour me montrer de face et de profil, et que JE décide moi quand la vidéo
+> est finie, après tu prends tes 3 secondes pour te faire ta règle de 3.
+> ET ne me sors pas tes conneries du genre "on voit tes cheveux" ou "ton doigt
+> cache un coin de la carte". Avec la carte tu as TOUT alors tu me termines ça
+> et de façon carrée »
+
+Arbitrage retenu **en entier**, et il supprime du code au lieu d'en ajouter.
+
+#### Ce qui est supprimé
+
+`core/cardGuide.ts`, `core/cardGuideLock.ts`, `ui/cardGuideStep.ts`,
+`tests/guide-on-video.ts` et `scripts/guide-on-video.mjs` — le cadre à remplir,
+son verrouillage à trois images, sa jauge, son délai de bascule. Tout ce qui
+décidait à la place du client. Seule survit la mesure de contraste
+(`core/edgeStep.ts`, ex-`guideEdgeStep`), qui reste le seul contrôle non
+circulaire que le projet ait établi sur des bords de carte, et qui ne sert plus
+qu'à l'atelier — **elle ne refuse plus rien à personne**.
+
+#### Ce qui le remplace — trois écrans, trois boutons, zéro transition automatique
+
+| Écran | Ce que le client fait | Ce que la machine fait |
+|---|---|---|
+| Consigne | tient sa carte, appuie sur **« Ma carte est en place »** | rien : elle efface le canvas |
+| Pointage | pose deux repères sur une image **figée**, sans chronomètre | accroche les bords au dixième de pixel (`cardEdges`) |
+| Séance filmée | de face, de profil des deux côtés, **carte en main**, aussi longtemps qu'il veut | relève la carte à chaque image, compte, **n'arrête rien** |
+| — | appuie sur **« J'ai fini »** | assemble, une fois |
+
+🔴 `stepRotation` ne renvoie plus de booléen `complete` : c'était lui qui
+déclenchait le calcul, au milieu d'un mouvement du client.
+
+#### 🔴 Le bug que cet arbitrage a mis au jour — la distance n'était JAMAIS mesurée
+
+En cherchant pourquoi « avec la carte tu as TOUT » ne se traduisait par rien à
+l'écran, deux défauts se répondaient :
+
+1. `RotationProbe` ne relevait la carte **qu'au moment où une tranche d'angle
+   neuve se remplissait** : au grand maximum 8 vues, soit exactement le plancher
+   `MIN_SWEEP_VIEWS`. Sur un aller-retour simulé de 120 images : **6 vues**.
+2. L'écran de rotation affichait **« Merci, vous pouvez ranger votre carte »** —
+   pendant que le code, lui, essayait de la suivre.
+
+`cameraFromSweep` refusait donc systématiquement, en silence, et la chaîne
+retombait sur la distance supposée — celle qui s'est révélée fausse de 46 % au
+§14.5. **La mire de calibration du §14.5 était écrite, testée, et jamais
+atteinte en production.** Correctifs : relevé à **chaque** image (400 vues sur le
+même aller-retour, plafonnées pour la mémoire), et la carte reste en main
+jusqu'au bout.
+
+#### 🔴 Second bug, ouvert puis refermé en cours de route
+
+Séparer le gel de l'image et le pointage crée un intervalle de plusieurs
+secondes. Lire les repères du visage à la **validation** les prendrait sur une
+tête qui a bougé, alors que la carte, elle, est mesurée sur l'image gelée : le
+**rapport** carte/visage — qui *est* la mesure — serait faux, et invisiblement.
+`ui/freezeFrame.ts` lie désormais l'image et ses repères en un seul objet, pour
+les deux versions. Sans repères, **pas de gel** : le refus est dit en clair.
+
+#### « Ne me sors pas tes conneries » — traduit en garantie testée
+
+`core/cardAssembly.ts` porte la règle : **une carte pointée produit toujours une
+calibration.** Focale, parallaxe, écart temporal sont facultatifs un par un ;
+chaque échec élargit la marge et laisse une note, aucun ne renvoie à la case
+départ. Le seul refus qui subsiste est une largeur hors plage anatomique — les
+repères n'étaient pas sur la carte, et c'est le seul cas que recommencer répare.
+`tests/capture.test.ts` (16 tests) balaie le domaine, y compris la séance vide.
+
+> ⚠️ **Ce qui n'est PAS couvert de bout en bout.** Le flux injecté par Chromium
+> est une mire, pas un visage : le banc du §8.3 vérifie le refus de geler sans
+> repères, et s'arrête là. Le pointage, la séance et l'assemblage sont couverts
+> en calcul pur. Le câblage des trois boutons entre eux n'a pas de filet
+> automatique — c'est écrit dans le banc lui-même plutôt que contourné.

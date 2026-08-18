@@ -18,12 +18,23 @@ import type { Live } from './liveState.js';
 /** Images d'iris moyennées avant de relire la carte. */
 export const CROSSCHECK_FRAMES = 30;
 
+/** Vues de carte à récolter avant de rafraîchir le compte à l'écran. */
+export const SWEEP_REPORT_EVERY = 5;
+
 /**
- * Le balayage de rotation. Renvoie l'avancement à publier, ou `null` si rien
- * n'a assez changé pour mériter un rendu React.
+ * La séance filmée. Renvoie le compte rendu à publier, ou `null` si rien n'a
+ * assez changé pour mériter un rendu React.
+ *
+ * 🔴 **Ne dit JAMAIS quand s'arrêter.** L'ancienne version rendait un booléen
+ * `complete`, sur lequel `TryOn` déclenchait le calcul : la machine décidait que
+ * la séance était finie, au milieu d'un mouvement du client. Le seul événement
+ * qui termine la séance est désormais son bouton (arbitrage du 2026-08-18), et
+ * ce qui sort d'ici est purement informatif.
  *
  * ⚠️ Un `setPhase` par image ferait rendre React soixante fois par seconde, au
- * moment précis où la détection a besoin du processeur.
+ * moment précis où la détection a besoin du processeur. Le compte rendu est donc
+ * publié par paliers — sur les degrés atteints, qui ne bougent que quand la tête
+ * bouge, et toutes les `SWEEP_REPORT_EVERY` vues de carte.
  */
 export function stepRotation(
   s: Live,
@@ -31,18 +42,19 @@ export function stepRotation(
   yawRad: number,
   w: number,
   h: number,
-): { ratio: number; degrees: { left: number; right: number }; complete: boolean } | null {
+): { degrees: { left: number; right: number }; cardViews: number } | null {
   if (s.probe === null) return null;
   s.probe.offer(lm, yawRad, rollRadOf(lm, w, h), w, h);
 
-  const ratio = s.probe.ratio();
-  const complete = s.probe.complete;
-  if (Math.abs(ratio - s.lastProbeRatio) <= 0.02 && !complete) return null;
+  const cardViews = s.probe.quads().length;
+  const reached = s.probe.progress.negative + s.probe.progress.positive;
+  const moved = Math.abs(reached - s.lastProbeRatio) > 0.02;
+  if (!moved && cardViews % SWEEP_REPORT_EVERY !== 0) return null;
 
-  s.lastProbeRatio = ratio;
+  s.lastProbeRatio = reached;
   const p = s.probe.progress;
   const deg = (r: number): number => (r * 180) / Math.PI;
-  return { ratio, degrees: { left: deg(p.negative), right: deg(p.positive) }, complete };
+  return { degrees: { left: deg(p.negative), right: deg(p.positive) }, cardViews };
 }
 
 /**

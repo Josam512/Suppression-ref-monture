@@ -130,7 +130,7 @@ try {
   // L'ancienne question sur les lunettes ouvrait la voie iris ; elle n'existe plus.
   check(
     'V1 : la carte est demandée d’emblée, sans passer par l’iris',
-    /carte bancaire/i.test(texteV1) && !/Portez-vous des lunettes/i.test(texteV1),
+    /carte/i.test(texteV1) && !/Portez-vous des lunettes/i.test(texteV1),
   );
   check(
     'V1 : la consigne « retirez vos lunettes » est donnée AVANT la mesure',
@@ -144,38 +144,45 @@ try {
     /sous les yeux/i.test(texteV1) && !/sur votre front/i.test(texteV1),
   );
 
-  // 🔴 Le livrable : la mesure se prend seule. Un bouton « Valider » signifierait
-  // que le client doit juger lui-meme si son cadrage est bon — c'est-a-dire
-  // exactement le reglage manuel que ce projet bannit (§1 bug #1).
-  const boutons = await page.locator('button').allInnerTexts();
+  // 🔴 ARBITRAGE DU 2026-08-18 : c'est le CLIENT qui declenche, et lui seul.
+  // Le cadre a remplir et son verrouillage automatique ont ete supprimes — la
+  // machine ne decide plus ni quand la mesure est prise, ni quand elle est
+  // finie. Ces trois controles verrouillent ce renversement.
+  const pret = page.getByRole('button', { name: /Ma carte est en place/i });
+  check('V1 : c’est le client qui declenche le gel de l’image', (await pret.count()) === 1);
   check(
-    'V1 : aucun bouton de validation — la mesure se prend seule',
-    !boutons.some((b) => /valider/i.test(b)),
+    'V1 : aucune jauge de cadrage ne court derriere lui',
+    !/Cadrage\s*:/i.test(texteV1) && !/dans le cadre/i.test(texteV1),
   );
 
-  // 🔴 AUCUN CUL-DE-SAC. Le cadre peut ne jamais accrocher — carte sombre sur
-  // peau sombre, contre-jour, doigt sur un bord. Si la seule issue restante est
-  // « Annuler », on interdit l'essayage a ce client-la (§0.0.2). La sortie doit
-  // etre offerte DES LA PREMIERE SECONDE, sans qu'il ait a deviner qu'un delai
-  // finira par le sauver.
-  const sortie = page.getByRole('button', { name: /placer les rep|placer les repères/i });
-  check('V1 : une sortie vers le pointage manuel est offerte d’emblee', (await sortie.count()) === 1);
-
-  await sortie.click();
-  await page.waitForTimeout(2500);
-  const manuel = await page.locator('body').innerText();
-  check(
-    'V1 : elle mene bien au pointage manuel, avec un bouton de validation',
-    /placez les deux rep/i.test(manuel) && /Valider/i.test(manuel),
-  );
-  check('V1 : et on peut revenir au cadre', /Réessayer avec le cadre|Reessayer avec le cadre/i.test(manuel));
-
-  await page.getByRole('button', { name: /Réessayer avec le cadre/ }).click();
+  // 🔴 Le flux injecte par Chromium est une mire, PAS un visage. Ce que le banc
+  // peut donc verifier ici, c'est le refus — et c'est loin d'etre secondaire :
+  // geler une image sans repères produirait une carte mesuree sur ces
+  // pixels-ci et un visage mesure sur d'autres, donc un RAPPORT faux, et
+  // parfaitement invisible. Le refus doit etre dit, jamais silencieux.
+  await pret.click();
   await page.waitForTimeout(2000);
+  const sansVisage = await page.locator('body').innerText();
   check(
-    'V1 : le retour au cadre remet bien l’etape live',
-    /amenez-la dans le cadre/i.test(await page.locator('body').innerText()),
+    'V1 : sans visage detecte, le gel est REFUSE et dit pourquoi (§1 bug #3)',
+    /je ne vous vois pas encore/i.test(sansVisage),
   );
+  check(
+    'V1 : …et le client reste sur la consigne, jamais coince (§0.0.2)',
+    /Ma carte est en place/i.test(sansVisage),
+  );
+
+  /*
+   * ⚠️ LIMITE ASSUMEE DU BANC, a ne pas laisser croire couverte.
+   *
+   * La suite du parcours — pointage des deux reperes, seance filmee, « J'ai
+   * fini » — exige un vrai visage dans le flux, que `--use-fake-device` ne
+   * fournit pas. Elle est couverte en calcul pur par `tests/capture.test.ts`
+   * (16 tests), qui verifie notamment qu'une seance VIDE produit quand meme une
+   * calibration. Ce qui reste non verifie de bout en bout, c'est le cablage des
+   * boutons entre eux. Le dire ici vaut mieux qu'un controle qui contournerait
+   * le refus ci-dessus pour avoir l'air complet.
+   */
 
   // La V2 doit s'ouvrir aussi, et annoncer sa dilatation de sprite.
   const store = await ctx.newPage();
@@ -205,7 +212,8 @@ try {
   const texteRevenant = await revenant.locator('body').innerText();
   check(
     'client deja calibre : la carte n’est PAS redemandee',
-    !/Portez-vous des lunettes/.test(texteRevenant) && !/carte bancaire/.test(texteRevenant),
+    !/Portez-vous des lunettes/.test(texteRevenant) &&
+      !/Ma carte est en place/.test(texteRevenant),
   );
 
   // L'atelier de recoloriage V2 doit se charger : c'est lui qui traitera la

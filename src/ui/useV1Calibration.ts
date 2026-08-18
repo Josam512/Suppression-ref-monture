@@ -1,37 +1,42 @@
 /**
  * ui/useV1Calibration.ts — la calibration de la vente en ligne, de bout en bout.
  *
- * Arbitrage humain du 2026-08-17 : **la carte est obligatoire, une seule fois,
- * au début**. Elle est suivie d'une rotation de tête à gauche puis à droite,
- * qui rend mesurables deux grandeurs jusqu'ici supposées :
+ * ## Le déroulé, décidé par le CLIENT (arbitrage humain du 2026-08-18)
  *
- *  · la profondeur entre le plan de la carte (sur le front) et celui des
- *    tempes — le biais B4, qui vaut 3 à 7 % et qu'aucune répétition de mesure
- *    ne détecte, puisque toutes les répétitions le partagent ;
- *  · l'écart temporal lui-même, lu à la frontière tête/fond, confirmée par le
- *    mouvement.
+ * > « fais juste une vidéo où j'ai la main pour me montrer de face et de profil,
+ * > et que JE décide moi quand la vidéo est finie, après tu prends tes 3 secondes
+ * > pour te faire ta règle de 3 »
  *
- * ⚠️ La rotation reste FACULTATIVE. On peut la passer : la calibration retombe
- * alors exactement sur celle du §4, annoncée avec sa marge réelle. Bloquer un
- * client qui n'y arrive pas serait lui interdire de voir l'image, ce que le
- * §0.0.2 refuse.
+ *   1. Il tient sa carte contre son visage et appuie quand il est prêt.
+ *   2. Il pose deux repères sur les bords de la carte, sur une image FIGÉE, à son
+ *      rythme. Aucun chronomètre, aucune cible mouvante à poursuivre.
+ *   3. Il filme : de face, de profil à gauche, de profil à droite, dans l'ordre
+ *      qu'il veut, aussi longtemps qu'il veut. **Il garde la carte en main.**
+ *   4. Il appuie sur « J'ai fini ». Le calcul se fait alors, une fois.
+ *
+ * 🔴 **Rien d'automatique ne décide à sa place** — ni verrouillage, ni délai, ni
+ * seuil de complétude. Le seul événement qui termine la séance est son doigt.
+ *
+ * ## Ce que la séance donne, et ce qu'elle ne bloque jamais
+ *
+ *   · la focale de son objectif, donc sa DISTANCE réelle (`core/cardSweep.ts`) ;
+ *   · la profondeur carte ↔ tempes, donc le biais B4 mesuré au lieu de supposé ;
+ *   · son écart temporal, lu à la frontière tête/fond confirmée par le mouvement.
+ *
+ * ⚠️ Aucune des trois n'est obligatoire. Chaque échec élargit la marge annoncée
+ * et laisse une note ; **aucun ne renvoie le client à la case départ** — c'est
+ * `core/cardAssembly.ts` qui en porte la garantie, et elle est testée.
  */
 
-import { useCallback, type MutableRefObject, type RefObject } from 'react';
+import { useCallback, useRef, type MutableRefObject, type RefObject } from 'react';
 
-import { calibrateWithCardMeasured, type UserCalibration } from '../core/calibration.js';
+import { assembleCardCalibration } from '../core/cardAssembly.js';
+import type { UserCalibration } from '../core/calibration.js';
 import { refineQuad } from '../core/cardEdges.js';
 import type { CardQuad } from '../core/cardPose.js';
-import { cameraFromSweep, measureDistance } from '../core/cardSweep.js';
-import {
-  focalPxFor,
-  isProfileUsable,
-  mergeProfile,
-  profileFromSweep,
-  type CameraProfile,
-} from '../core/cameraProfile.js';
-import { cardDistanceWithFocal } from '../core/cardPose.js';
+import type { CameraProfile } from '../core/cameraProfile.js';
 import { CalibrationError } from '../core/geom.js';
+import type { NormalizedLandmark } from '../core/geom.js';
 import { motionMask, type ImageBuffer } from '../core/silhouette.js';
 import type { Live } from './liveState.js';
 import { RotationProbe } from './rotationProbe.js';
@@ -41,10 +46,10 @@ export interface V1CalibrationDeps {
   videoRef: RefObject<HTMLVideoElement | null>;
   /** Appelé une fois la calibration obtenue, avec les notes à afficher. */
   onCalibrated(cal: UserCalibration, notes: string[]): void;
-  /** Appelé si rien d'exploitable n'est sorti : on renvoie le client à la carte. */
+  /** Appelé si les repères n'étaient pas sur la carte — le seul cas réparable. */
   onFailed(message: string): void;
-  /** Passe à l'étape de rotation, avec sa jauge à zéro. */
-  onRotationStart(): void;
+  /** Passe à l'étape filmée, compteurs à zéro. */
+  onSweepStart(): void;
   /**
    * ⭐ Profil d'objectif déjà mesuré lors d'une séance précédente, ou `null`.
    * La focale est une propriété de l'APPAREIL : mesurée une fois, elle sert
@@ -55,29 +60,53 @@ export interface V1CalibrationDeps {
   onCameraProfile(profile: CameraProfile): void;
 }
 
-/** Tolérance d'accrochage pendant le balayage : la tête bouge entre deux images. */
+/** Tolérance d'accrochage pendant la séance : la tête bouge entre deux images. */
 const TRACKING_TOLERANCE_PX = 25;
 
 export interface V1Calibration {
-  onCardValidated(cardWidthPx: number, quad: CardQuad, frozen: HTMLCanvasElement): void;
-  /** Assemble la calibration avec ce qui a été collecté — rotation ou non. */
+  /**
+   * @param lm repères relevés À L'INSTANT DU GEL, jamais ceux de la boucle live.
+   *        La carte et le visage doivent être mesurés sur les MÊMES pixels :
+   *        c'est leur rapport qui est la mesure.
+   */
+  onCardValidated(
+    cardWidthPx: number,
+    quad: CardQuad,
+    frozen: HTMLCanvasElement,
+    lm: readonly NormalizedLandmark[],
+  ): void;
+  /** Assemble avec ce que la séance a donné. Appelée UNIQUEMENT par le client. */
   finish(): void;
 }
 
 export function useV1Calibration(deps: V1CalibrationDeps): V1Calibration {
   const { live, videoRef } = deps;
 
+  /**
+   * Canvas de lecture, réutilisé d'une image à l'autre.
+   *
+   * ⚠️ En créer un par image — ce que faisait la version précédente — laisse au
+   * ramasse-miettes un canvas de 1280×720 à chaque frame, pendant que la
+   * détection tourne. C'est le genre de coût qui ne se voit pas sur un portable
+   * de développement et qui fait saccader un téléphone.
+   */
+  const off = useRef<HTMLCanvasElement | null>(null);
+
   /** Image courante, en pixels bruts. Null tant que la vidéo n'a rien à donner. */
   const grab = useCallback((): ImageBuffer | null => {
     const video = videoRef.current;
     if (video === null || video.videoWidth === 0) return null;
-    const off = document.createElement('canvas');
-    off.width = video.videoWidth;
-    off.height = video.videoHeight;
-    const ctx = off.getContext('2d', { willReadFrequently: true });
+
+    off.current ??= document.createElement('canvas');
+    const canvas = off.current;
+    if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+    }
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (ctx === null) return null;
     ctx.drawImage(video, 0, 0);
-    return ctx.getImageData(0, 0, off.width, off.height);
+    return ctx.getImageData(0, 0, canvas.width, canvas.height);
   }, [videoRef]);
 
   const finish = useCallback((): void => {
@@ -85,113 +114,75 @@ export function useV1Calibration(deps: V1CalibrationDeps): V1Calibration {
     const probe = live.current.probe;
     if (card === null) return;
 
-    const views = probe?.views() ?? null;
-
-    // ⭐ La carte a été suivie pendant tout le balayage : ses cadres donnent la
-    // FOCALE, donc la distance réelle. Sans eux, la chaîne retombe sur la
-    // fenêtre de travail supposée — ce qui, sur le premier sujet réel, s'est
-    // révélé faux de 46 % (78 cm supposés pour 42 mesurés).
-    //
-    // ⚠️ Aucune étape n'est bloquante : un échec ici n'est pas une panne, c'est
-    // une marge plus large. Le client doit pouvoir essayer des lunettes.
-    let measured: { cardDistanceMm: number; relError: number } | null = null;
-    const quads = card.quad === null ? [] : [card.quad, ...(probe?.quads() ?? [])];
-    const now = Date.now();
-
-    if (quads.length > 0 && card.quad !== null) {
-      try {
-        const sweep = cameraFromSweep(quads, card.w, card.h);
-        const d = measureDistance(card.quad, sweep, card.w, card.h);
-        measured = { cardDistanceMm: d.cardDistanceMm, relError: d.relError };
-
-        // ⭐ La focale ne sert plus une seule fois puis part à la poubelle : on
-        // la garde. Elle appartient à l'objectif du client, pas à cette séance.
-        try {
-          const fresh = profileFromSweep(sweep, card.w, now);
-          deps.onCameraProfile(mergeProfile(deps.cameraProfile, fresh));
-        } catch {
-          // Focale hors bornes : on ne persiste RIEN. Un profil absurde
-          // contaminerait toutes les séances suivantes — bien pire qu'une
-          // séance ratée.
-        }
-      } catch {
-        // Carte perdue de vue, ou focale trop dispersée pour valoir mieux que
-        // l'a priori. `cardSweep` refuse lui-même dans ce cas : on le suit.
-      }
-    }
-
-    // ⭐ Repli MESURÉ, et non plus a priori. Le balayage a échoué — carte
-    // perdue, rotation passée, vue trop frontale pour porter la focale — mais
-    // si l'objectif a déjà été mesuré une fois, la distance redevient une
-    // simple division : elle ne dépend plus que de la TAILLE apparente de la
-    // carte, qui est du premier ordre et donc robuste.
-    if (measured === null && card.quad !== null && isProfileUsable(deps.cameraProfile, now)) {
-      const profile = deps.cameraProfile as CameraProfile;
-      try {
-        const cardDistanceMm = cardDistanceWithFocal(
-          card.quad,
-          card.w,
-          card.h,
-          focalPxFor(profile, card.w),
-        );
-        measured = { cardDistanceMm, relError: profile.relError };
-      } catch {
-        // Cadre inexploitable : on laisse `measured` à null, et l'aval élargit
-        // la marge au lieu de bloquer quoi que ce soit.
-      }
-    }
-
     // ⚠️ Sans rotation, PAS de mesure de silhouette. Le masque de mouvement est
     // la seule chose qui distingue un bord de tête d'un montant de porte : sans
     // lui, on produirait un écart temporal d'allure normale et parfois faux —
     // exactement le mode d'échec que ce projet combat.
+    const buffers = probe?.buffers() ?? [];
     const scene =
-      views !== null && probe !== null
+      probe !== null && buffers.length > 0
         ? {
             frontal: card.frontal,
-            motion: motionMask(card.frontal, probe.buffers()),
+            motion: motionMask(card.frontal, buffers),
             lm: card.lm,
             w: card.w,
             h: card.h,
           }
         : null;
 
+    live.current.pendingCard = null;
+    live.current.probe = null;
+
     try {
-      const { cal, refinement } = calibrateWithCardMeasured(
-        card.cardWidthPx,
-        card.w,
-        card.lm,
-        card.w,
-        card.h,
-        views,
-        scene,
-        measured,
+      const out = assembleCardCalibration(
+        {
+          cardWidthPx: card.cardWidthPx,
+          quad: card.quad,
+          lm: card.lm,
+          w: card.w,
+          h: card.h,
+        },
+        {
+          quads: card.quad === null ? [] : [card.quad, ...(probe?.quads() ?? [])],
+          views: probe?.views() ?? null,
+          scene,
+        },
+        deps.cameraProfile,
+        Date.now(),
       );
-      live.current.pendingCard = null;
-      live.current.probe = null;
-      deps.onCalibrated(cal, ['Merci, vous pouvez ranger votre carte.', ...refinement.notes]);
+
+      // ⭐ La focale ne part pas à la poubelle : elle appartient à l'objectif du
+      // client, pas à cette séance. La séance suivante n'aura plus à la mesurer.
+      if (out.profile !== null) deps.onCameraProfile(out.profile);
+
+      deps.onCalibrated(out.cal, ['Merci, vous pouvez ranger votre carte.', ...out.notes]);
     } catch (err) {
-      live.current.pendingCard = null;
-      live.current.probe = null;
+      // Seul cas restant : la largeur obtenue est hors plage anatomique, donc
+      // les repères n'étaient pas sur la carte. C'est le seul échec que
+      // recommencer répare réellement.
       deps.onFailed(err instanceof Error ? err.message : String(err));
     }
   }, [live, deps]);
 
   const onCardValidated = useCallback(
-    (cardWidthPx: number, quad: CardQuad, frozen: HTMLCanvasElement): void => {
-      const lm = live.current.lastLandmarks;
+    (
+      cardWidthPx: number,
+      quad: CardQuad,
+      frozen: HTMLCanvasElement,
+      lm: readonly NormalizedLandmark[],
+    ): void => {
       const frontal = frozen
         .getContext('2d', { willReadFrequently: true })
         ?.getImageData(0, 0, frozen.width, frozen.height);
 
-      if (lm === null || frontal === undefined) {
-        deps.onFailed(new CalibrationError('Visage perdu pendant la calibration.').message);
+      if (frontal === undefined) {
+        deps.onFailed(new CalibrationError('Image perdue pendant la mesure.').message);
         return;
       }
 
-      // Le cadre du client n'est qu'une graine : on l'accroche sur les vrais
-      // bords. S'il ne s'accroche pas, on ne garde rien — mieux vaut pas de
-      // distance mesurée qu'une distance mesurée sur autre chose que la carte.
+      // Les deux repères du client ne sont qu'une graine : on les accroche sur
+      // les vrais bords. S'ils ne s'accrochent pas, on ne garde rien — mieux
+      // vaut pas de distance mesurée qu'une distance mesurée sur autre chose.
       let refined: CardQuad | null = null;
       try {
         refined = refineQuad(frontal, quad, TRACKING_TOLERANCE_PX);
@@ -199,7 +190,7 @@ export function useV1Calibration(deps: V1CalibrationDeps): V1Calibration {
         refined = null;
       }
 
-      // Le suivi pendant la rotation repart du cadre précédent, de proche en
+      // Le suivi pendant la séance repart du cadre précédent, de proche en
       // proche. Seuls les quatre coins sont conservés, jamais les images.
       let seed = refined;
       const track = (buf: ImageBuffer): CardQuad | null => {
@@ -222,7 +213,7 @@ export function useV1Calibration(deps: V1CalibrationDeps): V1Calibration {
       };
       live.current.probe = new RotationProbe(grab, refined === null ? null : track);
       live.current.lastProbeRatio = -1;
-      deps.onRotationStart();
+      deps.onSweepStart();
     },
     [live, grab, deps],
   );
