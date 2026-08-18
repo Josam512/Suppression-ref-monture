@@ -46,7 +46,6 @@ export interface Live {
   probe: RotationProbe | null;
   lastProbeRatio: number;
   /** Dernière jauge de cadrage carte publiée à React — évite un rendu par image. */
-  lastGuideFill: number;
   /** Non nul pendant le contrôle de cohérence par l'iris. */
   irisSamples: number[] | null;
   /** La carte validée, en attente de la rotation. */
@@ -73,7 +72,6 @@ export function createLive(sprites: SpritesState, spec: FrameSpec | null, cal: U
     verdict: null,
     probe: null,
     lastProbeRatio: -1,
-    lastGuideFill: -1,
     irisSamples: null,
     pendingCard: null,
     wornSprite: null,

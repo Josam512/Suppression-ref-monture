@@ -12,29 +12,57 @@ import type { FrameSpec } from '../core/frameSpec.js';
 import { CardCalibration } from './CardCalibration.js';
 import { CardManual } from './CardManual.js';
 import type { CardQuad } from '../core/cardPose.js';
+import type { NormalizedLandmark } from '../core/geom.js';
 import { RotationStep } from './RotationStep.js';
 import { WornFrameCalibration } from './WornFrameCalibration.js';
 
+/**
+ * Les étapes de la V1, dans l'ordre où le client les traverse.
+ *
+ * 🔴 Aucune transition n'est automatique entre `mesure-carte` et `essayage` :
+ * chacune attend un bouton. L'ancienne phase portait un `fill` — l'avancement
+ * d'un verrouillage qui décidait à la place du client — et elle a disparu avec
+ * lui (arbitrage du 2026-08-18).
+ */
 export type Phase =
   | { kind: 'loading'; ratio: number }
   | { kind: 'error'; message: string }
-  | { kind: 'mesure-carte'; fill: number }
-  | { kind: 'mesure-carte-manuelle'; frozen: HTMLCanvasElement }
-  | { kind: 'mesure-rotation'; ratio: number; degrees: { left: number; right: number } }
-  | { kind: 'mesure-monture'; frozen: HTMLCanvasElement }
+  /** Consigne, puis « ma carte est en place ». Rien ne mesure encore. */
+  | { kind: 'mesure-carte' }
+  /**
+   * Image figée : le client pose ses deux repères, à son rythme.
+   *
+   * 🔴 `lm` est relevé À L'INSTANT DU GEL, et voyage avec l'image. La largeur du
+   * visage en pixels DOIT être lue sur les mêmes pixels que la carte : c'est
+   * leur RAPPORT qui est la mesure. Lire les repères courants — ceux de la
+   * boucle live, qui continue de tourner pendant que le client vise — les
+   * prendrait plusieurs secondes après, sur une tête qui a bougé, et l'erreur
+   * serait parfaitement invisible.
+   */
+  | { kind: 'mesure-carte-manuelle'; frozen: HTMLCanvasElement; lm: readonly NormalizedLandmark[] }
+  /** La séance filmée. Ne se termine QUE sur « J'ai fini ». */
+  | { kind: 'mesure-rotation'; degrees: { left: number; right: number }; cardViews: number }
+  /** V2 — même exigence : les repères sont ceux de l'image figée. */
+  | { kind: 'mesure-monture'; frozen: HTMLCanvasElement; lm: readonly NormalizedLandmark[] }
   | { kind: 'essayage' };
 
 export interface CalibrationPanelProps {
   phase: Phase;
   /** Toutes les montures, pour désigner celle qui est physiquement portée (V2). */
   catalogue: readonly FrameSpec[];
-  onSkipRotation(): void;
-  /** Bascule immédiate vers le pointage manuel, à la demande du client. */
-  onManual(): void;
-  /** Retour au cadre depuis l'écran manuel. */
-  onRetryGuide(): void;
-  onCardValidated(widthPx: number, quad: CardQuad, frozen: HTMLCanvasElement): void;
-  onWornFrameValidated(widthPx: number, spec: FrameSpec): void;
+  /** « J'ai fini » : le client met un terme à la séance filmée. */
+  onFinishSweep(): void;
+  /** « Ma carte est en place » : fige l'image et passe au pointage. */
+  onCardReady(): void;
+  /** « Reprendre l'image » : retour à la consigne, image relâchée. */
+  onRetakeCard(): void;
+  onCardValidated(
+    widthPx: number,
+    quad: CardQuad,
+    frozen: HTMLCanvasElement,
+    lm: readonly NormalizedLandmark[],
+  ): void;
+  onWornFrameValidated(widthPx: number, spec: FrameSpec, lm: readonly NormalizedLandmark[]): void;
   onCancel(): void;
 }
 
@@ -50,25 +78,26 @@ export function CalibrationPanel(props: CalibrationPanelProps): JSX.Element | nu
   }
 
   if (phase.kind === 'mesure-carte') {
-    return (
-      <CardCalibration fill={phase.fill} onCancel={props.onCancel} onManual={props.onManual} />
-    );
+    return <CardCalibration onCancel={props.onCancel} onReady={props.onCardReady} />;
   }
 
-  // 🔴 Le filet : le cadre ne doit JAMAIS pouvoir enfermer le client (§0.0.2).
   if (phase.kind === 'mesure-carte-manuelle') {
     return (
       <CardManual
         frozen={phase.frozen}
-        onRetry={props.onRetryGuide}
-        onValidate={(widthPx, quad) => props.onCardValidated(widthPx, quad, phase.frozen)}
+        onRetry={props.onRetakeCard}
+        onValidate={(widthPx, quad) => props.onCardValidated(widthPx, quad, phase.frozen, phase.lm)}
       />
     );
   }
 
   if (phase.kind === 'mesure-rotation') {
     return (
-      <RotationStep ratio={phase.ratio} degrees={phase.degrees} onSkip={props.onSkipRotation} />
+      <RotationStep
+        degrees={phase.degrees}
+        cardViews={phase.cardViews}
+        onFinish={props.onFinishSweep}
+      />
     );
   }
 
@@ -78,7 +107,7 @@ export function CalibrationPanel(props: CalibrationPanelProps): JSX.Element | nu
         frozen={phase.frozen}
         catalogue={props.catalogue}
         onCancel={props.onCancel}
-        onValidate={props.onWornFrameValidated}
+        onValidate={(widthPx, spec) => props.onWornFrameValidated(widthPx, spec, phase.lm)}
       />
     );
   }

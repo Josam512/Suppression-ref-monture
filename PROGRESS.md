@@ -999,3 +999,33 @@ banc navigateur vert (23 contrôles).
   dessinait pas) qu'aucune relecture n'avait attrapé et qui reconstituait le bug #3 à l'identique.
 - **2026-08-16** — Lots V2-0 à V2-3, séparation explicite des deux versions à l'accueil, et banc
   de preuve métrologique du rendu (`tests/render-proof.html`).
+
+## 2026-08-18 — La séance filmée : c'est le client qui déclenche et qui arrête
+
+**Arbitrage humain**, §14.7 du contrat. Le cadre à remplir et son verrouillage
+automatique sont **supprimés** : trois écrans, trois boutons, aucune transition
+décidée par la machine. « J'ai fini » est le seul événement qui lance le calcul.
+
+### Deux bugs de mesure trouvés en faisant ce travail
+
+| Bug | Conséquence réelle | Correctif |
+|---|---|---|
+| La carte n'était relevée qu'aux **tranches d'angle neuves** : 6 vues sur un aller-retour de 120 images, pour un plancher `MIN_SWEEP_VIEWS` de 8. Et l'écran disait « rangez votre carte » pendant que le code la suivait | `cameraFromSweep` refusait **toujours**, en silence → la distance retombait sur l'a priori, faux de 46 % (§14.5). La mire de calibration était écrite, testée, **jamais atteinte** | relevé à chaque image (400 vues, plafonnées) ; la carte reste en main |
+| Le gel de l'image et le pointage étant désormais séparés de plusieurs secondes, les repères du visage étaient relus **après**, sur une tête qui avait bougé | rapport carte/visage faux, invisiblement | `ui/freezeFrame.ts` lie image et repères ; sans repères, pas de gel |
+
+### Fichiers supprimés
+
+`core/cardGuide.ts`, `core/cardGuideLock.ts`, `ui/cardGuideStep.ts`,
+`tests/guide-on-video.ts`, `scripts/guide-on-video.mjs`, `tests/guide.test.ts`.
+La mesure de contraste survit dans `core/edgeStep.ts` — elle ne refuse plus rien
+à personne, elle ne sert plus qu'à l'atelier.
+
+### État
+
+- **182 tests au vert** (`tests/capture.test.ts` : 16 nouveaux), typecheck strict clean.
+- **Banc navigateur vert**, 26 contrôles.
+- ⚠️ **Non couvert de bout en bout** : le câblage des trois boutons entre eux.
+  Le flux de CI est une mire, pas un visage ; le banc vérifie le refus de geler
+  sans repères et s'arrête là. C'est écrit dans le banc, pas contourné.
+- ⚠️ `FACE_WIDTH_CORRECTION_MM` toujours à 0 (lot 8, humain) — supplantée dès que
+  la mesure d'écart temporal aboutit.

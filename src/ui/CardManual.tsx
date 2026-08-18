@@ -1,24 +1,22 @@
 /**
- * ui/CardManual.tsx — le filet : quand le cadre ne prend pas, on pointe à la main.
+ * ui/CardManual.tsx — le pointage des deux bords, sur image figée.
  *
- * ## Pourquoi ce fichier existe
+ * ## Ce n'est plus un filet : c'est le parcours normal
  *
- * Le parcours nominal est le cadre à remplir (`ui/cardGuideStep.ts`) : rien à
- * cliquer, la mesure se prend seule. Mais il peut ne pas aboutir — carte sombre
- * sur peau sombre, contre-jour, webcam très floue, main qui masque un bord.
+ * Ce composant était le repli du cadre à remplir. Le cadre a été supprimé
+ * (arbitrage humain du 2026-08-18) : le pointage devient donc l'étape unique et
+ * nominale, et son texte ne s'excuse plus de rien.
  *
- * 🔴 Sans issue, l'étape tourne alors **indéfiniment** et le seul bouton est
- * « Annuler », qui met le client dehors. C'est un cul-de-sac, et un cul-de-sac
- * est pire qu'une mesure moins bonne : il interdit l'essayage, ce que le §0.0.2
- * refuse explicitement. Ce composant est donc la porte de sortie, et elle est
- * toujours accessible — au bout de `GUIDE_STALL_MS`, ou immédiatement si le
- * client le demande.
+ * 🔴 Ce qui rend ce geste acceptable pour une personne seule chez elle : il se
+ * fait sur une image ARRÊTÉE, sans chronomètre, et il n'a pas besoin d'être
+ * précis. `core/cardEdges.ts` reprend ensuite les deux repères et les accroche
+ * sur les vrais bords au dixième de pixel. Le geste du client est une graine,
+ * pas une mesure.
  *
  * ⚠️ Ce n'est PAS un réglage d'échelle (§1 bug #1). Le client pointe les bords
  * d'un objet dont la cote est connue au centième de millimètre par la norme ISO ;
- * il ne choisit pas la taille de sa tête. Et `core/cardEdges.ts` reprend ensuite
- * ses deux points pour les accrocher au dixième de pixel : son geste est une
- * graine, pas une mesure.
+ * il ne choisit pas la taille de sa tête, et rien à l'écran ne bouge quand il
+ * déplace un repère — sinon la taille de la carte, qui n'est pas la sienne.
  */
 
 import { useState } from 'react';
@@ -30,6 +28,7 @@ import { CARD_H_MM, CARD_W_MM, type CardQuad } from '../core/cardPose.js';
 export interface CardManualProps {
   frozen: HTMLCanvasElement;
   onValidate(cardWidthPx: number, quad: CardQuad): void;
+  /** Reprendre l'image : la carte était mal placée, ou le visage a bougé. */
   onRetry(): void;
 }
 
@@ -60,11 +59,14 @@ export function CardManual(props: CardManualProps): JSX.Element {
 
   return (
     <section>
-      <h2>Pas de souci — placez les deux repères vous-même</h2>
+      <h2>Placez les deux repères sur les bords de votre carte</h2>
 
       <p>
-        Le cadre n’a pas réussi à accrocher votre carte. Amenez simplement les deux poignées sur
-        ses bords gauche et droit : c’est aussi précis, ça prend cinq secondes de plus.
+        L’image est arrêtée : prenez votre temps. Amenez les deux poignées sur le{' '}
+        <strong>bord gauche</strong> et le <strong>bord droit</strong> de la carte.{' '}
+        <span style={{ opacity: 0.75 }}>
+          À quelques pixels près, c’est suffisant — je recale ensuite sur les bords réels.
+        </span>
       </p>
 
       <TwoPointMeasure
@@ -83,11 +85,12 @@ export function CardManual(props: CardManualProps): JSX.Element {
         type="button"
         disabled={widthPx <= 0 || quad === null}
         onClick={() => quad !== null && props.onValidate(widthPx, quad)}
+        style={{ fontWeight: 700 }}
       >
-        Valider — vous pourrez ranger votre carte
+        C’est bon — on filme
       </button>{' '}
       <button type="button" onClick={props.onRetry}>
-        Réessayer avec le cadre
+        Reprendre l’image
       </button>
     </section>
   );

@@ -14,6 +14,22 @@
  * masque de mouvement de la silhouette. Les autres vues ne gardent que leurs
  * repères — quelques centaines d'octets. Ce n'est ni une vidéo ni une
  * reconstruction : c'est l'entrée d'une régression à deux inconnues.
+ *
+ * ## 🔴 La carte reste en main PENDANT toute la séance
+ *
+ * Elle ne sert pas qu'à l'image de face : chaque image où elle est retrouvée
+ * donne une estimation de la focale, et la focale ne sort que de leur médiane.
+ * Le chiffre est sans appel (`core/cardSweep.ts`) : une vue donne ±20 à 25 %,
+ * cinquante vues donnent ±4 %.
+ *
+ * ⚠️ **Ce qui était faux jusqu'ici.** La carte n'était relevée qu'au moment où
+ * une tranche d'angle NEUVE se remplissait, soit huit fois au grand maximum —
+ * exactement le plancher `MIN_SWEEP_VIEWS`, qu'une seule vue refusée par le
+ * solveur suffisait à faire passer sous la barre. Pire, l'écran de rotation
+ * disait « vous pouvez ranger votre carte » : la focale mesurée ne pouvait
+ * donc à peu près jamais aboutir, et la chaîne retombait en silence sur la
+ * distance supposée — celle qui s'est révélée fausse de 46 % sur le premier
+ * sujet réel. Le relevé se fait désormais à CHAQUE image proposée.
  */
 
 import { isUsableProbeView, MAX_PROBE_YAW_RAD, MIN_PROBE_YAW_RAD, type RotatedView } from '../core/parallax.js';
@@ -23,6 +39,22 @@ import type { CardQuad } from '../core/cardPose.js';
 
 /** Nombre de tranches d'angle PAR CÔTÉ. */
 export const BANDS_PER_SIDE = 4;
+
+/**
+ * Plafond du nombre de cadres de carte conservés.
+ *
+ * ⚠️ Ce n'est PAS un critère d'arrêt de la séance : le client filme aussi
+ * longtemps qu'il veut (§0.0.2), et rien ne l'interrompt. C'est une borne
+ * mémoire — quatre coins par vue, soit quelques dizaines de kilo-octets au
+ * total. Au-delà, la médiane ne gagne plus rien : son incertitude décroît en
+ * 1/√n, donc passer de 400 à 800 vues ne fait que 30 % de mieux.
+ */
+export const MAX_SWEEP_QUADS = 400;
+
+/** Copie profonde d'un tampon d'image — celui de lecture est réutilisé. */
+function copyBuffer(b: ImageBuffer): ImageBuffer {
+  return { data: new Uint8ClampedArray(b.data), width: b.width, height: b.height };
+}
 
 export class RotationProbe {
   /** Une vue au plus par tranche : index 0..2·BANDS−1, négatifs puis positifs. */
@@ -52,6 +84,19 @@ export class RotationProbe {
     private readonly trackQuad: ((buf: ImageBuffer) => CardQuad | null) | null = null,
   ) {
     this.slots = Array.from({ length: 2 * BANDS_PER_SIDE }, () => null);
+  }
+
+  /**
+   * Relève la carte sur l'image fournie et empile son cadre.
+   *
+   * ⚠️ Le suivi est de proche en proche : `trackQuad` repart du cadre précédent.
+   * Une image où la carte est perdue ne casse donc rien — elle ne fournit
+   * simplement pas de vue, et la graine reste celle de la dernière réussite.
+   */
+  private harvestCard(buf: ImageBuffer): void {
+    if (this.trackQuad === null || this.quadsFound.length >= MAX_SWEEP_QUADS) return;
+    const q = this.trackQuad(buf);
+    if (q !== null) this.quadsFound.push(q);
   }
 
   /** Tranche d'angle d'une vue, ou −1 si hors plage exploitable. */
@@ -87,41 +132,38 @@ export class RotationProbe {
 
   /** Propose une frame. Sans effet si sa tranche est déjà pourvue. */
   offer(lm: readonly NormalizedLandmark[], yawRad: number, rollRad: number, w: number, h: number): void {
+    // ⚠️ UNE seule lecture de pixels par image, partagée par les deux usages.
+    // `getImageData` sur 1280×720 coûte 3,7 Mo : l'appeler deux fois par image
+    // ferait tomber la cadence de détection au moment précis où le client bouge.
+    const buf = this.capture();
+
+    // ⭐ La carte se relève sur TOUTE image, y compris de face et y compris
+    // après que toutes les tranches sont pourvues : c'est le nombre de vues qui
+    // fait la précision de la focale, et le client filme aussi longtemps qu'il
+    // le veut. Sans cadre de départ (pointage non accroché), on ne tente rien.
+    if (buf !== null) this.harvestCard(buf);
+
     const view: RotatedView = { lm, yawRad, rollRad, w, h };
     if (!isUsableProbeView(view)) return;
 
     const band = RotationProbe.bandOf(yawRad);
     if (band < 0) return;
 
-    if (this.slots[band] === null) {
-      this.slots[band] = view;
-
-      // Une tranche neuve : c'est le bon moment pour relever la carte, puisque
-      // ces vues sont justement celles qui sont bien étalées en angle.
-      if (this.trackQuad !== null) {
-        const buf = this.capture();
-        if (buf !== null) {
-          const q = this.trackQuad(buf);
-          if (q !== null) this.quadsFound.push(q);
-        }
-      }
-    }
+    if (this.slots[band] === null) this.slots[band] = view;
 
     // Une seule image par côté, celle de l'angle le plus franc : le masque de
     // mouvement est d'autant plus net que la tête a bougé.
+    //
+    // ⚠️ Cette image-là est CONSERVÉE : il lui faut sa propre copie, puisque le
+    // tampon de lecture, lui, est réutilisé d'une image à l'autre.
+    if (buf === null) return;
     const a = Math.abs(yawRad);
     if (yawRad < 0 && a > this.bestNegative) {
-      const buf = this.capture();
-      if (buf !== null) {
-        this.negativeImage = buf;
-        this.bestNegative = a;
-      }
+      this.negativeImage = copyBuffer(buf);
+      this.bestNegative = a;
     } else if (yawRad >= 0 && a > this.bestPositive) {
-      const buf = this.capture();
-      if (buf !== null) {
-        this.positiveImage = buf;
-        this.bestPositive = a;
-      }
+      this.positiveImage = copyBuffer(buf);
+      this.bestPositive = a;
     }
   }
 
