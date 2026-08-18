@@ -1,5 +1,20 @@
 # Déploiement de l'essayage virtuel sur GitHub Pages.
 #
+# ⚠️ L'APPLICATION NE VIT PAS SUR CETTE BRANCHE. `main` ne porte que l'ancienne
+# chaîne Python de détourage ; le code de l'essayage est sur la branche de
+# travail ci-dessous, et ce fichier va l'y chercher. C'est délibéré : seul un
+# workflow porté par la branche par défaut a le droit de déployer sur Pages,
+# et on ne voulait pas déverser le code applicatif sur `main` pour cette seule
+# raison.
+#
+# 🔴 POURQUOI ON POUSSE UNE BRANCHE AU LIEU D'UTILISER `actions/deploy-pages`.
+# Les deux sources de GitHub Pages — « branche » et « GitHub Actions » — sont
+# EXCLUSIVES. En poussant `gh-pages` la première fois, on a fait activer Pages
+# par GitHub lui-même, en mode branche ; à partir de là, le job `deploy` était
+# rejeté en une seconde, sans runner et sans message exploitable. Publier reste
+# donc l'affaire d'un `git push` sur `gh-pages`, ce que ce workflow fait
+# désormais explicitement : une seule voie de publication, lisible dans le diff.
+#
 # ⚠️ Le site vit sous /<repo>/, jamais à la racine d'un domaine. `VITE_BASE` le
 # dit à Vite, et `src/ui/assetUrl.ts` est le seul endroit du code qui construise
 # une URL de fichier servi — sans quoi le modèle MediaPipe rendrait un 404
@@ -11,23 +26,27 @@ name: Pages
 
 on:
   push:
-    branches: [claude/virtual-glasses-fitting-9vwyuc, main]
+    branches: [main]
   workflow_dispatch:
 
+env:
+  APP_BRANCH: claude/virtual-glasses-fitting-9vwyuc
+  PAGES_BRANCH: gh-pages
+
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  build:
+  build-and-publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.APP_BRANCH }}
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -38,28 +57,29 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
-      # `prebuild` recopie le wasm MediaPipe depuis node_modules (il n'est pas
-      # versionné : ~33 Mo). Le modèle, lui, est bien dans public/models/.
+      # `prebuild` recopie le wasm MediaPipe depuis node_modules (~33 Mo, non
+      # versionné). Le modèle, lui, est bien dans public/models/.
       - run: npm run build
         env:
           VITE_BASE: /${{ github.event.repository.name }}/
 
+      # `.nojekyll` est INDISPENSABLE : sans lui, Jekyll ignore tout fichier ou
+      # dossier commençant par `_`, et le wasm de MediaPipe disparaît du site
+      # servi sans le moindre message — encore le §1 bug #4.
       - run: rm -f dist/prep.html dist/calib.html && touch dist/.nojekyll
 
-      # enablement: true active Pages sans passer par les réglages du dépôt.
-      - uses: actions/configure-pages@v5
-        with:
-          enablement: true
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: dist
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      # Publication : le contenu de `dist` DEVIENT la branche servie. On écrase
+      # délibérément l'historique de cette branche — c'est un artefact de build,
+      # jamais une source, et personne n'en tire de correctif.
+      - name: Publier sur ${{ env.PAGES_BRANCH }}
+        run: |
+          set -eu
+          cd dist
+          git init -q
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -q -m "Build de ${{ env.APP_BRANCH }} (${GITHUB_SHA::7})"
+          git push -q --force \
+            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
+            "HEAD:refs/heads/${{ env.PAGES_BRANCH }}"
