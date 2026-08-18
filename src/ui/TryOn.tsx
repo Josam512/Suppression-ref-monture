@@ -117,7 +117,7 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
    * faux.
    */
   /** Gèle l'image ET ses repères d'un seul geste (`ui/freezeFrame.ts`). */
-  const freeze = useCallback((kind: 'mesure-monture' | 'mesure-carte-manuelle') => {
+  const freeze = useCallback((kind: 'mesure-monture') => {
     const shot = freezeFrame(videoRef.current, live.current.lastLandmarks);
     if (shot === null) {
       setNotices(['Je ne vous vois pas encore — replacez-vous face à la caméra et réessayez.']);
@@ -156,8 +156,6 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
       setNotices([message]);
       enterCard();
     },
-    onSweepStart: () =>
-      setPhase({ kind: 'mesure-rotation', degrees: { left: 0, right: 0 }, cardViews: 0 }),
     cameraProfile: cameraProfile.current,
     onCameraProfile: persistCamera,
   });
@@ -261,9 +259,10 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
         phase={phase}
         catalogue={essayables}
         onCancel={props.onQuit}
-        onCardValidated={v1.onCardValidated}
-        onCardReady={() => freeze('mesure-carte-manuelle')}
-        onRetakeCard={enterCard}
+        onCardReady={() => {
+          v1.start();
+          setPhase({ kind: 'mesure-rotation', degrees: { left: 0, right: 0 }, cardViews: 0 });
+        }}
         onFinishSweep={finishCalibration}
         onWornFrameValidated={onWornFrameValidated}
       />

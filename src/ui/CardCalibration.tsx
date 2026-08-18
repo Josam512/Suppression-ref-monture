@@ -25,7 +25,7 @@
 import { ISO_ID1_OBJECTS } from '../core/calibration.js';
 
 export interface CardCalibrationProps {
-  /** « Ma carte est en place » — fige l'image et passe au pointage. */
+  /** « Je filme » — la séance commence. */
   onReady(): void;
   onCancel(): void;
 }
@@ -54,25 +54,29 @@ export function CardCalibration(props: CardCalibrationProps): JSX.Element {
 
       <ol>
         <li>
-          Tenez la carte <strong>à plat contre votre visage, juste sous les yeux</strong>, bien
-          visible en entier. Laissez vos yeux dégagés.
+          Tenez la carte <strong>à plat contre votre visage</strong>, bien visible en entier —
+          sur le front ou sur la joue, comme vous voulez, mais{' '}
+          <strong>sans cacher vos yeux</strong>.
         </li>
         <li>
-          Appuyez sur <strong>« Ma carte est en place »</strong>. J’arrête l’image et vous placez
-          deux repères sur ses bords, tranquillement.
+          Appuyez sur <strong>« Je filme »</strong>, puis montrez-vous de face, de profil d’un
+          côté, de profil de l’autre. <strong>Gardez la carte en main.</strong>
         </li>
         <li>
-          Ensuite vous filmez : de face, puis de profil d’un côté et de l’autre.{' '}
-          <strong>Vous gardez la carte en main</strong>, et vous arrêtez quand vous voulez.
+          Appuyez sur <strong>« J’ai fini »</strong> quand vous voulez. C’est tout : vous n’avez
+          rien à viser, rien à pointer, rien à valider.
         </li>
       </ol>
 
       {/*
-        🔴 La carte se tient SOUS la ligne des yeux, jamais devant. Une carte qui
-        masque les yeux ne fait pas perdre le visage à MediaPipe : le modèle rend
-        quand même ses 478 points, en inventant ceux qu'il ne voit plus — et la
-        largeur du visage, qui EST la mesure, serait lue sur ces points-là.
-        (Ce placement n'annule PAS la parallaxe : le nez ressort autant que le
+        🔴 La SEULE contrainte de placement qui subsiste, et elle n'est pas
+        négociable : la carte ne doit pas masquer les yeux. Une carte devant les
+        yeux ne fait pas perdre le visage à MediaPipe — elle fait pire : le
+        modèle rend quand même ses 478 points, en inventant ceux qu'il ne voit
+        plus, et la largeur du visage, qui EST la mesure, serait lue sur ces
+        points-là. Partout ailleurs, c'est `core/cardFinder.ts` qui cherche, et
+        il cherche du front aux joues sans privilégier de hauteur.
+        (Aucun placement n'annule la parallaxe : le nez ressort autant que le
         front. C'est la rotation qui la mesure. Voir CARD_TO_TEMPLE_DEPTH_MM.)
       */}
       <p style={{ opacity: 0.75 }}>
@@ -82,7 +86,7 @@ export function CardCalibration(props: CardCalibrationProps): JSX.Element {
       </p>
 
       <button type="button" onClick={props.onReady} style={{ fontWeight: 700 }}>
-        Ma carte est en place
+        Je filme
       </button>{' '}
       <button type="button" onClick={props.onCancel}>
         Annuler

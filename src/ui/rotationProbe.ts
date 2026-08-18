@@ -51,6 +51,23 @@ export const BANDS_PER_SIDE = 4;
  */
 export const MAX_SWEEP_QUADS = 400;
 
+/** Ce que la recherche de carte rend sur une image. */
+export type CardFinder = (
+  buf: ImageBuffer,
+  lm: readonly NormalizedLandmark[],
+  w: number,
+  h: number,
+) => { quad: CardQuad; widthRatio: number } | null;
+
+/** La vue la plus frontale, conservée en entier pour porter la mesure. */
+export interface FrontalSighting {
+  lm: readonly NormalizedLandmark[];
+  buf: ImageBuffer;
+  quad: CardQuad;
+  w: number;
+  h: number;
+}
+
 /** Copie profonde d'un tampon d'image — celui de lecture est réutilisé. */
 function copyBuffer(b: ImageBuffer): ImageBuffer {
   return { data: new Uint8ClampedArray(b.data), width: b.width, height: b.height };
@@ -73,15 +90,27 @@ export class RotationProbe {
    */
   private readonly quadsFound: CardQuad[] = [];
 
+  /** Les largeurs relevées, en fraction de largeur de visage. */
+  private readonly ratios: number[] = [];
+
+  /**
+   * La vue la plus FRONTALE de toute la séance, avec son image et ses repères.
+   *
+   * 🔴 C'est elle qui portera la mesure : la largeur du visage s'y lit sans
+   * raccourci de perspective, et la carte y est le moins inclinée. On la garde
+   * en entier — image comprise — parce que l'écart temporal se mesure dessus.
+   */
+  private frontalView: FrontalSighting | null = null;
+  private frontalYaw = Infinity;
+
   /**
    * @param capture rend l'image courante, ou null si elle n'est pas lisible.
-   * @param trackQuad accroche la carte sur cette image, ou rend null si elle
-   *        n'y est plus. Facultatif : sans lui, le balayage ne sert qu'à la
-   *        profondeur, et la distance reste supposée.
+   * @param findCardIn cherche la carte sur cette image. Facultatif : sans lui,
+   *        le balayage ne sert qu'à la profondeur, et la distance reste supposée.
    */
   constructor(
     private readonly capture: () => ImageBuffer | null,
-    private readonly trackQuad: ((buf: ImageBuffer) => CardQuad | null) | null = null,
+    private readonly findCardIn: CardFinder | null = null,
   ) {
     this.slots = Array.from({ length: 2 * BANDS_PER_SIDE }, () => null);
   }
@@ -93,10 +122,29 @@ export class RotationProbe {
    * Une image où la carte est perdue ne casse donc rien — elle ne fournit
    * simplement pas de vue, et la graine reste celle de la dernière réussite.
    */
-  private harvestCard(buf: ImageBuffer): void {
-    if (this.trackQuad === null || this.quadsFound.length >= MAX_SWEEP_QUADS) return;
-    const q = this.trackQuad(buf);
-    if (q !== null) this.quadsFound.push(q);
+  private harvestCard(
+    buf: ImageBuffer,
+    lm: readonly NormalizedLandmark[],
+    yawRad: number,
+    w: number,
+    h: number,
+  ): void {
+    if (this.findCardIn === null) return;
+    const found = this.findCardIn(buf, lm, w, h);
+    if (found === null) return;
+
+    if (this.quadsFound.length < MAX_SWEEP_QUADS) {
+      this.quadsFound.push(found.quad);
+      this.ratios.push(found.widthRatio);
+    }
+
+    // La vue la plus frontale, gardée en entier : c'est sur elle que la mesure
+    // se fera, et l'image lui est indispensable (silhouette, écart temporal).
+    const a = Math.abs(yawRad);
+    if (a < this.frontalYaw) {
+      this.frontalYaw = a;
+      this.frontalView = { lm, buf: copyBuffer(buf), quad: found.quad, w, h };
+    }
   }
 
   /** Tranche d'angle d'une vue, ou −1 si hors plage exploitable. */
@@ -141,7 +189,7 @@ export class RotationProbe {
     // après que toutes les tranches sont pourvues : c'est le nombre de vues qui
     // fait la précision de la focale, et le client filme aussi longtemps qu'il
     // le veut. Sans cadre de départ (pointage non accroché), on ne tente rien.
-    if (buf !== null) this.harvestCard(buf);
+    if (buf !== null) this.harvestCard(buf, lm, yawRad, w, h);
 
     const view: RotatedView = { lm, yawRad, rollRad, w, h };
     if (!isUsableProbeView(view)) return;
@@ -173,9 +221,19 @@ export class RotationProbe {
     return kept.length > 0 ? kept : null;
   }
 
-  /** Les cadres de carte relevés pendant le balayage. */
+  /** Les cadres de carte relevés pendant la séance. */
   quads(): readonly CardQuad[] {
     return this.quadsFound;
+  }
+
+  /** Les largeurs relevées, en fraction de largeur de visage. */
+  widthRatios(): readonly number[] {
+    return this.ratios;
+  }
+
+  /** La vue la plus frontale, ou `null` si la carte n'a jamais été vue. */
+  frontal(): FrontalSighting | null {
+    return this.frontalView;
   }
 
   /** Les deux images, pour le masque de mouvement de la silhouette. */
@@ -195,5 +253,8 @@ export class RotationProbe {
     this.bestNegative = 0;
     this.bestPositive = 0;
     this.quadsFound.length = 0;
+    this.ratios.length = 0;
+    this.frontalView = null;
+    this.frontalYaw = Infinity;
   }
 }

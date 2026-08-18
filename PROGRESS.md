@@ -1029,3 +1029,25 @@ La mesure de contraste survit dans `core/edgeStep.ts` — elle ne refuse plus ri
   sans repères et s'arrête là. C'est écrit dans le banc, pas contourné.
 - ⚠️ `FACE_WIDTH_CORRECTION_MM` toujours à 0 (lot 8, humain) — supplantée dès que
   la mesure d'écart temporal aboutit.
+
+
+## 2026-08-18 (soir) — La carte est trouvée toute seule
+
+Le pointage des deux repères est **supprimé**. Deux boutons : « Je filme », « J'ai
+fini ». `core/cardFinder.ts` trouve la carte sur chaque image du film ; c'est la
+médiane des vues qui porte la mesure.
+
+**Mesuré sur les 179 images réelles du sujet** (`node scripts/card-find.mjs`) :
+179/179 images, 4,6 % de dispersion image par image, **0,35 % d'écart-type sur la
+médiane**. Élargir la fenêtre de recherche du simple au double déplace la médiane
+de 0,3 % — ce sont les pixels qui décident.
+
+⚠️ 0,35 % est de la RÉPÉTABILITÉ, pas de la précision. `relError` ne bouge pas.
+
+**Corrigé au passage :** `.stage` n'avait pas de `max-width`, donc la vidéo
+s'affichait en 1080×1920 sur un téléphone — plafond et menton, sans le moindre
+signe que quelque chose clochait.
+
+**État :** 189 tests, banc navigateur vert (25 contrôles), typecheck strict clean.
+**Non couvert de bout en bout :** le détecteur lui-même en CI (le flux injecté est
+une mire, pas un visage).
