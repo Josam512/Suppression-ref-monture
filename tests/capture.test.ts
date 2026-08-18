@@ -169,7 +169,7 @@ describe('la séance ne s’arrête que sur ordre du client', () => {
       () => buf,
       () => {
         seen++;
-        return quad;
+        return { quad, widthRatio: 0.62 };
       },
     );
     return { probe, seen: () => seen };
@@ -207,7 +207,7 @@ describe('la séance ne s’arrête que sur ordre du client', () => {
     let n = 0;
     const probe = new RotationProbe(
       () => buf,
-      () => (++n % 3 === 0 ? null : quad), // une image sur trois décroche
+      () => (++n % 3 === 0 ? null : { quad, widthRatio: 0.62 }), // une image sur trois décroche
     );
     film(probe, 90);
     expect(probe.quads().length).toBeGreaterThan(MIN_SWEEP_VIEWS);

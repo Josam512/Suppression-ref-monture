@@ -137,51 +137,67 @@ try {
     /Retirez vos lunettes/i.test(texteV1),
   );
 
-  // ⭐ La carte se tient SOUS les yeux : une carte qui les masque fait inventer
-  // a MediaPipe les reperes sur lesquels la mesure est prise.
+  // ⭐ La carte peut etre tenue ou le client veut — le detecteur cherche du
+  // front aux joues. La SEULE contrainte qui subsiste : ne pas masquer les
+  // yeux, sinon MediaPipe invente les reperes sur lesquels la mesure est prise.
   check(
-    'V1 : la carte est demandee sous les yeux, pas sur le front ni devant',
-    /sous les yeux/i.test(texteV1) && !/sur votre front/i.test(texteV1),
+    'V1 : le placement est libre, sauf devant les yeux',
+    /sans cacher vos yeux/i.test(texteV1) && /comme vous voulez/i.test(texteV1),
   );
 
   // 🔴 ARBITRAGE DU 2026-08-18 : c'est le CLIENT qui declenche, et lui seul.
   // Le cadre a remplir et son verrouillage automatique ont ete supprimes — la
   // machine ne decide plus ni quand la mesure est prise, ni quand elle est
   // finie. Ces trois controles verrouillent ce renversement.
-  const pret = page.getByRole('button', { name: /Ma carte est en place/i });
-  check('V1 : c’est le client qui declenche le gel de l’image', (await pret.count()) === 1);
+  const pret = page.getByRole('button', { name: /Je filme/i });
+  check('V1 : c’est le client qui declenche la seance', (await pret.count()) === 1);
   check(
     'V1 : aucune jauge de cadrage ne court derriere lui',
     !/Cadrage\s*:/i.test(texteV1) && !/dans le cadre/i.test(texteV1),
   );
 
-  // 🔴 Le flux injecte par Chromium est une mire, PAS un visage. Ce que le banc
-  // peut donc verifier ici, c'est le refus — et c'est loin d'etre secondaire :
-  // geler une image sans repères produirait une carte mesuree sur ces
-  // pixels-ci et un visage mesure sur d'autres, donc un RAPPORT faux, et
-  // parfaitement invisible. Le refus doit etre dit, jamais silencieux.
-  await pret.click();
-  await page.waitForTimeout(2000);
-  const sansVisage = await page.locator('body').innerText();
+  // 🔴 AUCUN POINTAGE. Le client a tranche : « je te fous une photo de moi et
+  // c'est a moi de te dire ou est la carte ? ». La carte est desormais trouvee
+  // par core/cardFinder.ts. Ce controle interdit que l'ecran de pointage
+  // revienne par une porte derobee.
+  const boutons = await page.locator('button').allInnerTexts();
   check(
-    'V1 : sans visage detecte, le gel est REFUSE et dit pourquoi (§1 bug #3)',
-    /je ne vous vois pas encore/i.test(sansVisage),
+    'V1 : aucun pointage demande au client',
+    !boutons.some((b) => /rep[eè]re|pointer|placer/i.test(b)) && !/deux rep/i.test(texteV1),
+  );
+
+  await pret.click();
+  await page.waitForTimeout(2500);
+  const seance = await page.locator('body').innerText();
+  check(
+    'V1 : « Je filme » ouvre la seance, carte gardee en main',
+    /de profil/i.test(seance) && /Gardez votre carte en main/i.test(seance),
   );
   check(
-    'V1 : …et le client reste sur la consigne, jamais coince (§0.0.2)',
-    /Ma carte est en place/i.test(sansVisage),
+    'V1 : le SEUL moyen de terminer est son bouton — aucune jauge ne declenche',
+    (await page.getByRole('button', { name: /J’ai fini|J'ai fini/ }).count()) === 1 &&
+      !/%/.test(seance),
+  );
+
+  // Le flux injecte par Chromium est une mire, pas un visage : la carte ne peut
+  // donc pas etre vue. Ce que le banc verifie ici, c'est que l'echec est DIT.
+  await page.getByRole('button', { name: /J’ai fini|J'ai fini/ }).click();
+  await page.waitForTimeout(3000);
+  const apres = await page.locator('body').innerText();
+  check(
+    'V1 : carte jamais vue → l’echec est dit en clair, pas avale (§1 bug #3)',
+    /pas r[eé]ussi [aà] voir votre carte/i.test(apres),
   );
 
   /*
    * ⚠️ LIMITE ASSUMEE DU BANC, a ne pas laisser croire couverte.
    *
-   * La suite du parcours — pointage des deux reperes, seance filmee, « J'ai
-   * fini » — exige un vrai visage dans le flux, que `--use-fake-device` ne
-   * fournit pas. Elle est couverte en calcul pur par `tests/capture.test.ts`
-   * (16 tests), qui verifie notamment qu'une seance VIDE produit quand meme une
-   * calibration. Ce qui reste non verifie de bout en bout, c'est le cablage des
-   * boutons entre eux. Le dire ici vaut mieux qu'un controle qui contournerait
-   * le refus ci-dessus pour avoir l'air complet.
+   * Le detecteur ne peut pas etre exerce ici : `--use-fake-device` ne fournit
+   * pas de visage, donc pas de carte non plus. Il est mesure separement, sur la
+   * VRAIE sequence du sujet, par `node scripts/card-find.mjs` — 179 images sur
+   * 179, 0,35 % d'ecart-type sur la mediane — et en calcul pur par
+   * `tests/cardfinder.test.ts`, qui verifie qu'une lisiere plus contrastee que
+   * la carte ne detourne pas la mesure.
    */
 
   // La V2 doit s'ouvrir aussi, et annoncer sa dilatation de sprite.

@@ -1927,3 +1927,76 @@ repères n'étaient pas sur la carte, et c'est le seul cas que recommencer répa
 > repères, et s'arrête là. Le pointage, la séance et l'assemblage sont couverts
 > en calcul pur. Le câblage des trois boutons entre eux n'a pas de filet
 > automatique — c'est écrit dans le banc lui-même plutôt que contourné.
+
+
+### 14.8 V1 — la carte est TROUVÉE par la machine (2026-08-18, soir)
+
+> « je te fous une photo de moi et c'est à moi à te dire où est la carte ? et en
+> plus tu m'as dit une vidéo au final c'est une photo »
+
+Deux reproches, tous deux fondés, et le premier est le vrai sujet : **faire
+pointer les bords au client, c'était lui faire faire mon travail.**
+
+#### Ce qui change
+
+L'écran de pointage (`ui/CardManual.tsx`) est **supprimé**. Le parcours entier
+tient en deux boutons : **« Je filme »**, puis **« J'ai fini »**. Entre les deux,
+le client se montre de face et de profil, carte en main, et ne vise rien.
+
+`core/cardFinder.ts` cherche la carte sur **chaque image du film**.
+
+#### 🔴 Pourquoi une cinquième tentative de détection, après quatre échecs
+
+Les quatre précédentes (`tests/cardFind.atelier.ts`) posaient toutes la même
+question : *où est la carte sur CETTE image ?* Et sur une image, la lisière des
+cheveux est un bord plus franc que la carte. Ce fichier pose l'autre question :
+**quelle largeur revient sur TOUTES les images ?** La carte est rigide et
+normalisée, donc son rapport largeur/visage est constant ; un bord de cheveux,
+une ombre, un montant de fenêtre donnent une valeur différente à chaque image et
+ne survivent pas à la médiane.
+
+**C'est l'arbitrage « filme-moi » du §14.7 qui rend ce renversement possible.**
+Sans film, il n'y a rien à moyenner.
+
+#### Mesuré sur la séquence réelle du sujet — 179 images, `scripts/card-find.mjs`
+
+| Grandeur | Valeur |
+|---|---|
+| Carte localisée | **179 / 179 images** |
+| Dispersion image par image | **4,6 %** |
+| Écart-type de la **médiane** des 179 vues | **0,35 %** |
+
+> ⚠️ **Ces 0,35 % ne sont PAS une précision** — c'est de la répétabilité, et le
+> correctif B4 dit déjà pourquoi il ne faut jamais confondre les deux. Un biais
+> systématique ne se moyenne pas. L'incertitude annoncée reste
+> `CARD_CLICK_REL_ERROR` ; rien ici ne l'abaisse.
+
+**Contrôle de non-circularité, exigé par le §4 :** la fenêtre de recherche a été
+élargie du simple au double (`[-1,30 ; +0,10]` → `[-1,40 ; +0,60]` largeurs de
+visage, du front aux joues). La médiane a bougé de **0,3 %**. Ce sont donc les
+pixels qui décident, pas la fenêtre. Un test le rejoue en synthèse.
+
+#### La composition qui rend la focale légitime
+
+`findCard` dit **où**, `refineQuad` place les **quatre coins sur les vrais
+pixels**. Les deux sont nécessaires : le détecteur déduit le bord haut de la
+norme ISO — contre les cheveux il est sombre sur sombre — ce qui ferait de son
+quadrilatère un rectangle parfait. Le calcul de focale (§14.5) y **dégénérerait :
+il lirait la perspective qu'on vient d'inventer.** Seuls les coins accrochés sur
+les pixels ont le droit d'alimenter le balayage.
+
+#### Ce que le banc ne couvre pas, et pourquoi c'est écrit
+
+Le flux de CI est une mire : pas de visage, donc pas de carte. Le détecteur est
+mesuré ailleurs — sur la vraie séquence (`scripts/card-find.mjs`) et en calcul
+pur (`tests/cardfinder.test.ts`, dont le test central vérifie qu'une **lisière
+plus contrastée que la carte** ne détourne pas la mesure). Le banc, lui, vérifie
+qu'aucun pointage n'est demandé et que l'échec est **dit** quand la carte n'a
+jamais été vue.
+
+#### Défaut d'affichage corrigé au passage
+
+`.stage` n'avait aucune borne de largeur : la vidéo s'affichait à sa taille
+native — 1080×1920 sur un téléphone. L'écran ne montrait qu'un plafond et un
+menton, et **rien ne le signalait**, puisque la mesure tourne sur les pixels de
+la vidéo et non sur ce qu'on en voit.
