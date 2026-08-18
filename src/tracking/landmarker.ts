@@ -6,7 +6,7 @@
 
 import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 import type { Pt } from '../core/geom.js';
-import { assetUrl } from '../ui/assetUrl.js';
+import { assetUrl, isInlined } from '../ui/assetUrl.js';
 
 const MODEL_URL = assetUrl('models/face_landmarker.task');
 const WASM_DIR = assetUrl('wasm');
@@ -19,6 +19,28 @@ export const FACE_OVAL = [
   10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148,
   176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109,
 ] as const;
+
+/**
+ * Le couple (chargeur, binaire) du runtime MediaPipe.
+ *
+ * Cas normal : `forVisionTasks` sonde le support SIMD du navigateur et choisit
+ * lui-même entre les deux variantes. On lui laisse ce travail.
+ *
+ * Cas de la page autonome : il n'y a pas de serveur, donc pas de préfixe de
+ * répertoire à concaténer — les deux fichiers sont portés par la page et
+ * exposés en `blob:`. On construit alors le couple explicitement.
+ *
+ * ⚠️ Ce n'est pas un branchement sur un « mode » : c'est la présence, ou non,
+ * d'un fichier embarqué. Le code ne sait pas pourquoi il est là.
+ */
+async function visionFileset(): Promise<{ wasmLoaderPath: string; wasmBinaryPath: string }> {
+  const loader = 'wasm/vision_wasm_internal.js';
+  const binary = 'wasm/vision_wasm_internal.wasm';
+  if (isInlined(loader) && isInlined(binary)) {
+    return { wasmLoaderPath: assetUrl(loader), wasmBinaryPath: assetUrl(binary) };
+  }
+  return FilesetResolver.forVisionTasks(WASM_DIR);
+}
 
 /**
  * Télécharge le modèle en signalant l'avancement RÉEL.
@@ -64,7 +86,7 @@ export async function createLandmarker(
   onProgress: (ratio: number) => void = () => {},
 ): Promise<FaceLandmarker> {
   const [fileset, modelAssetBuffer] = await Promise.all([
-    FilesetResolver.forVisionTasks(WASM_DIR),
+    visionFileset(),
     fetchModel(onProgress),
   ]);
 

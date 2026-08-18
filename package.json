@@ -15,6 +15,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "hooks:install": "git config core.hooksPath .githooks && chmod +x .githooks/pre-commit",
+    "single": "vite build --config vite.single.config.ts && node scripts/build-single-file.mjs essayage.html",
     "smoke": "node scripts/smoke.mjs",
     "fit:correction": "npx vite-node scripts/fit-correction.mjs"
   },

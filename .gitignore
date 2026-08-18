@@ -11,3 +11,5 @@ __pycache__/
 *.pyc
 .venv/
 public/_v1/
+dist-single/
+essayage.html
