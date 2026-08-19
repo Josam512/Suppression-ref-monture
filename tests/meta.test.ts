@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 // ⭐ T6 : l'ancienne valeur (12) ne correspondait à rien — la §8 n'en listait que 11.
-const EXPECTED_MIN_TESTS = 213; // … | carte trouvee toute seule : 189 | calibration automatique sans carte : 213
+const EXPECTED_MIN_TESTS = 231; // … | carte trouvee toute seule : 189 | calibration automatique sans carte : 213 | demi-PD + cotes monture : 231 (sites statiques ; 234 exécutés)
 // écart temporal mesuré + règle des 300 lignes : 94 | recoloriage V2 2,5 D : 101 | lunettes portees refusees : 103 | distance mesuree + borne anatomique : 117
 // carte = mire de calibration (focale + distance mesurées) : 132 | accrochage des coins + balayage : 139
 

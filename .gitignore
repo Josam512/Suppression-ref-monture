@@ -13,3 +13,4 @@ __pycache__/
 public/_v1/
 dist-single/
 essayage.html
+tests/fixtures/face.y4m

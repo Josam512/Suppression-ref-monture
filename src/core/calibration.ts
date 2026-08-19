@@ -52,9 +52,9 @@ export interface UserCalibration {
   /** Incertitude relative propre à l'écart temporal. Absente avec lui. */
   temporalRelError?: number;
 
-  pdMm?: number; // ⭐ V2 sans carte : PD de loin mesuré (core/autoCalibrate.ts)
-  pdRelError?: number;
-  pdLeftMm?: number; pdRightMm?: number; // demi-écarts anatomiques, côté client
+  pdMm?: number; pdRelError?: number; // ⭐ V2 : PD de loin (core/autoCalibrate.ts)
+  pdLeftMm?: number; pdRightMm?: number; // demi-PD ANATOMIQUES : right = OD (œil droit)
+  pdHalfUncertaintyMm?: { left: number; right: number }; // ± par œil, en mm
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

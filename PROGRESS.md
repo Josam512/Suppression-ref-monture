@@ -1094,3 +1094,36 @@ nommé) » et « WHY_NOT_DONE affiché ».
 N≥50 défini, réf. pupillomètre) ; le biais populationnel du HVID ; δz yeux→
 tempes (45 ± 12, hypothèse dérivée d'une mesure carte) ; MediaPipe sur enfants ;
 la largeur temporale sans carte (machinerie prête, non câblée — lot suivant).
+
+## 2026-08-19 (après-midi) — Vérifications ciblées : demi-PD, cotes monture, 2.5D, parcours sans carte prouvé
+
+**Bug corrigé — étiquetage anatomique des demi-PD.** Les landmarks 468–472 sont
+l'iris de l'œil DROIT du client (côté FACEMESH_RIGHT_EYE 33/133), pas le gauche :
+`pupilPixelsOf` inversait les libellés OD/OG. Corrigé et verrouillé par le test
+d'asymétrie inverse (34/30). Les demi-PD sont MESURÉS individuellement (pupille ↔
+pied du sellion projeté sur la ligne des pupilles) — jamais PD/2, testé sur
+30/34, 29/35, 31/33, 34/30, et sous roulis de 12°.
+
+**Ajouté.** Incertitude PAR demi-PD (`pdHalfUncertaintyMm`) : chaque œil porte
+son erreur-type propre (un œil bruité → marge plus large de ce côté, testé) ;
+correction de convergence appliquée PAR ŒIL (équivalence linéaire testée) ;
+sources des constantes 13,5 mm (Fry & Hill 1962) et 3,05 mm (Gullstrand–Emsley)
+citées dans le code ; note d'héritage du profil caméra nommant la SÉANCE CARTE.
+
+**Cotes monture — tests déterministes (`tests/framedims.test.ts`).** Largeurs
+100/120/140/160 exactes à l'échelle du visage ; A52 B30 vs A52 B45 : même largeur,
+hauteurs 40/55 mm ; 52□14 vs 52□22 : centres optiques à 66/74 mm, +8 mm de
+largeur ; largeur totale = bbox alpha (128 ≠ 2A+DBL = 122, tenons comptés) ;
+branche 140 vs 150 → échelle de sprite 140/150 ; pivot = charnière du spec,
+jamais le coin du fichier ; branche peinte s'allonge avec le yaw.
+
+**⭐ Parcours sans carte PROUVÉ en navigateur (`npm run journey`).** Un visage
+réel (photo du sujet → `tests/fixtures/face.y4m`, régénéré par
+`scripts/make-face-y4m.mjs`, non commité) injecté dans getUserMedia :
+navigateur VIERGE → mesure auto → « Calibration acquise » (30 images) →
+essayage. PD 61,4 ± 2,8 mm (demi-PD 30,4/31,0). Cas B (profil caméra hérité
+d'une séance carte) : héritage SIGNALÉ en clair, PD 60,8 ± 2,6 mm — concordant
+dans les marges ; l'écart (0,6 mm) est le terme de convergence, qui dépend de la
+distance estimée (~22 cm sur cette photo, cas plus près que l'usage réel).
+
+**État : 234 tests verts, typecheck strict clean, banc smoke vert, journey vert.**

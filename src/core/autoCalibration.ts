@@ -79,11 +79,18 @@ export interface AutoMeasures {
   priorRelError: number;
   /** Erreur-type de la médiane d'échelle (bruit de détection, réduit en 1/√n). */
   scaleStandardError: number;
-  /** PD apparent médian (plan des pupilles, fixation proche), en mm. */
-  pdNearMm: number;
-  /** Parts gauche/droite anatomiques du PD (fractions, somme = 1). */
-  pdLeftFraction: number;
-  pdRightFraction: number;
+  /**
+   * Demi-écarts pupillaires ANATOMIQUES médians (plan des pupilles, fixation
+   * proche), en mm. Chacun est MESURÉ pupille ↔ pied du sellion projeté
+   * (`core/pupillary.ts`) : aucun n'est jamais `pd / 2`. `right` = œil droit
+   * du client (OD, côté landmarks 468) ; `left` = œil gauche (OG, côté 473).
+   */
+  pdRightNearMm: number;
+  pdLeftNearMm: number;
+  /** Erreurs-types RELATIVES de chaque demi-écart — différentes si un œil est
+   *  moins bien détecté. S'ajoutent au prior, ne le remplacent jamais. */
+  pdRightSE: number;
+  pdLeftSE: number;
   /** Largeur 234↔454 apparente, convertie au plan des yeux (mm, SANS parallaxe). */
   faceWidthEyePlaneMm: number;
   /** Taille médiane de l'iris en pixels — porte l'estimation de distance. */
@@ -114,8 +121,8 @@ export class AutoCalibrationEngine {
 
   private readonly mmPerPx: number[] = [];
   private readonly relErrors: number[] = [];
-  private readonly pdNear: number[] = [];
-  private readonly leftFrac: number[] = [];
+  private readonly pdRightNear: number[] = [];
+  private readonly pdLeftNear: number[] = [];
   private readonly faceEye: number[] = [];
   private readonly hvid: number[] = [];
 
@@ -159,8 +166,8 @@ export class AutoCalibrationEngine {
         else {
           this.mmPerPx.push(scale.mmPerPx);
           this.relErrors.push(scale.relError);
-          this.pdNear.push(pupils.pdPx * scale.mmPerPx);
-          this.leftFrac.push(pupils.leftPx / pupils.pdPx);
+          this.pdRightNear.push(pupils.rightPx * scale.mmPerPx);
+          this.pdLeftNear.push(pupils.leftPx * scale.mmPerPx);
           this.faceEye.push(faceWidthPx(lm, w, h) * scale.mmPerPx);
           this.hvid.push((eyes.hvidLeftPx + eyes.hvidRightPx) / 2);
         }
@@ -195,9 +202,10 @@ export class AutoCalibrationEngine {
       mmPerPxEye: median(this.mmPerPx),
       priorRelError: median(this.relErrors),
       scaleStandardError: relStandardError(this.mmPerPx),
-      pdNearMm: median(this.pdNear),
-      pdLeftFraction: median(this.leftFrac),
-      pdRightFraction: 1 - median(this.leftFrac),
+      pdRightNearMm: median(this.pdRightNear),
+      pdLeftNearMm: median(this.pdLeftNear),
+      pdRightSE: relStandardError(this.pdRightNear),
+      pdLeftSE: relStandardError(this.pdLeftNear),
       faceWidthEyePlaneMm: median(this.faceEye),
       hvidPx: median(this.hvid),
       usableFrames: this.mmPerPx.length,

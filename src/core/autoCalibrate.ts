@@ -80,17 +80,31 @@ export function calibrateAuto(
   const distanceMm = distanceFromIrisMm(m.hvidPx, focalPx, HVID_MEAN_MM);
   notes.push(
     usable
-      ? `Distance déduite de vos iris et de votre objectif déjà mesuré : ${(distanceMm / 10).toFixed(0)} cm (±${(focalRel * 100).toFixed(0)} %).`
+      ? `Distance déduite de vos iris et de votre objectif — MESURÉ lors d'une séance ` +
+          `carte précédente sur cet appareil : ${(distanceMm / 10).toFixed(0)} cm (±${(focalRel * 100).toFixed(0)} %). ` +
+          `Sans cet héritage, la marge serait un peu plus large ; la mesure, elle, resterait la même.`
       : `Distance déduite de vos iris avec un champ de caméra supposé (${AUTO_ASSUMED_HFOV_DEG}°) : ${(distanceMm / 10).toFixed(0)} cm (±${(focalRel * 100).toFixed(0)} %). Elle ne pèse que sur des termes du second ordre.`,
   );
 
-  // — PD : correction de convergence (fixation proche → loin).
-  const pdMm = farPdFromNear(m.pdNearMm, distanceMm);
-  const pdRelError = Math.hypot(
-    m.priorRelError,
-    m.scaleStandardError,
-    convergenceRelError(distanceMm, focalRel),
-  );
+  // — PD : correction de convergence (fixation proche → loin), PAR ŒIL.
+  //
+  // Le facteur (D + 13,5)/(D + 3,05) est le même pour les deux yeux tant que la
+  // fixation est sur l'axe médian (HYPOTHÈSE : le client regarde son reflet) :
+  // l'appliquer à chaque demi-écart MESURÉ préserve donc l'asymétrie mesurée —
+  // jamais de retour déguisé à « PD/2 de chaque côté ».
+  const convergence = convergenceRelError(distanceMm, focalRel);
+  const pdRightMm = farPdFromNear(m.pdRightNearMm, distanceMm);
+  const pdLeftMm = farPdFromNear(m.pdLeftNearMm, distanceMm);
+  const pdMm = pdRightMm + pdLeftMm;
+  const pdRelError = Math.hypot(m.priorRelError, m.scaleStandardError, convergence);
+  // Chaque demi-écart porte SON bruit de détection : un œil moins net, plus
+  // près du bord ou partiellement occulté a une erreur-type plus large.
+  const halfUnc = (halfMm: number, se: number): number =>
+    halfMm * Math.hypot(m.priorRelError, se, convergence);
+  const pdHalfUncertaintyMm = {
+    right: halfUnc(pdRightMm, m.pdRightSE),
+    left: halfUnc(pdLeftMm, m.pdLeftSE),
+  };
   if (!(pdMm >= PD_MIN_MM && pdMm <= PD_MAX_MM)) {
     throw new CalibrationError(
       `Écart pupillaire obtenu : ${pdMm.toFixed(1)} mm, hors plage anatomique. ` +
@@ -98,8 +112,10 @@ export function calibrateAuto(
     );
   }
   notes.push(
-    `Écart pupillaire : ${pdMm.toFixed(1)} mm ± ${(pdMm * pdRelError).toFixed(1)} mm ` +
-      `(dont correction de convergence +${(pdMm - m.pdNearMm).toFixed(1)} mm, déduite de la distance).`,
+    `Écart pupillaire : ${pdMm.toFixed(1)} mm ± ${(pdMm * pdRelError).toFixed(1)} mm — ` +
+      `demi-PD droite ${pdRightMm.toFixed(1)} ± ${pdHalfUncertaintyMm.right.toFixed(1)} mm, ` +
+      `demi-PD gauche ${pdLeftMm.toFixed(1)} ± ${pdHalfUncertaintyMm.left.toFixed(1)} mm ` +
+      `(dont correction de convergence +${(pdMm - m.pdRightNearMm - m.pdLeftNearMm).toFixed(1)} mm, déduite de la distance).`,
   );
 
   // — Largeur 234↔454 : échelle des yeux ramenée au plan des tempes (1/z).
@@ -128,8 +144,9 @@ export function calibrateAuto(
     measuredAt: nowMs,
     pdMm,
     pdRelError,
-    pdLeftMm: pdMm * m.pdLeftFraction,
-    pdRightMm: pdMm * m.pdRightFraction,
+    pdLeftMm,
+    pdRightMm,
+    pdHalfUncertaintyMm,
   };
   return { cal, notes };
 }
