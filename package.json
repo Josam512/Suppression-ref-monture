@@ -17,6 +17,7 @@
     "hooks:install": "git config core.hooksPath .githooks && chmod +x .githooks/pre-commit",
     "single": "vite build --config vite.single.config.ts && node scripts/build-single-file.mjs essayage.html",
     "smoke": "node scripts/smoke.mjs",
+    "journey": "node scripts/journey-no-card.mjs",
     "fit:correction": "npx vite-node scripts/fit-correction.mjs"
   },
   "dependencies": {

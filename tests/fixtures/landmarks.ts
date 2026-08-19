@@ -48,6 +48,12 @@ export interface FaceOptions {
   pdPx?: number;
   /** Diamètre d'iris apparent, en px. Défaut : pd × 11,71 / 63 (adulte médian). */
   hvidPx?: number;
+  /**
+   * Demi-écarts ASYMÉTRIQUES, en px, mesurés depuis le sellion. `right` place
+   * l'iris 468 (œil DROIT du client, côté image gauche), `left` l'iris 473.
+   * Prime sur `pdPx` quand présent.
+   */
+  pdSplitPx?: { right: number; left: number };
 }
 
 /**
@@ -96,15 +102,18 @@ export function makeFace(opts: FaceOptions): NormalizedLandmark[] {
   lm[SELLION] = at(0, eyeDy);
 
   // ⭐ Les iris (V2 sans carte) : centres 468/473 et extrêmes horizontaux,
-  // posés sur la ligne des yeux, symétriques autour du sellion.
+  // posés sur la ligne des yeux autour du sellion — symétriques par défaut,
+  // asymétriques quand `pdSplitPx` le demande (test des demi-PD).
   const pdPx = opts.pdPx ?? 0.44 * opts.faceWidthPx;
-  const hvidPx = opts.hvidPx ?? (pdPx * 11.71) / 63;
-  lm[468] = at(-pdPx / 2, eyeDy);
-  lm[473] = at(pdPx / 2, eyeDy);
-  lm[469] = at(-pdPx / 2 - hvidPx / 2, eyeDy); // iris gauche, extrêmes
-  lm[471] = at(-pdPx / 2 + hvidPx / 2, eyeDy);
-  lm[474] = at(pdPx / 2 - hvidPx / 2, eyeDy); // iris droit
-  lm[476] = at(pdPx / 2 + hvidPx / 2, eyeDy);
+  const rightPx = opts.pdSplitPx?.right ?? pdPx / 2; // côté 468 = OD du client
+  const leftPx = opts.pdSplitPx?.left ?? pdPx / 2; // côté 473 = OG du client
+  const hvidPx = opts.hvidPx ?? ((rightPx + leftPx) * 11.71) / 63;
+  lm[468] = at(-rightPx, eyeDy);
+  lm[473] = at(leftPx, eyeDy);
+  lm[469] = at(-rightPx - hvidPx / 2, eyeDy); // iris DROIT du client, extrêmes
+  lm[471] = at(-rightPx + hvidPx / 2, eyeDy);
+  lm[474] = at(leftPx - hvidPx / 2, eyeDy); // iris GAUCHE du client
+  lm[476] = at(leftPx + hvidPx / 2, eyeDy);
 
   // La bande du front : sourcils juste au-dessus des yeux, cheveux bien plus haut.
   // Fractions de la largeur du visage, donc cohérentes à toute distance.
