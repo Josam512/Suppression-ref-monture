@@ -44,6 +44,10 @@ export interface FaceOptions {
    * arrière du plan du visage. Le reste du fixture est frontal.
    */
   yawRad?: number;
+  /** Écart pupillaire apparent, en px. Défaut : 0,44 × largeur du visage. */
+  pdPx?: number;
+  /** Diamètre d'iris apparent, en px. Défaut : pd × 11,71 / 63 (adulte médian). */
+  hvidPx?: number;
 }
 
 /**
@@ -90,6 +94,17 @@ export function makeFace(opts: FaceOptions): NormalizedLandmark[] {
   lm[EYE_L_INNER] = at(-halfPx * 0.22, eyeDy);
   lm[EYE_R_INNER] = at(halfPx * 0.22, eyeDy);
   lm[SELLION] = at(0, eyeDy);
+
+  // ⭐ Les iris (V2 sans carte) : centres 468/473 et extrêmes horizontaux,
+  // posés sur la ligne des yeux, symétriques autour du sellion.
+  const pdPx = opts.pdPx ?? 0.44 * opts.faceWidthPx;
+  const hvidPx = opts.hvidPx ?? (pdPx * 11.71) / 63;
+  lm[468] = at(-pdPx / 2, eyeDy);
+  lm[473] = at(pdPx / 2, eyeDy);
+  lm[469] = at(-pdPx / 2 - hvidPx / 2, eyeDy); // iris gauche, extrêmes
+  lm[471] = at(-pdPx / 2 + hvidPx / 2, eyeDy);
+  lm[474] = at(pdPx / 2 - hvidPx / 2, eyeDy); // iris droit
+  lm[476] = at(pdPx / 2 + hvidPx / 2, eyeDy);
 
   // La bande du front : sourcils juste au-dessus des yeux, cheveux bien plus haut.
   // Fractions de la largeur du visage, donc cohérentes à toute distance.

@@ -18,6 +18,27 @@ export interface WornFrameOutcome {
   notices: string[];
 }
 
+/** Câblage IHM du même étalonnage : rend le gestionnaire prêt à brancher. */
+export function wornFrameHandlerOf(deps: {
+  canvasWidth(): number | null;
+  canvasHeight(): number | null;
+  onDone(out: WornFrameOutcome, worn: FrameSpec): void;
+  onError(message: string): void;
+}): (widthPx: number, worn: FrameSpec, lm: readonly NormalizedLandmark[]) => void {
+  return (widthPx, worn, lm) => {
+    const w = deps.canvasWidth();
+    const h = deps.canvasHeight();
+    if (w === null || h === null) return;
+    try {
+      // ⚠️ `lm` vient de l'image FIGÉE, pas de la boucle live — la monture et le
+      // visage se mesurent sur les mêmes pixels, sinon leur rapport est faux.
+      deps.onDone(wornFrameCalibration(widthPx, worn, lm, w, h), worn);
+    } catch (err) {
+      deps.onError(err instanceof Error ? err.message : String(err));
+    }
+  };
+}
+
 export function wornFrameCalibration(
   widthPx: number,
   worn: FrameSpec,
