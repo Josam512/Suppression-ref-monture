@@ -1051,3 +1051,46 @@ signe que quelque chose clochait.
 **État :** 189 tests, banc navigateur vert (25 contrôles), typecheck strict clean.
 **Non couvert de bout en bout :** le détecteur lui-même en CI (le flux injecté est
 une mire, pas un visage).
+
+## 2026-08-19 — Audit runtime, état de l'art, et V2 SANS CARTE
+
+Trois travaux distincts, dans l'ordre exigé par la mission : audit d'abord,
+recherche ensuite, code en dernier.
+
+**1. Audit (`docs/AUDIT-RUNTIME-V2.md`).** Le « ça ne se termine jamais » a trois
+causes, toutes reproduites en navigateur piloté : (A) la terminaison avait été
+déléguée au client SANS diagnostic de suffisance — `probe.complete` calculé,
+testé, jamais lu ; (B) l'échec de « J'ai fini » renvoyait à la case départ sans
+raison actionnable ; (C) `stepRotation` publiait un setPhase PAR FRAME dès que le
+compte stagnait sur un multiple de 5 (0 inclus). S'y ajoutent : état `error`
+terminal (« [object Event] »), `npm run smoke` cassé sur clone frais (predev
+contourné), FaceLandmarker jamais fermé, promesse d'init sans timeout,
+`ocularPrior.ts` (252 l.) mort à 100 %.
+
+**2. État de l'art (`docs/ETAT-DE-L-ART-METROLOGIE-FACIALE.md` + 6 annexes
+`docs/recherche/`).** Verdict : en RGB pur sans référence, le plafond démontré
+est l'iris-étalon (±2–3 mm sur le PD, 1σ) ; le sub-millimétrique n'existe
+qu'avec capteur de profondeur ; la pupille est inutilisable ; les priors
+faciaux n'apportent rien et biaisent les enfants ; HVID adulte dès 2–3 ans ;
+correction de convergence (+1–2 mm) systématiquement oubliée par les apps.
+
+**3. V2 (`docs/ARCHITECTURE-V2-SANS-CARTE.md`).** Parcours : ouvrir la caméra →
+regarder l'écran → « calibration acquise » → essayage. Moteur pur à états
+explicites (`core/autoCalibration.ts`) : succès/échec/dégradation/timeout,
+WHY_NOT_DONE permanent, une seule transition, collecte ≠ caméra. Échelle =
+Mahalanobis périoculaire (iris ×2 + fente gatée anti-enfant, borne en pire cas
+~3,2–4,2 %), PD avec correction de convergence et demi-écarts, largeur corrigée
+du plan yeux→tempes, focale du CameraProfile carte quand il existe. La carte
+devient un MODE DIAGNOSTIC, conservée comme vérité terrain.
+
+**Corrigés au passage :** throttle A1, état error avec « Réessayer »,
+timeout d'init nommé, close() du landmarker, message « [object Event] ».
+
+**État : 213 tests verts (24 nouveaux), typecheck strict clean, banc navigateur
+35 contrôles verts** — dont : « sans visage, la collecte se TERMINE (échec
+nommé) » et « WHY_NOT_DONE affiché ».
+
+**Non démontré, écrit tel quel :** la précision réelle sur sujets (protocole
+N≥50 défini, réf. pupillomètre) ; le biais populationnel du HVID ; δz yeux→
+tempes (45 ± 12, hypothèse dérivée d'une mesure carte) ; MediaPipe sur enfants ;
+la largeur temporale sans carte (machinerie prête, non câblée — lot suivant).
