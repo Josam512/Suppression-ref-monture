@@ -8,6 +8,7 @@
  * Rien ici n'est une mesure. Ce sont des tampons de travail.
  */
 
+import type { AutoCalibrationEngine } from '../core/autoCalibration.js';
 import type { UserCalibration } from '../core/calibration.js';
 import type { FrameSpec } from '../core/frameSpec.js';
 import type { CardQuad } from '../core/cardPose.js';
@@ -52,6 +53,17 @@ export interface Live {
   pendingCard: PendingCard | null;
 
   /**
+   * ⭐ V2 sans carte — le moteur de calibration automatique, non nul PENDANT la
+   * collecte seulement. `calibrationCollecting` du §6 de la mission, incarné :
+   * la caméra tourne toujours, la collecte a un début et une fin.
+   */
+  auto: AutoCalibrationEngine | null;
+  /** Dernier état publié à React — la boucle ne publie que sur changement. */
+  lastAutoKey: string;
+  /** Dernier compte de vues de carte publié — même règle (bug A1 de l'audit). */
+  lastReportedCardViews: number;
+
+  /**
    * Sprite du modèle PHYSIQUEMENT PORTÉ, quand on le connaît (V2).
    *
    * ⚠️ Sa présence — et non un test de mode — décide du recoloriage 2,5 D
@@ -74,6 +86,9 @@ export function createLive(sprites: SpritesState, spec: FrameSpec | null, cal: U
     lastProbeRatio: -1,
     irisSamples: null,
     pendingCard: null,
+    auto: null,
+    lastAutoKey: '',
+    lastReportedCardViews: -1,
     wornSprite: null,
     recolorReason: null,
   };

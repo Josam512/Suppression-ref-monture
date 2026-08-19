@@ -21,7 +21,7 @@ export { ASSUMED_HFOV_DEG, CARD_HEIGHT_MM, CARD_TO_TEMPLE_DEPTH_MM } from './car
 export { CARD_WIDTH_MM, ISO_ID1_OBJECTS, estimateDistanceMm } from './cardOptics.js';
 export { parallaxRelErrorAt, parallaxRelErrorFromCard } from './cardOptics.js';
 
-export type CalSource = 'iris' | 'card' | 'worn-frame';
+export type CalSource = 'iris' | 'card' | 'worn-frame' | 'auto';
 
 export interface UserCalibration {
   /**
@@ -51,6 +51,10 @@ export interface UserCalibration {
   temporalWidthMm?: number;
   /** Incertitude relative propre à l'écart temporal. Absente avec lui. */
   temporalRelError?: number;
+
+  pdMm?: number; // ⭐ V2 sans carte : PD de loin mesuré (core/autoCalibrate.ts)
+  pdRelError?: number;
+  pdLeftMm?: number; pdRightMm?: number; // demi-écarts anatomiques, côté client
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -70,6 +74,7 @@ const CAUSE_BY_SOURCE: Record<CalSource, string> = {
   'worn-frame':
     `La monture de référence sélectionnée ne correspond probablement pas ` +
     `à celle qui est portée, ou ses bords ont été mal pointés.`,
+  auto: `La mesure automatique des yeux a probablement décroché. Recommencez face à la caméra, sans lunettes.`,
 };
 
 /**

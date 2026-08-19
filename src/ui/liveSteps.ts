@@ -10,6 +10,7 @@
  * ⚠️ Aucun des deux ne mesure : ils accumulent et délèguent à `core/`.
  */
 
+import type { AutoStatus } from '../core/autoCalibration.js';
 import { crossCheckWithIris } from '../core/crossCheck.js';
 import { irisWidthPx, rollRadOf } from '../core/faceMetrics.js';
 import type { NormalizedLandmark } from '../core/geom.js';
@@ -49,12 +50,47 @@ export function stepRotation(
   const cardViews = s.probe.quads().length;
   const reached = s.probe.progress.negative + s.probe.progress.positive;
   const moved = Math.abs(reached - s.lastProbeRatio) > 0.02;
-  if (!moved && cardViews % SWEEP_REPORT_EVERY !== 0) return null;
+
+  // ⚠️ Publier seulement sur CHANGEMENT (bug A1 de l'audit) : l'ancienne
+  // condition laissait passer chaque frame dès que le compte stagnait sur un
+  // multiple de SWEEP_REPORT_EVERY — 0 inclus, donc pendant toute séance où la
+  // carte n'était pas trouvée, React re-rendait à la cadence vidéo.
+  const countWorthReporting =
+    cardViews !== s.lastReportedCardViews && cardViews % SWEEP_REPORT_EVERY === 0;
+  if (!moved && !countWorthReporting) return null;
 
   s.lastProbeRatio = reached;
+  s.lastReportedCardViews = cardViews;
   const p = s.probe.progress;
   const deg = (r: number): number => (r * 180) / Math.PI;
   return { degrees: { left: deg(p.negative), right: deg(p.positive) }, cardViews };
+}
+
+/**
+ * ⭐ V2 sans carte — nourrit le moteur automatique et rend son état QUAND il a
+ * changé, `null` sinon. Même discipline anti-A1 que `stepRotation` : la boucle
+ * ne pousse jamais deux fois le même état vers React.
+ *
+ * `lm` vaut null quand la détection est perdue : le moteur doit le savoir,
+ * c'est une des raisons qui expliquent pourquoi « ça ne finit pas ».
+ */
+export function stepAutoCalibration(
+  s: Live,
+  lm: readonly NormalizedLandmark[] | null,
+  yawRad: number,
+  w: number,
+  h: number,
+  nowMs: number,
+): AutoStatus | null {
+  if (s.auto === null) return null;
+  const roll = lm === null ? 0 : rollRadOf(lm, w, h);
+  s.auto.offer(lm, yawRad, roll, w, h, nowMs);
+
+  const status = s.auto.status();
+  const key = `${status.state}|${status.usableFrames}|${status.whyNotDone?.code ?? ''}`;
+  if (key === s.lastAutoKey) return null;
+  s.lastAutoKey = key;
+  return status;
 }
 
 /**

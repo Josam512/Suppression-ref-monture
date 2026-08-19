@@ -123,18 +123,46 @@ try {
   });
   check('détection perdue → la boucle affiche quand même l’échec (§1 bug #3)', painted);
 
-  const texteV1 = await page.locator('body').innerText();
-  check('V1 annonce clairement sa version', texteV1.includes('V1 — Vente en ligne'));
+  const texteAuto = await page.locator('body').innerText();
+  check('V1 annonce clairement sa version', texteAuto.includes('V1 — Vente en ligne'));
 
-  // ⭐ Arbitrage humain 2026-08-17 : la carte est OBLIGATOIRE au démarrage.
-  // L'ancienne question sur les lunettes ouvrait la voie iris ; elle n'existe plus.
+  // ⭐ MISSION 2026-08-19 : le parcours normal est la mesure AUTOMATIQUE, sans
+  // carte. Le client regarde l'écran, la machine dit ce qui lui manque
+  // (WHY_NOT_DONE) et annonce elle-même sa fin.
   check(
-    'V1 : la carte est demandée d’emblée, sans passer par l’iris',
-    /carte/i.test(texteV1) && !/Portez-vous des lunettes/i.test(texteV1),
+    'V2 : la mesure automatique est le parcours d’entrée — aucune carte exigée',
+    /Mesure automatique en cours/i.test(texteAuto),
   );
   check(
-    'V1 : la consigne « retirez vos lunettes » est donnée AVANT la mesure',
-    /Retirez vos lunettes/i.test(texteV1),
+    'V2 : WHY_NOT_DONE est affiché — on sait toujours pourquoi ça tourne',
+    /images utiles|je ne vous ai pas vu|face à la caméra/i.test(texteAuto),
+  );
+  check(
+    'V2 : la consigne « retirez vos lunettes » est donnée AVANT la mesure',
+    /Retirez vos lunettes/i.test(texteAuto),
+  );
+
+  // 🔴 Sans visage (mire de synthèse), le moteur DOIT échouer en un temps FINI
+  // avec sa cause dominante — plus jamais une collecte qui tourne sans fin.
+  await page.waitForTimeout(21_000);
+  const texteEchec = await page.locator('body').innerText();
+  check(
+    'V2 : sans visage, la collecte se TERMINE (échec nommé, pas une boucle infinie)',
+    /n’a pas abouti|n'a pas abouti/i.test(texteEchec) && /face à la caméra/i.test(texteEchec),
+  );
+  check(
+    'V2 : l’échec offre Réessayer ET le mode diagnostic carte',
+    (await page.getByRole('button', { name: /Réessayer/i }).count()) === 1 &&
+      (await page.getByRole('button', { name: /carte/i }).count()) >= 1,
+  );
+
+  // — Le mode diagnostic CARTE reste le parcours de vérité terrain (inchangé).
+  await page.getByRole('button', { name: /carte/i }).first().click();
+  await page.waitForTimeout(300);
+  const texteV1 = await page.locator('body').innerText();
+  check(
+    'V1 : la carte reste disponible en mode diagnostic',
+    /carte/i.test(texteV1) && !/Portez-vous des lunettes/i.test(texteV1),
   );
 
   // ⭐ La carte peut etre tenue ou le client veut — le detecteur cherche du

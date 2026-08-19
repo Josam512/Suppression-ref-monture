@@ -8,7 +8,9 @@
  * cliqués. Toute la métrologie est dans `core/`.
  */
 
+import type { AutoStatus } from '../core/autoCalibration.js';
 import type { FrameSpec } from '../core/frameSpec.js';
+import { AutoCalibrationStep } from './AutoCalibrationStep.js';
 import { CardCalibration } from './CardCalibration.js';
 import type { NormalizedLandmark } from '../core/geom.js';
 import { RotationStep } from './RotationStep.js';
@@ -25,7 +27,9 @@ import { WornFrameCalibration } from './WornFrameCalibration.js';
 export type Phase =
   | { kind: 'loading'; ratio: number }
   | { kind: 'error'; message: string }
-  /** Consigne, puis « ma carte est en place ». Rien ne mesure encore. */
+  /** ⭐ V2 — la mesure automatique. Le MOTEUR décide quand c'est terminé. */
+  | { kind: 'mesure-auto'; status: AutoStatus }
+  /** Mode diagnostic : consigne carte, puis « je filme ». Rien ne mesure encore. */
   | { kind: 'mesure-carte' }
   /** La séance filmée. Ne se termine QUE sur « J'ai fini ». */
   | { kind: 'mesure-rotation'; degrees: { left: number; right: number }; cardViews: number }
@@ -43,6 +47,12 @@ export interface CalibrationPanelProps {
   onCardReady(): void;
   onWornFrameValidated(widthPx: number, spec: FrameSpec, lm: readonly NormalizedLandmark[]): void;
   onCancel(): void;
+  /** ⭐ V2 — relancer la mesure automatique après un échec. */
+  onRetryAuto(): void;
+  /** Basculer vers le mode diagnostic carte. */
+  onUseCard(): void;
+  /** Réessayer après une erreur caméra/modèle — l'état `error` n'est plus un cul-de-sac. */
+  onRetryCamera(): void;
 }
 
 export function CalibrationPanel(props: CalibrationPanelProps): JSX.Element | null {
@@ -53,7 +63,20 @@ export function CalibrationPanel(props: CalibrationPanelProps): JSX.Element | nu
   }
 
   if (phase.kind === 'error') {
-    return <p style={{ color: '#ff6b6b' }}>Erreur : {phase.message}</p>;
+    return (
+      <section>
+        <p style={{ color: '#ff6b6b' }}>Erreur : {phase.message}</p>
+        <button type="button" onClick={props.onRetryCamera} style={{ fontWeight: 700 }}>
+          Réessayer
+        </button>
+      </section>
+    );
+  }
+
+  if (phase.kind === 'mesure-auto') {
+    return (
+      <AutoCalibrationStep status={phase.status} onRetry={props.onRetryAuto} onUseCard={props.onUseCard} />
+    );
   }
 
   if (phase.kind === 'mesure-carte') {
