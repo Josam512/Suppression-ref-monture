@@ -61,6 +61,17 @@ export interface FrameSpec {
   hingeProfile: Pt;
 
   /**
+   * ⭐ Tenons, marqués sur la photo de FACE (arbitrage 2026-08-19) : le point où
+   * la branche SORT visuellement de la face, de chaque côté. Ce ne sont PAS des
+   * « charnières » — la charnière est un axe mécanique, souvent invisible de
+   * face. Optionnels : les fiches préparées avant cette date ne les ont pas, et
+   * `templeRootOf` (core/transform.ts) retombe alors sur une APPROXIMATION dite
+   * en clair (bord de la bbox alpha à hauteur du pont).
+   */
+  templeRootL?: Pt;
+  templeRootR?: Pt;
+
+  /**
    * ⭐ T10 — grandeurs du sprite de PROFIL, quand il vient d'une photo trois
    * quarts redressee (`tools/prepare_temple.py`). Optionnelles : un profil
    * photographie a plat n'en a pas besoin, son echelle etant `spritePxPerMm`.
@@ -158,6 +169,13 @@ export function parseFrameSpec(raw: unknown): FrameSpec {
   for (const key of REQUIRED_POINTS) {
     if (!isPt(o[key])) {
       throw new CalibrationError(`spec.json (${o['slug']}) : point "${key}" absent ou invalide.`);
+    }
+  }
+  // Tenons optionnels : absents = repli documenté ; présents mais malformés = erreur,
+  // jamais une valeur par défaut silencieuse (même règle que les champs requis).
+  for (const key of ['templeRootL', 'templeRootR'] as const) {
+    if (o[key] !== undefined && !isPt(o[key])) {
+      throw new CalibrationError(`spec.json (${o['slug']}) : point optionnel "${key}" invalide.`);
     }
   }
 

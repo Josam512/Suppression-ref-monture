@@ -57,6 +57,12 @@ export function AutoCalibrationStep(props: AutoCalibrationStepProps): JSX.Elemen
         viser : la mesure se prend toute seule et vous dira quand elle a terminé.
       </p>
 
+      <p style={{ opacity: 0.75 }}>
+        Facultatif : tournez d’abord brièvement la tête d’un côté puis de l’autre, avant de revenir
+        de face — j’en profite pour mesurer la largeur de votre tête aux tempes. Sans cela, la
+        mesure aboutit quand même, avec une marge un peu plus large.
+      </p>
+
       {/* ⭐ WHY_NOT_DONE (mission §9) : la raison courante, toujours visible. */}
       <p aria-live="polite" style={{ opacity: 0.85 }}>
         {status.whyNotDone?.label ?? 'Mesure en cours…'}

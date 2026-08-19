@@ -26,6 +26,8 @@ const STEPS = [
   'Centre du pont (point d’ancrage)',
   'Centre optique du verre gauche',
   'Centre optique du verre droit',
+  'Tenon GAUCHE — départ visuel de la branche gauche',
+  'Tenon DROIT — départ visuel de la branche droite',
 ] as const;
 
 export function DetourTool(): JSX.Element {
@@ -52,8 +54,9 @@ export function DetourTool(): JSX.Element {
 
   const result = useMemo(() => {
     if (img === null || bbox === null || pts.length < STEPS.length) return null;
-    const [p1, p2, p3, p4, p5, p6, bridge, lensL, lensR] = pts;
+    const [p1, p2, p3, p4, p5, p6, bridge, lensL, lensR, rootL, rootR] = pts;
     if (!p1 || !p2 || !p3 || !p4 || !p5 || !p6 || !bridge || !lensL || !lensR) return null;
+    if (!rootL || !rootR) return null;
 
     const marks: FrontMarks = { p1, p2, p3, p4, p5, p6 };
     try {
@@ -74,6 +77,9 @@ export function DetourTool(): JSX.Element {
           lensCenterL: lensL,
           lensCenterR: lensR,
           hingeProfile: hinge,
+          // Tenons sur la photo de FACE : départ de la branche (2026-08-19).
+          templeRootL: rootL,
+          templeRootR: rootR,
           calibratedAt: new Date().toISOString().slice(0, 10),
         },
         error: null as string | null,

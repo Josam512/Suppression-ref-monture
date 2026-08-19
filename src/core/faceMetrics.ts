@@ -139,9 +139,10 @@ export interface FrameMetrics {
    */
   poseAnchor: Pt;
   /**
-   * ⭐ Jonction oreille ↔ crâne, à l'écran, des deux côtés. C'est là que la
-   * branche doit ABOUTIR. Mesurée sur ce visage-ci au lieu d'être déduite d'une
-   * longueur de branche nominale, connue à ±20 % seulement.
+   * ⭐ Jonction oreille ↔ crâne, à l'écran, des deux côtés. Elle donne la
+   * DIRECTION de la branche — jamais son échelle (arbitrage 2026-08-19 : la
+   * branche est peinte à sa longueur physique, son extrémité tombe où la
+   * physique la met, et l'occlusion cache ce qui passe derrière la tête).
    */
   ear: { left: Pt; right: Pt };
 }

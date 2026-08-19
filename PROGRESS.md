@@ -1127,3 +1127,49 @@ dans les marges ; l'écart (0,6 mm) est le terme de convergence, qui dépend de 
 distance estimée (~22 cm sur cette photo, cas plus près que l'usage réel).
 
 **État : 234 tests verts, typecheck strict clean, banc smoke vert, journey vert.**
+
+## 2026-08-19 (soir) — Branche PHYSIQUE, non-adaptation verrouillée, écart temporal sans carte, pose documentée
+
+**⭐ Refonte de la branche (arbitrage humain : « branche physiquement cohérente
++ fin cachée », jamais « branche déformée + extrémité parfaite »).** L'ancienne
+`templeAffine` envoyait l'extrémité nominale exactement sur l'oreille — elle
+étirait une 140 mm et comprimait une 150 mm jusqu'à ce que les deux « aillent » :
+le slider de taille appliqué à la branche. Supprimée. Désormais : départ au
+TENON de la face (`templeRootL/R` marqués dans l'outil de prep, deux nouveaux
+clics ; repli documenté = bord de bbox + hauteur du pont pour les fiches
+existantes — ce n'est PAS « la vraie charnière », formulation corrigée),
+échelle PHYSIQUE `livePxPerMm × sin(|yaw|) / profilePxPerMm`, oreille = DIRECTION
+seulement, extrémité libre (l'occlusion cache ce qui passe derrière la tête).
+Tests réécrits : échelle identique 140/150, longueur peinte = réelle × sin(yaw)
+exactement, direction colinéaire tenon→oreille, tenon explicite prime.
+
+**Non-adaptation (`tests/nonadaptation.test.ts`, 8 tests).** Calibration
+BIT-IDENTIQUE en essayant 100→160 mm ; incréments de 2 mm = exactement
+2×livePxPerMm ; distances 300–800 mm : mesure et rapport constants ; visages
+110–160 mesurés à LEUR taille (pente 1,058 — le résidu vient du prior PFL qui
+entre dans sa fenêtre 2σ sur les grands visages, dans la marge annoncée ; jamais
+une compression vers une moyenne) ; enfant 110/monture 90 et adulte 150/150
+chacun exact ; 150 sur 130 DÉPASSE, 120 sur 150 reste étroite.
+
+**Écart temporal câblé au parcours SANS CARTE (`tests/temporal-auto.test.ts`).**
+`calibrateAuto` accepte une `AutoTemporalScene` (frontale figée + masque de
+mouvement des vues tournées — PIXELS seulement, aucun landmark de profil : les
+repères 234/454 ne sont jamais des points physiques pendant la rotation) ;
+`useAutoCalibration` capture 3 images au total (frontale |yaw|≤0,06, un côté
+0,17–0,61 chacun) ; échelle au plan des tempes = échelle yeux × (1+45/D).
+Mesuré → `temporalWidthMm` alimente la légende (présence de donnée, pas de
+branchement) ; non mesuré (pas de rotation, lunettes gardées) → champs ABSENTS
+et note en clair. La consigne dit que la rotation est facultative.
+
+**Pose sur le nez (`tests/pose.test.ts`, 6 tests).** Convention §14.6 CONSERVÉE
+et déclarée (X = sellion, Y = ligne des canthi — l'alternative « landmarks
+nasaux individuels » serait un choix scientifique non démontré, signalé, pas
+inventé). Verrouillé : centres optiques sur la ligne des yeux à toute
+morphologie (110/138/152 mm), le pont suit CHAQUE monture (1 mm vs 10 mm de
+profondeur → aucun décalage constant possible), le regard (iris) ne déplace
+rien, sous roulis chaque axe garde sa référence.
+
+**État : 254 tests verts, typecheck strict clean, banc smoke vert (35 contrôles),
+journey navigateur vert.** Non démontré, inchangé : précision absolue sur sujets
+réels (protocole N≥50), biais populationnel HVID, δz yeux→tempes 45±12 mm
+(hypothèse), tenons non marqués sur les fiches existantes (repli en service).
