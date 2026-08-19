@@ -114,20 +114,28 @@ describe('LARGEUR TOTALE : mesurée sur les pixels, jamais 2A + DBL', () => {
   });
 });
 
-describe('BRANCHE : longueur réelle et charnière réelle', () => {
+describe('BRANCHE : échelle PHYSIQUE, départ au tenon, fin libre (2026-08-19)', () => {
   const M30 = frameMetrics(makeFaceAtYaw(Math.PI / 6), W, H, makeCal(), Math.PI / 6);
   const b140 = { ...specForTotalWidthMm(132, { slug: 'b140' }), brancheMm: 140 };
   const b150 = { ...specForTotalWidthMm(132, { slug: 'b150' }), brancheMm: 150 };
 
-  it('la longueur de branche RÉELLE calibre le sprite de profil (140 ≠ 150)', () => {
+  it('🔴 l’échelle du sprite NE dépend PAS de la longueur nominale (fin du stretch)', () => {
     expect(templeLengthMm(b140)).toBe(140);
     expect(templeLengthMm(b150)).toBe(150);
     const a140 = templeAffine(b140, M30, 1);
     const a150 = templeAffine(b150, M30, 1);
-    // Même charnière, même oreille : le sprite d'une branche de 150 mm est
-    // remis à l'échelle 140/150 de celui d'une branche de 140 mm — sa
-    // longueur réelle décide de son échelle, exactement comme pour la face.
-    expect(Math.hypot(a150.a, a150.b) / Math.hypot(a140.a, a140.b)).toBeCloseTo(140 / 150, 6);
+    // L'ancien modèle étirait la 140 et comprimait la 150 pour que les deux
+    // extrémités tombent sur l'oreille (rapport 140/150 entre les échelles).
+    // Le modèle physique donne la MÊME échelle aux deux : c'est la longueur
+    // peinte qui diffère, dans le rapport des longueurs réelles.
+    expect(Math.hypot(a150.a, a150.b)).toBeCloseTo(Math.hypot(a140.a, a140.b), 9);
+    expect(renderedTempleLengthPx(b150, M30, 1) / renderedTempleLengthPx(b140, M30, 1))
+      .toBeCloseTo(150 / 140, 9);
+  });
+
+  it('la longueur peinte vaut EXACTEMENT longueur réelle × échelle × sin(yaw)', () => {
+    const paintedMm = renderedTempleLengthPx(b140, M30, 1) / M30.livePxPerMm;
+    expect(paintedMm).toBeCloseTo(140 * Math.sin(Math.PI / 6), 6);
   });
 
   it('templeRectifiedMm (profil redressé) PRIME sur la longueur nominale', () => {
@@ -135,21 +143,40 @@ describe('BRANCHE : longueur réelle et charnière réelle', () => {
     expect(templeLengthMm(redresse)).toBeCloseTo(174.5, 6);
   });
 
-  it('le PIVOT est la vraie charnière du spec — jamais le coin de l’image', () => {
+  it('le DÉPART est le tenon : explicite s’il est marqué, approximation sinon', () => {
+    // Sans marque : repli documenté = bord externe de la bbox, hauteur du pont.
     const t = templeAffine(b140, M30, 1);
-    // La charnière du sprite de profil doit tomber EXACTEMENT sur la charnière
-    // de la face projetée (bord externe de la bbox, hauteur du pont).
-    const frontHinge = spriteToScreen(
+    const fallback = spriteToScreen(
       { x: b140.alphaBBox.x + b140.alphaBBox.w, y: b140.bridgeCenter.y },
       b140,
       M30,
     );
     const pivot = apply(t, b140.hingeProfile);
-    expect(pivot.x).toBeCloseTo(frontHinge.x, 6);
-    expect(pivot.y).toBeCloseTo(frontHinge.y, 6);
-    // …et le coin (0,0) du fichier, lui, ne tombe PAS sur la charnière.
+    expect(pivot.x).toBeCloseTo(fallback.x, 6);
+    expect(pivot.y).toBeCloseTo(fallback.y, 6);
+
+    // Avec templeRootR marqué sur la photo de face : c'est LUI qui commande.
+    const root = { x: b140.alphaBBox.x + b140.alphaBBox.w - 30, y: b140.bridgeCenter.y + 12 };
+    const marked = { ...b140, templeRootR: root };
+    const pivotMarked = apply(templeAffine(marked, M30, 1), marked.hingeProfile);
+    const rootOnScreen = spriteToScreen(root, marked, M30);
+    expect(pivotMarked.x).toBeCloseTo(rootOnScreen.x, 6);
+    expect(pivotMarked.y).toBeCloseTo(rootOnScreen.y, 6);
+
+    // …et le coin (0,0) du fichier, lui, ne tombe PAS sur le tenon.
     const corner = apply(t, { x: 0, y: 0 });
-    expect(Math.hypot(corner.x - frontHinge.x, corner.y - frontHinge.y)).toBeGreaterThan(1);
+    expect(Math.hypot(corner.x - fallback.x, corner.y - fallback.y)).toBeGreaterThan(1);
+  });
+
+  it('l’oreille donne la DIRECTION de la branche — jamais son échelle', () => {
+    const t = templeAffine(b140, M30, 1);
+    const anchor = apply(t, b140.hingeProfile);
+    const ear = M30.ear.right;
+    // Le vecteur image de l'axe +x du sprite est colinéaire à (tenon → oreille)…
+    const cross = t.a * (ear.y - anchor.y) - t.b * (ear.x - anchor.x);
+    expect(Math.abs(cross) / Math.hypot(t.a, t.b)).toBeLessThan(1e-6);
+    // …et de même sens (la branche part VERS l'oreille, pas à l'opposé).
+    expect(t.a * (ear.x - anchor.x) + t.b * (ear.y - anchor.y)).toBeGreaterThan(0);
   });
 
   it('2.5D : la branche peinte s’allonge quand la tête tourne (profil progressif)', () => {
@@ -157,7 +184,8 @@ describe('BRANCHE : longueur réelle et charnière réelle', () => {
     const nearFrontal = renderedTempleLengthPx(b140, M6, 1);
     const profil = renderedTempleLengthPx(b140, M30, 1);
     expect(profil).toBeGreaterThan(nearFrontal);
-    // Sa longueur à l'écran est la distance charnière ↔ oreille MESURÉE sur ce
-    // visage — le raccourci de perspective est porté par la mesure, pas simulé.
+    // Le raccourci de perspective est sin(yaw) sur la longueur RÉELLE : la fin
+    // peut dépasser l'oreille ou ne pas l'atteindre — c'est une information,
+    // et l'occlusion cache ce qui passe derrière la tête.
   });
 });

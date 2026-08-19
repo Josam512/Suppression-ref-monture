@@ -112,9 +112,7 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
 
   /** Mode diagnostic : la consigne carte. Aucune mesure ne tourne à ce stade. */
   const enterCard = useCallback(() => {
-    live.current.probe = null;
-    live.current.pendingCard = null;
-    live.current.auto = null;
+    Object.assign(live.current, { probe: null, pendingCard: null, auto: null });
     setPhase({ kind: 'mesure-carte' });
   }, []);
 
@@ -124,6 +122,7 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
    */
   const { startAuto, pump } = useAutoCalibration({
     live,
+    videoRef,
     canvasRef,
     cameraProfile,
     setPhase,

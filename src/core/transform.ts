@@ -169,60 +169,75 @@ export function renderedFrameHeightPx(spec: FrameSpec, m: FrameMetrics): number 
 
 
 /**
- * Affine de la BRANCHE (CLAUDE.md §6).
+ * ⭐ Le TENON : point de la photo de FACE d'où la branche part à l'écran.
  *
- * Une branche n'est pas une face : elle est perpendiculaire a celle-ci. Sa
- * projection ne se raccourcit donc pas en cos(yaw) mais grandit en sin(yaw) —
- * nulle de face, maximale de profil. Elle est ancree a la CHARNIERE, au bord
- * externe de la face, et non au centre du pont.
+ * Marqué explicitement dans l'outil de prep (`templeRootL/R`, §12). Les fiches
+ * préparées avant 2026-08-19 ne l'ont pas : on retombe alors sur une
+ * APPROXIMATION dite en clair — bord externe de la bbox alpha, à hauteur du
+ * pont. Ce point n'est PAS « la vraie charnière » (formulation antérieure,
+ * corrigée : la charnière est un axe mécanique, souvent invisible de face) ;
+ * c'est le point de sortie VISUEL de la branche.
+ */
+export function templeRootOf(spec: FrameSpec, side: 1 | -1): Pt {
+  const explicit = side > 0 ? spec.templeRootR : spec.templeRootL;
+  if (explicit !== undefined) return explicit;
+  return {
+    x: side > 0 ? spec.alphaBBox.x + spec.alphaBBox.w : spec.alphaBBox.x,
+    y: spec.bridgeCenter.y,
+  };
+}
+
+/**
+ * Affine de la BRANCHE — arbitrage 2026-08-19 : « branche physiquement
+ * cohérente + fin cachée » plutôt que « branche déformée + extrémité parfaite ».
  *
- * ⚠️ Une premiere implementation appliquait a la branche l'affine de la face.
- * La branche etait alors posee au centre du visage et retrecissait quand la
- * tete tournait — soit l'exact inverse du comportement physique.
+ * Trois décisions, dans cet ordre :
+ *  1. Elle PART du tenon de la face, projeté par l'affine unique (T3).
+ *  2. Elle est à l'échelle PHYSIQUE : la longueur réelle du sprite, raccourcie
+ *     en sin(|yaw|) — projection d'un segment perpendiculaire au plan du
+ *     visage, nulle de face, maximale de profil. `brancheMm` CALIBRE l'échelle
+ *     du sprite ; il ne fabrique JAMAIS une transformation qui étire ou
+ *     comprime la branche pour la faire « tomber juste ».
+ *  3. Elle est ORIENTÉE vers l'oreille mesurée — la DIRECTION seulement.
+ *     Son extrémité tombe où la physique la met : sur l'oreille si la branche
+ *     est à la taille de ce crâne, avant ou après sinon. C'est une information
+ *     (une branche trop courte SE VOIT), et l'occlusion de `render/temple.ts`
+ *     cache naturellement ce qui passe derrière la tête ou l'oreille.
+ *
+ * 🔴 Version précédente, SUPPRIMÉE : une similitude envoyait l'extrémité
+ * nominale exactement sur l'oreille — elle étirait donc une branche de 140 mm
+ * et comprimait une branche de 150 mm jusqu'à ce que les deux « aillent ».
+ * C'était le slider de taille (§1 bug #1) appliqué à la branche : quelle que
+ * soit la longueur réelle, l'extrémité tombait juste. Ne pas la réintroduire.
  *
  * @param side +1 si la branche visible est celle de droite du sprite, -1 sinon.
  */
 export function templeAffine(spec: FrameSpec, m: FrameMetrics, side: 1 | -1): Affine {
-  // La charniere sur la FACE : bord externe de la bbox alpha, a hauteur du pont.
-  const hingeOnFront = {
-    x: side > 0 ? spec.alphaBBox.x + spec.alphaBBox.w : spec.alphaBBox.x,
-    y: spec.bridgeCenter.y,
-  };
-  const anchor = spriteToScreen(hingeOnFront, spec, m);
+  const anchor = spriteToScreen(templeRootOf(spec, side), spec, m);
 
-  // ⭐ La branche ABOUTIT à l'oreille, mesurée sur ce visage-ci.
-  //
-  // Avant, sa longueur venait du sprite de profil — connue à ±20 %, et le bout
-  // flottait donc devant ou derrière l'oreille dès que la tête tournait. Or les
-  // deux extrémités sont CONNUES à l'écran : la charnière est projetée par
-  // l'affine de la face, l'oreille est un repère mesuré. Deux points suffisent à
-  // fixer la similitude — plus rien n'est deduit d'une longueur nominale.
-  //
-  // 🔴 Le raccourci en sin(yaw) n'est pas perdu, il est MESURÉ : l'écart
-  // charnière ↔ oreille à l'écran le porte déjà, puisqu'il est lui-même le long
-  // de l'axe avant-arrière de la tête. De face il tend vers zéro et la branche
-  // disparaît toute seule — ce que `render/temple.ts` masque de toute façon.
+  // Direction MESURÉE : du tenon vers l'oreille de ce visage-ci. On n'en tire
+  // que l'orientation — jamais une échelle, qui serait l'étirement supprimé.
   const ear = side > 0 ? m.ear.right : m.ear.left;
   const vx = ear.x - anchor.x;
   const vy = ear.y - anchor.y;
+  const norm = Math.hypot(vx, vy);
+  // Cas dégénéré (tenon et oreille confondus à l'écran, strictement de face) :
+  // la branche y est de toute façon invisible (sin(yaw) ≈ 0, et le fondu de
+  // render/temple.ts la masque sous 0,10 rad). Une direction horizontale
+  // évite seulement le NaN.
+  const ux = norm > 1e-6 ? vx / norm : side;
+  const uy = norm > 1e-6 ? vy / norm : 0;
 
-  // Sur le sprite de profil, la branche part de la charniere et court vers +x.
-  const profileScale = spec.profilePxPerMm ?? spec.spritePxPerMm;
-  const lengthPx = templeLengthMm(spec) * profileScale;
-  if (lengthPx <= 0) {
-    throw new CalibrationError(
-      `Longueur de branche nulle sur "${spec.slug}" : sprite de profil non préparé.`,
-    );
-  }
+  // Échelle PHYSIQUE, sans paramètre libre. Le long de la branche : sin(|yaw|).
+  // Perpendiculairement : l'épaisseur reste à l'échelle réelle — un raccourci
+  // de perspective raccourcit, il n'amincit pas.
+  const s = m.livePxPerMm / (spec.profilePxPerMm ?? spec.spritePxPerMm);
+  const along = s * Math.sin(Math.abs(m.yawRad));
 
-  // Similitude qui envoie (hinge → hinge + lengthPx·x̂) sur (anchor → ear).
-  const a = vx / lengthPx;
-  const b = vy / lengthPx;
-  // L'épaisseur de la branche, elle, reste à l'échelle réelle et ne s'écrase
-  // pas : un raccourci de perspective raccourcit, il n'amincit pas.
-  const sy = m.livePxPerMm / profileScale;
-  const c = (-vy / Math.hypot(vx, vy || 1)) * sy;
-  const d = (vx / Math.hypot(vx, vy || 1)) * sy;
+  const a = ux * along;
+  const b = uy * along;
+  const c = -uy * s;
+  const d = ux * s;
 
   const hx = spec.hingeProfile.x;
   const hy = spec.hingeProfile.y;
@@ -239,22 +254,24 @@ export function templeAffine(spec: FrameSpec, m: FrameMetrics, side: 1 | -1): Af
 
 /** Longueur de branche du sprite de profil, en mm. Redressée si elle l'a été. */
 export function templeLengthMm(spec: FrameSpec): number {
-  return spec.templeRectifiedMm ?? spec.brancheMm;
+  const mm = spec.templeRectifiedMm ?? spec.brancheMm;
+  if (!(mm > 0)) {
+    throw new CalibrationError(
+      `Longueur de branche nulle sur "${spec.slug}" : sprite de profil non préparé.`,
+    );
+  }
+  return mm;
 }
 
 /**
- * Longueur de branche RÉELLEMENT peinte a l'ecran, en pixels.
+ * Longueur de branche RÉELLEMENT peinte à l'écran, en pixels.
  *
- * ⚠️ C'est desormais la distance charniere ↔ oreille mesuree, et non plus
- * `longueur nominale × sin(yaw)`. Une seule definition de la longueur, celle
- * qu'applique `templeAffine` — deux notions divergeraient (T3).
+ * C'est la longueur PHYSIQUE raccourcie par la perspective — et non plus la
+ * distance tenon ↔ oreille : l'oreille ne donne que la DIRECTION (voir
+ * `templeAffine`). Une seule définition, celle qu'applique l'affine (T3) ;
+ * elle est identique pour les deux côtés, la physique ne distinguant pas
+ * la branche qui s'approche de celle qui s'éloigne (l'occlusion s'en charge).
  */
-export function renderedTempleLengthPx(spec: FrameSpec, m: FrameMetrics, side: 1 | -1): number {
-  const hingeOnFront = {
-    x: side > 0 ? spec.alphaBBox.x + spec.alphaBBox.w : spec.alphaBBox.x,
-    y: spec.bridgeCenter.y,
-  };
-  const anchor = spriteToScreen(hingeOnFront, spec, m);
-  const ear = side > 0 ? m.ear.right : m.ear.left;
-  return Math.hypot(ear.x - anchor.x, ear.y - anchor.y);
+export function renderedTempleLengthPx(spec: FrameSpec, m: FrameMetrics, _side: 1 | -1): number {
+  return templeLengthMm(spec) * m.livePxPerMm * Math.sin(Math.abs(m.yawRad));
 }

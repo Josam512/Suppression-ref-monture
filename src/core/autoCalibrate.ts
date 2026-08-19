@@ -25,9 +25,11 @@
 import { assertPlausibleFaceWidth, type UserCalibration } from './calibration.js';
 import { CARD_TO_TEMPLE_DEPTH_MM, CARD_TO_TEMPLE_DEPTH_SD_MM } from './cardOptics.js';
 import { focalPxFor, isProfileUsable, type CameraProfile } from './cameraProfile.js';
-import { CalibrationError } from './geom.js';
+import { CalibrationError, type NormalizedLandmark } from './geom.js';
 import { HVID_MEAN_MM, type AutoMeasures } from './autoCalibration.js';
 import { convergenceRelError, distanceFromIrisMm, farPdFromNear } from './pupillary.js';
+import type { ImageBuffer } from './silhouette.js';
+import { measureTemporalWidth } from './temporalWidth.js';
 
 /**
  * Champ horizontal SUPPOSÉ quand aucun profil d'objectif n'est mémorisé.
@@ -59,6 +61,23 @@ export interface AutoCalibrationOutput {
 }
 
 /**
+ * ⭐ Ce que la séance filmée fournit — quand elle le fournit — pour mesurer
+ * l'ÉCART TEMPORAL sur la silhouette (§14.2, câblé au parcours sans carte le
+ * 2026-08-19). L'image frontale est UNE frame figée pendant la collecte, avec
+ * SES landmarks (mêmes pixels, mêmes repères — la leçon de `ui/freezeFrame.ts`) ;
+ * le masque de mouvement vient des vues tournées, ou vaut null sans rotation —
+ * et sans lui la silhouette n'est PAS tentée : rien ne distingue alors un bord
+ * de tête d'un montant de porte.
+ */
+export interface AutoTemporalScene {
+  frontal: ImageBuffer;
+  motion: Uint8Array | null;
+  lm: readonly NormalizedLandmark[];
+  w: number;
+  h: number;
+}
+
+/**
  * Assemble la calibration automatique. Lève `CalibrationError` UNIQUEMENT si
  * une grandeur sort de sa plage anatomique — le seul cas où recommencer répare.
  */
@@ -67,6 +86,7 @@ export function calibrateAuto(
   imageWidthPx: number,
   storedProfile: CameraProfile | null,
   nowMs: number,
+  temporal: AutoTemporalScene | null = null,
 ): AutoCalibrationOutput {
   const notes: string[] = [];
 
@@ -137,6 +157,44 @@ export function calibrateAuto(
     );
   }
 
+  // — Écart temporal : MESURÉ sur la silhouette quand la séance l'a permis,
+  //   sinon DIT absent — jamais deviné, jamais remplacé par une constante cachée
+  //   (§14.2 : son absence élargit la marge affichée, rien de plus).
+  //
+  //   L'échelle passée est celle du plan des tempes : l'échelle des yeux (le
+  //   médian de la collecte) corrigée du même 1/z que la largeur ci-dessus.
+  //   La frame figée est l'une des frames collectées : une dérive de distance
+  //   entre elle et le médian est couverte par `relError`, déjà propagée.
+  let temporalFields: Pick<UserCalibration, 'temporalWidthMm' | 'temporalRelError'> = {};
+  if (temporal !== null) {
+    const t = measureTemporalWidth({
+      frontal: temporal.frontal,
+      motion: temporal.motion,
+      lm: [...temporal.lm],
+      w: temporal.w,
+      h: temporal.h,
+      pxPerMm: 1 / (m.mmPerPxEye * depthCorrection),
+      scaleRelError: relError,
+    });
+    if (t.measured) {
+      temporalFields = { temporalWidthMm: t.widthMm, temporalRelError: t.relError };
+      notes.push(
+        `Écart temporal MESURÉ sur votre silhouette : ${t.widthMm.toFixed(0)} mm ` +
+          `± ${(t.widthMm * t.relError).toFixed(0)} mm — c'est lui que la légende compare à la monture.`,
+      );
+    } else {
+      notes.push(
+        `Écart temporal non mesuré (${t.reason ?? 'raison inconnue'}). ` +
+          `La légende s'appuiera sur la largeur aux repères, avec sa marge — rien n'est deviné.`,
+      );
+    }
+  } else {
+    notes.push(
+      `Écart temporal non mesuré : montrez brièvement vos deux profils pendant la mesure ` +
+        `pour qu'il le soit. En attendant, la légende s'appuie sur la largeur aux repères, avec sa marge.`,
+    );
+  }
+
   const cal: UserCalibration = {
     faceWidthMm,
     source: 'auto',
@@ -147,6 +205,7 @@ export function calibrateAuto(
     pdLeftMm,
     pdRightMm,
     pdHalfUncertaintyMm,
+    ...temporalFields,
   };
   return { cal, notes };
 }
