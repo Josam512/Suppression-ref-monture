@@ -13,7 +13,12 @@
  */
 
 import { useEffect, useRef, type RefObject } from 'react';
-import { createLandmarker, startLoop } from '../tracking/landmarker.js';
+import {
+  createLandmarker,
+  GPU_SILENT_FALLBACK_LOST,
+  startLoop,
+  type Delegate,
+} from '../tracking/landmarker.js';
 import type { NormalizedLandmark } from '../core/geom.js';
 
 export interface CameraHandlers {
@@ -52,9 +57,12 @@ export function useCameraLoop(
   held.current = handlers;
 
   useEffect(() => {
-    let stopLoop: (() => void) | null = null;
+    // Initialisées à un no-op (pas à null) : elles sont réassignées DANS des
+    // fermetures (bascule GPU→CPU), ce que le narrowing de TypeScript ignore —
+    // un type union rendrait leurs appels « never » aux points d'usage.
+    let stopLoop: () => void = () => {};
     let stream: MediaStream | null = null;
-    let close: (() => void) | null = null;
+    let close: () => void = () => {};
     let disposed = false;
 
     void (async () => {
@@ -91,27 +99,64 @@ export function useCameraLoop(
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
 
-        const landmarker = await createLandmarker((ratio) => {
+        const ctx = canvas.getContext('2d');
+        if (ctx === null) throw new Error('Contexte 2D indisponible.');
+
+        // 🔴 Constaté sur téléphone réel : le délégué GPU peut s'initialiser
+        // sans erreur et ne JAMAIS rien détecter (navigateur intégré Android —
+        // vidéo parfaite, « détection perdue : 528 frames »). Si aucun visage
+        // n'a été vu depuis le démarrage au bout de `GPU_SILENT_FALLBACK_LOST`
+        // frames, le landmarker est recréé en CPU et la boucle repart —
+        // l'écran ne reste jamais muet.
+        let everDetected = false;
+        let fellBack = false;
+
+        const make = async (delegate: Delegate, onProgress: (r: number) => void) => {
+          const landmarker = await createLandmarker(onProgress, delegate);
+          // Le modèle tient des ressources WASM/GPU : il se ferme TOUJOURS au
+          // démontage (audit A2 — fuite à chaque entrée/sortie d'essayage).
+          close = () => landmarker.close();
+          return landmarker;
+        };
+
+        const start = (landmarker: import('@mediapipe/tasks-vision').FaceLandmarker, delegate: Delegate): void => {
+          const control = startLoop(landmarker, video, {
+            onFrame: (lm, yawRad) => {
+              everDetected = true;
+              held.current.onFrame(ctx, lm, yawRad);
+            },
+            onLost: (n) => {
+              held.current.onLost(ctx, n);
+              if (!everDetected && !fellBack && delegate === 'GPU' && n >= GPU_SILENT_FALLBACK_LOST) {
+                fellBack = true;
+                console.warn('Détection GPU muette : bascule en mode compatibilité (CPU).');
+                stopLoop();
+                close();
+                // Recréation silencieuse (le modèle sort du cache) : pas de
+                // retour à l'écran « Chargement », la vidéo reste affichée.
+                void make('CPU', () => {})
+                  .then((cpu) => {
+                    if (disposed) close();
+                    else start(cpu, 'CPU');
+                  })
+                  .catch((err) => {
+                    if (!disposed) held.current.onError(describeInitError(err));
+                  });
+              }
+            },
+          });
+          stopLoop = () => control.stop();
+        };
+
+        const gpu = await make('GPU', (ratio) => {
           if (!disposed) held.current.onProgress(ratio);
         });
-        // Le modèle tient des ressources WASM/GPU : il se ferme TOUJOURS au
-        // démontage (audit A2 — fuite à chaque entrée/sortie d'essayage).
-        close = () => landmarker.close();
         if (disposed) {
           close();
           return;
         }
-
-        const ctx = canvas.getContext('2d');
-        if (ctx === null) throw new Error('Contexte 2D indisponible.');
-
         held.current.onReady();
-
-        const control = startLoop(landmarker, video, {
-          onFrame: (lm, yawRad) => held.current.onFrame(ctx, lm, yawRad),
-          onLost: (n) => held.current.onLost(ctx, n),
-        });
-        stopLoop = () => control.stop();
+        start(gpu, 'GPU');
       } catch (err) {
         if (!disposed) held.current.onError(describeInitError(err));
       }
@@ -119,8 +164,8 @@ export function useCameraLoop(
 
     return () => {
       disposed = true;
-      stopLoop?.();
-      close?.();
+      stopLoop();
+      close();
       stream?.getTracks().forEach((t) => t.stop());
     };
   }, [videoRef, canvasRef, attempt]);

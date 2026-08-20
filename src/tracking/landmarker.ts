@@ -82,8 +82,21 @@ async function fetchModel(onProgress: (ratio: number) => void): Promise<Uint8Arr
   return out;
 }
 
+export type Delegate = 'GPU' | 'CPU';
+
+/**
+ * 🔴 Constaté sur le téléphone du sujet réel (2026-08-20, navigateur intégré
+ * Android) : le délégué GPU s'initialise sans erreur et ne détecte JAMAIS rien
+ * — vidéo parfaite à l'écran, « détection perdue : 528 frames ». Aucune
+ * exception, donc aucun des filets existants ne se déclenchait. Quand le GPU
+ * n'a RIEN donné depuis le début pendant autant de frames, l'appelant doit
+ * recréer le landmarker en CPU (XNNPACK) et continuer — jamais rester muet.
+ */
+export const GPU_SILENT_FALLBACK_LOST = 60; // ~2 s à 30 images/s
+
 export async function createLandmarker(
   onProgress: (ratio: number) => void = () => {},
+  delegate: Delegate = 'GPU',
 ): Promise<FaceLandmarker> {
   const [fileset, modelAssetBuffer] = await Promise.all([
     visionFileset(),
@@ -91,7 +104,7 @@ export async function createLandmarker(
   ]);
 
   return FaceLandmarker.createFromOptions(fileset, {
-    baseOptions: { modelAssetBuffer, delegate: 'GPU' },
+    baseOptions: { modelAssetBuffer, delegate },
     runningMode: 'VIDEO',
     numFaces: 1,
     outputFaceBlendshapes: false,
