@@ -40,6 +40,17 @@ export const AUTO_ASSUMED_HFOV_DEG = 70;
 export const FOCAL_PRIOR_REL_ERROR = 0.3;
 
 /**
+ * En deçà, le client est PRÈS de la caméra : la correction de plan yeux→tempes
+ * domine et la marge sur la largeur s'élargit (±10–14 mm constatés sur le sujet
+ * réel à ~20 cm, contre ±6 mm à 40–60 cm). C'est une NOTE de guidage, jamais un
+ * refus : la mesure conclut à toute distance et la marge dit le reste (§14.7 —
+ * un premier jet en faisait un rejet de frames, qui bloquait toute calibration
+ * sur un téléphone tenu à bout de bras : ni essayage ni mesure, le cul-de-sac
+ * exact que l'arbitrage interdit).
+ */
+export const CLOSE_DISTANCE_MM = 300;
+
+/**
  * Profondeur plan des yeux → plan des repères 234/454.
  *
  * Dérivée de `CARD_TO_TEMPLE_DEPTH_MM` (57 ± 8 mm, mesurée sur sujet réel via
@@ -98,6 +109,12 @@ export function calibrateAuto(
   const focalRel = usable ? (storedProfile as CameraProfile).relError : FOCAL_PRIOR_REL_ERROR;
 
   const distanceMm = distanceFromIrisMm(m.hvidPx, focalPx, HVID_MEAN_MM);
+  if (distanceMm < CLOSE_DISTANCE_MM) {
+    notes.push(
+      `Vous teniez l'appareil près du visage (~${(distanceMm / 10).toFixed(0)} cm estimés) : ` +
+        `la mesure est faite, avec une marge élargie. À 40–60 cm elle serait plus fine.`,
+    );
+  }
   notes.push(
     usable
       ? `Distance déduite de vos iris et de votre objectif — MESURÉ lors d'une séance ` +

@@ -128,25 +128,32 @@ describe('3. une calibration non terminée a TOUJOURS une raison', () => {
     expect(e.failure()?.code).toBe('turn-to-front');
   });
 
-  it('trop près (< ~27 cm au champ supposé) : frames refusées, la consigne dit « Reculez »', () => {
-    // À ~20 cm, la correction de plan yeux→tempes devient le terme dominant et
-    // la marge sur la largeur explose (constaté sur le sujet réel : ±10–14 mm
-    // contre ±6 mm à 40–60 cm). Le moteur guide au lieu de mesurer large.
+  it('🔴 trop près (~20 cm) : la calibration CONCLUT quand même — jamais un cul-de-sac (§14.7)', () => {
+    // Constaté en réel le 2026-08-20 : un premier jet REFUSAIT les frames trop
+    // proches ; sur un téléphone tenu à bout de bras la calibration ne pouvait
+    // jamais aboutir — ni essayage, ni PD. La distance est désormais une NOTE :
+    // la mesure conclut, la marge s'élargit, et le guidage est dit en clair.
+    const s = scene({ distanceMm: 200 });
     const e = new AutoCalibrationEngine();
-    const lm = scene({ distanceMm: 200 }).lm;
-    for (let i = 0; i * 500 <= AUTO_TIMEOUT_MS + 500; i++) e.offer(lm, 0, 0, W, H, i * 500);
-    expect(e.state).toBe('failed');
-    expect(e.failure()?.code).toBe('step-back');
-    expect(e.failure()?.label).toMatch(/Reculez.*40–60 cm/);
+    film(e, 80, s.lm);
+    expect(e.state).toBe('calibrated');
+    const out = calibrateAuto(e.measures()!, W, null, 0);
+    expect(out.notes.join(' ')).toMatch(/près du visage.*40–60 cm/);
+    expect(Math.abs((out.cal.pdMm ?? NaN) - s.pdFarMm)).toBeLessThan(1.5); // le PD sort quand même
   });
 
-  it('à 40–60 cm, la garde de distance ne refuse RIEN', () => {
-    for (const distanceMm of [400, 500, 600]) {
+  it('la note de distance s\'élargit avec la proximité, et disparaît à 40–60 cm', () => {
+    const relAt = (distanceMm: number) => {
       const e = new AutoCalibrationEngine();
       film(e, 80, scene({ distanceMm }).lm);
-      expect(e.state).toBe('calibrated');
-      expect(e.status().rejected['step-back']).toBe(0);
-    }
+      const out = calibrateAuto(e.measures()!, W, null, 0);
+      return { rel: out.cal.relError, noted: /40–60 cm/.test(out.notes.join(' ')) };
+    };
+    const near = relAt(200);
+    const fine = relAt(500);
+    expect(near.noted).toBe(true);
+    expect(fine.noted).toBe(false);
+    expect(near.rel).toBeGreaterThan(fine.rel); // la marge dit la proximité, pas un refus
   });
 
   it('le timeout avec assez de matière CONCLUT au lieu d’échouer — et le dit', () => {

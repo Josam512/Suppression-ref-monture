@@ -154,6 +154,6 @@ function failedStatusOf(err: unknown): import('../core/autoCalibration.js').Auto
       code: 'eyes-too-small',
       label: err instanceof Error ? err.message : String(err),
     },
-    rejected: { 'no-face': 0, 'eyes-too-small': 0, 'step-back': 0, 'turn-to-front': 0, 'straighten-head': 0 },
+    rejected: { 'no-face': 0, 'eyes-too-small': 0, 'turn-to-front': 0, 'straighten-head': 0 },
   };
 }

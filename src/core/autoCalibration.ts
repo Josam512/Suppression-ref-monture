@@ -40,20 +40,14 @@ export const MAX_AUTO_ROLL_RAD = 0.26; // ~15°
  * Les DEMI-écarts ne s'accumulent qu'au regard de face STRICT. Mesuré sur le
  * sujet réel (2026-08-20, 161 images) : l'asymétrie OG−OD dérive de −1,1 mm/°
  * de yaw et s'inverse avec son signe — artefact de projection (le sellion sort
- * du plan des pupilles), pas une anatomie. Sous ~3° il reste < ±0,3 mm. La
- * SOMME, invariante au premier ordre, garde le gate large de 8°.
+ * du plan des pupilles), pas une anatomie. Une collecte de face (regard sur
+ * l'écran, yaw centré vers 0) ramène l'artefact MÉDIAN sous le bruit (~1 mm),
+ * couvert par l'incertitude publiée par œil. La SOMME, invariante au premier
+ * ordre, garde le gate large de 8°.
  */
 export const MAX_SPLIT_YAW_RAD = 0.05; // ~2,9°
 /** En deçà, les demi-PD ne sont pas publiées — la somme l'est toujours. */
 export const MIN_SPLIT_FRAMES = 8;
-
-/**
- * Au-delà, le client est trop PRÈS (< ~27 cm au champ supposé de 70°, même
- * hypothèse que `AUTO_ASSUMED_HFOV_DEG`) : la correction de plan yeux→tempes
- * domine et la marge sur la largeur explose (±10–14 mm constatés sur le sujet
- * réel à ~20 cm, contre ±6 mm à 40–60 cm). On guide au lieu de mesurer large.
- */
-export const MAX_IRIS_FRACTION_OF_WIDTH = 0.031; // iris/largeur d'image
 
 /** Condition de réussite nominale. */
 export const MIN_AUTO_FRAMES = 30;
@@ -70,7 +64,6 @@ export type AutoState = 'collecting' | 'calibrated' | 'failed';
 export type WhyCode =
   | 'no-face'
   | 'eyes-too-small'
-  | 'step-back'
   | 'turn-to-front'
   | 'straighten-head'
   | 'need-more-frames'
@@ -112,7 +105,6 @@ export class AutoCalibrationEngine {
   private readonly rejects = {
     'no-face': 0,
     'eyes-too-small': 0,
-    'step-back': 0,
     'turn-to-front': 0,
     'straighten-head': 0,
   };
@@ -143,8 +135,6 @@ export class AutoCalibrationEngine {
       const eyes = ocularPixelsOf(lm, w, h);
       if (Math.min(eyes.hvidLeftPx, eyes.hvidRightPx) < MIN_IRIS_PX) {
         this.rejects['eyes-too-small']++;
-      } else if ((eyes.hvidLeftPx + eyes.hvidRightPx) / 2 / w > MAX_IRIS_FRACTION_OF_WIDTH) {
-        this.rejects['step-back']++;
       } else {
         const scale = eyePlaneScale(eyes);
         const pupils = pupilPixelsOf(lm, w, h);
@@ -213,7 +203,6 @@ export class AutoCalibrationEngine {
     const labels: Record<keyof typeof r, string> = {
       'no-face': `Je ne vous ai pas vu : placez votre visage face à la caméra, bien éclairé.`,
       'eyes-too-small': `Vos yeux sont trop petits à l'image : rapprochez-vous de la caméra.`,
-      'step-back': `Reculez un peu — tenez l'appareil à 40–60 cm de votre visage.`,
       'turn-to-front': `Votre tête était trop tournée : regardez droit vers l'écran quelques secondes.`,
       'straighten-head': `Votre tête était trop inclinée : redressez-la quelques secondes.`,
     };
@@ -243,8 +232,7 @@ export class AutoCalibrationEngine {
     if (this.state_ === 'collecting') {
       if (n < MIN_AUTO_FRAMES) {
         const r = this.rejects;
-        const rejected =
-          r['no-face'] + r['eyes-too-small'] + r['step-back'] + r['turn-to-front'] + r['straighten-head'];
+        const rejected = r['no-face'] + r['eyes-too-small'] + r['turn-to-front'] + r['straighten-head'];
         // La consigne dominante d'abord, si les rejets dominent la collecte.
         why =
           rejected > n && rejected > 10
