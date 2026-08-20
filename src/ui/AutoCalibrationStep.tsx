@@ -25,24 +25,21 @@ export interface AutoCalibrationStepProps {
 export function AutoCalibrationStep(props: AutoCalibrationStepProps): JSX.Element {
   const { status } = props;
 
-  if (status.state === 'failed') {
-    return (
-      <section>
-        <h2>La mesure automatique n’a pas abouti</h2>
-        <p>{status.whyNotDone?.label ?? 'Raison inconnue — ceci est un bug, signalez-le.'}</p>
-        <button type="button" onClick={props.onRetry} style={{ fontWeight: 700 }}>
-          Réessayer
-        </button>{' '}
-        <button type="button" onClick={props.onUseCard}>
-          Mesurer avec une carte (mode diagnostic)
-        </button>
-      </section>
-    );
-  }
-
   return (
     <section>
       <h2>Mesure automatique en cours — regardez simplement l’écran</h2>
+
+      {/* ⭐ Audit 2026-08-21 : un délai dépassé n'est plus un cul-de-sac. Le
+          moteur DIT ce qui lui manque, compte la tentative, et CONTINUE de
+          mesurer — l'écran ne se substitue plus à la mesure en cours. */}
+      {status.attempts > 0 && (
+        <p style={{ background: '#3a2a00', padding: '8px 10px', borderRadius: 6 }}>
+          <strong>Ça prend plus longtemps que prévu</strong> (tentative {status.attempts + 1}).{' '}
+          {status.lastAttemptFailure?.label ?? ''} La mesure continue — vous pouvez aussi{' '}
+          <button type="button" onClick={props.onRetry}>repartir de zéro</button> ou{' '}
+          <button type="button" onClick={props.onUseCard}>utiliser une carte</button>.
+        </p>
+      )}
 
       <p style={{ fontWeight: 700 }}>
         Retirez vos lunettes, si vous en portez.

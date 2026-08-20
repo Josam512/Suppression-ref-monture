@@ -142,18 +142,27 @@ try {
     /Retirez vos lunettes/i.test(texteAuto),
   );
 
-  // 🔴 Sans visage (mire de synthèse), le moteur DOIT échouer en un temps FINI
-  // avec sa cause dominante — plus jamais une collecte qui tourne sans fin.
+  // 🔴 RÈGLE CHANGÉE PAR ARBITRAGE HUMAIN (audit du 2026-08-21, point 1).
+  // Ces deux contrôles exigeaient que la collecte se TERMINE en échec après le
+  // délai. Cette règle est abrogée : « un timeout ne doit PLUS rendre
+  // l'essayage définitivement mort ». Ils vérifient donc la règle qui la
+  // remplace — la cause est dite, ET la caméra comme la collecte continuent.
   await page.waitForTimeout(21_000);
   const texteEchec = await page.locator('body').innerText();
   check(
-    'V2 : sans visage, la collecte se TERMINE (échec nommé, pas une boucle infinie)',
-    /n’a pas abouti|n'a pas abouti/i.test(texteEchec) && /face à la caméra/i.test(texteEchec),
+    'V2 : sans visage, la cause est DITE et la mesure continue (jamais de cul-de-sac)',
+    /face à la caméra/i.test(texteEchec) && /Mesure automatique en cours/i.test(texteEchec),
   );
+  // ⚠️ Ce que ce banc NE peut pas montrer : la bannière « ça prend plus
+  // longtemps que prévu » n'apparaît qu'une fois au moins une frame RETENUE,
+  // et le flux injecté est une mire sans visage — il n'y en aura jamais. Ce
+  // cas est couvert en calcul pur (tests/autogates.test.ts, audit 2). Ici on
+  // vérifie ce qui est vérifiable : la sortie de secours reste offerte, et
+  // aucun libellé de cul-de-sac n'apparaît.
   check(
-    'V2 : l’échec offre Réessayer ET le mode diagnostic carte',
-    (await page.getByRole('button', { name: /Réessayer/i }).count()) === 1 &&
-      (await page.getByRole('button', { name: /carte/i }).count()) >= 1,
+    'V2 : la sortie carte reste offerte, et AUCUN cul-de-sac n’est affiché',
+    (await page.getByRole('button', { name: /carte/i }).count()) >= 1 &&
+      !/n’a pas abouti|n'a pas abouti/i.test(texteEchec),
   );
 
   // — Le mode diagnostic CARTE reste le parcours de vérité terrain (inchangé).

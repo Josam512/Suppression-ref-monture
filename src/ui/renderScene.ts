@@ -11,7 +11,9 @@
  * (§0.0.2), et la raison du repli remonte à l'IHM au lieu de disparaître.
  */
 
+import { IRIS_DISCREPANCY_MAX } from '../core/autoCalibration.js';
 import { frameMetrics } from '../core/faceMetrics.js';
+import { provisionalScale } from '../core/provisionalScale.js';
 import type { NormalizedLandmark } from '../core/geom.js';
 import { verdict } from '../core/verdict.js';
 import { drawFrame } from '../render/composite.js';
@@ -33,12 +35,25 @@ export function paintScene(
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, w, h);
 
-  if (live.cal === null || live.sprites.status !== 'ready') {
+  if (live.sprites.status !== 'ready') {
     live.verdict = null;
     return;
   }
 
-  const m = frameMetrics(lm, w, h, live.cal, yawRad);
+  // ⭐ Audit humain du 2026-08-21, point 4 — TRACKING ≠ MÉTROLOGIE.
+  // Tant que la mesure absolue n'a pas convergé, on ne rend plus le produit
+  // inutilisable : on pose la monture à l'échelle de la frame courante (même
+  // étalon iris, non médianisé) et on GÈLE la légende chiffrée. L'appelant
+  // annonce le caractère provisoire ; aucun millimètre n'est affirmé.
+  const provisional = live.cal === null ? provisionalScale(lm, w, h, IRIS_DISCREPANCY_MAX, Date.now()) : null;
+  live.provisional = live.cal === null;
+  const cal = live.cal ?? provisional?.cal ?? null;
+  if (cal === null) {
+    live.verdict = null;
+    return;
+  }
+
+  const m = frameMetrics(lm, w, h, cal, yawRad);
   const target = { img: live.sprites.sprites.front.img, spec: live.sprites.spec };
 
   // ⭐ V2 « 2,5 D » : la géométrie, la lumière et la perspective viennent du
@@ -59,7 +74,18 @@ export function paintScene(
     });
   }
 
-  live.verdict = verdict(lm, live.cal, live.sprites.spec, w, h, yawRad);
+  // La légende chiffrée n'existe QUE sur une mesure convergée : une échelle
+  // d'une seule frame pose l'image, elle n'affirme aucun millimètre.
+  live.verdict = live.cal === null ? null : verdict(lm, live.cal, live.sprites.spec, w, h, yawRad);
+}
+
+/**
+ * La note affichée sous l'image. Le caractère PROVISOIRE prime sur la note de
+ * recoloriage : ne jamais laisser croire à une taille certifiée qui ne l'est
+ * pas encore (audit humain du 2026-08-21, point 4).
+ */
+export function sceneHint(live: Live): string | null {
+  return live.provisional ? 'aperçu — taille pas encore mesurée' : live.recolorReason;
 }
 
 /**

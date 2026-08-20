@@ -110,22 +110,34 @@ describe('3. une calibration non terminée a TOUJOURS une raison', () => {
     expect(why?.label).toMatch(/5\/30/);
   });
 
-  it('sans visage : la cause dominante est nommée, puis l’échec la porte', () => {
+  // 🔴 RÈGLE CHANGÉE PAR ARBITRAGE HUMAIN (audit du 2026-08-21, point 1).
+  // Ces deux tests exigeaient `state === 'failed'` après le délai. Cette règle
+  // est ABROGÉE : « un timeout ne doit PLUS rendre l'essayage définitivement
+  // mort ». Ils vérifient donc désormais la règle qui la remplace — la cause
+  // est nommée, ET la collecte reste vivante. Ce n'est pas un test plié pour
+  // passer : c'est la spécification qui a changé, et l'ancienne version
+  // encodait précisément le défaut qu'on vient de corriger.
+  it('🔴 sans visage : la cause est nommée, et la collecte reste VIVANTE', () => {
     const e = new AutoCalibrationEngine();
     for (let i = 0; i * 500 <= AUTO_TIMEOUT_MS + 500; i++) e.offer(null, 0, 0, W, H, i * 500);
-    expect(e.state).toBe('failed');
-    expect(e.failure()?.code).toBe('no-face');
+    expect(e.state).toBe('collecting');
+    expect(e.status().whyNotDone?.code).toBe('no-face');
     expect(e.status().whyNotDone?.label).toMatch(/face à la caméra/i);
+    // …et la personne qui finit par se placer obtient sa calibration.
+    film(e, 80, scene().lm, AUTO_TIMEOUT_MS + 1000);
+    expect(e.state).toBe('calibrated');
   });
 
-  it('tête toujours tournée : la consigne dit de regarder devant', () => {
+  it('🔴 tête toujours tournée : consigne donnée, et la collecte reste VIVANTE', () => {
     const e = new AutoCalibrationEngine();
     const lm = scene().lm;
     for (let i = 0; i * 500 <= AUTO_TIMEOUT_MS + 500; i++) {
       e.offer(lm, MAX_AUTO_YAW_RAD * 2, 0, W, H, i * 500);
     }
-    expect(e.state).toBe('failed');
-    expect(e.failure()?.code).toBe('turn-to-front');
+    expect(e.state).toBe('collecting');
+    expect(e.status().whyNotDone?.code).toBe('turn-to-front');
+    film(e, 80, lm, AUTO_TIMEOUT_MS + 1000);
+    expect(e.state).toBe('calibrated');
   });
 
   it('🔴 trop près (~20 cm) : la calibration CONCLUT quand même — jamais un cul-de-sac (§14.7)', () => {

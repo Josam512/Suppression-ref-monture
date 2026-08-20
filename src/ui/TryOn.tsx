@@ -21,7 +21,7 @@ import { stepCrossCheck, stepRotation } from './liveSteps.js';
 import { useAutoCalibration } from './useAutoCalibration.js';
 import { FramePicker } from './FramePicker.js';
 import { createLive, type Live } from './liveState.js';
-import { paintLost, paintScene } from './renderScene.js';
+import { paintLost, paintScene, sceneHint } from './renderScene.js';
 import { drawOverlay } from '../render/overlay.js';
 import { useCatalogue } from './catalogue.js';
 import { useV1Calibration } from './useV1Calibration.js';
@@ -183,7 +183,7 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
 
       paintScene(ctx, s, lm, yawRad, videoRef.current);
 
-      drawOverlay(ctx, { verdict: s.verdict, consecutiveFailures: 0, hint: s.recolorReason });
+      drawOverlay(ctx, { verdict: s.verdict, consecutiveFailures: 0, hint: sceneHint(s) });
     },
     [finishCalibration, pump, v1],
   );

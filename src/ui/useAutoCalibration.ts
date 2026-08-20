@@ -143,17 +143,25 @@ export function useAutoCalibration(deps: AutoCalibrationDeps): AutoCalibration {
   return { startAuto, pump };
 }
 
-/** Un état d'échec affichable quand l'ASSEMBLAGE refuse (plage anatomique). */
+/**
+ * L'ASSEMBLAGE a refusé (grandeur hors plage anatomique). C'est le SEUL refus
+ * qui subsiste, et il se répare en recommençant. On le publie comme une
+ * tentative ratée — pas comme un état terminal : depuis l'audit du 2026-08-21,
+ * il n'existe plus d'état qui condamne la séance.
+ */
 function failedStatusOf(err: unknown): import('../core/autoCalibration.js').AutoStatus {
+  const label = err instanceof Error ? err.message : String(err);
   return {
-    state: 'failed',
+    state: 'collecting',
     usableFrames: 0,
     neededFrames: 0,
     elapsedMs: 0,
-    whyNotDone: {
-      code: 'eyes-too-small',
-      label: err instanceof Error ? err.message : String(err),
-    },
+    acquisitionMs: 0,
+    whyNotDone: { code: 'eyes-too-small', label },
     rejected: { 'no-face': 0, 'eyes-too-small': 0, 'turn-to-front': 0, 'straighten-head': 0 },
+    primaryRejectReason: null,
+    scaleStandardError: 0,
+    attempts: 1,
+    lastAttemptFailure: { code: 'eyes-too-small', label },
   };
 }

@@ -44,6 +44,9 @@ export interface Live {
   lastLandmarks: readonly NormalizedLandmark[] | null;
   /** Yaw de la dernière frame détectée — pour le maintien de rendu (≤ 5 frames). */
   lastYawRad: number;
+  /** ⭐ Audit 2026-08-21 point 4 : la monture est posée, mais l'échelle n'a
+   *  PAS convergé — aucun millimètre n'est affirmé. Annoncé en clair. */
+  provisional: boolean;
   verdict: SizeVerdict | null;
   /** Non nul pendant la collecte des deux vues tournées (§4, parade B4 n°2). */
   probe: RotationProbe | null;
@@ -84,6 +87,7 @@ export function createLive(sprites: SpritesState, spec: FrameSpec | null, cal: U
     overlayPaddingMm,
     lastLandmarks: null,
     lastYawRad: 0,
+    provisional: false,
     verdict: null,
     probe: null,
     lastProbeRatio: -1,
