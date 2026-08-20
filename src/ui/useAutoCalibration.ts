@@ -30,6 +30,9 @@ export const AUTO_FRONTAL_MAX_YAW_RAD = 0.06;
 export const AUTO_SIDE_MIN_YAW_RAD = 0.17;
 export const AUTO_SIDE_MAX_YAW_RAD = 0.61;
 
+/** Refus d'ASSEMBLAGE tolérés avant d'arrêter de ré-armer (audit, point 1). */
+export const MAX_ASSEMBLY_RETRIES = 3;
+
 export interface AutoCalibrationDeps {
   live: MutableRefObject<Live>;
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -72,7 +75,11 @@ export function useAutoCalibration(deps: AutoCalibrationDeps): AutoCalibration {
     return ctx.getImageData(0, 0, canvas.width, canvas.height);
   }, [videoRef]);
 
+  /** Combien de fois l'ASSEMBLAGE a refusé. Borne le ré-armement (audit 1). */
+  const assemblyFailures = useRef(0);
+
   const startAuto = useCallback((): void => {
+    assemblyFailures.current = 0;
     live.current.probe = null;
     live.current.pendingCard = null;
     live.current.auto = new AutoCalibrationEngine();
@@ -82,11 +89,23 @@ export function useAutoCalibration(deps: AutoCalibrationDeps): AutoCalibration {
     setPhase({ kind: 'mesure-auto', status: live.current.auto.status() });
   }, [live, setPhase]);
 
-  /** Le moteur a conclu : on assemble UNE fois. Verrouillé par `auto = null`. */
+  /**
+   * Le moteur a conclu : on assemble UNE fois.
+   *
+   * 🔴 Audit humain du 2026-08-21, point 1 : `auto = null` était posé AVANT
+   * `calibrateAuto()`. Quand l'assemblage levait (grandeur hors plage
+   * anatomique), l'IHM affichait un statut « collecting » alors qu'il
+   * n'existait plus AUCUN moteur — la collecte ne repartait jamais. Le verrou
+   * ne se pose donc plus qu'au succès ; à l'échec on remonte explicitement un
+   * moteur neuf, parce que garder l'ancien reviendrait au même : il est déjà
+   * `calibrated`, donc `offer()` en sort immédiatement.
+   */
   const finishAuto = useCallback((): void => {
     const m = live.current.auto?.measures() ?? null;
-    live.current.auto = null;
-    if (m === null) return;
+    if (m === null) {
+      live.current.auto = null;
+      return;
+    }
 
     // ⚠️ Silhouette tentée SEULEMENT avec frontale + au moins une vue tournée :
     // sans mouvement, un montant de porte passerait pour un bord de tête.
@@ -105,14 +124,31 @@ export function useAutoCalibration(deps: AutoCalibrationDeps): AutoCalibration {
         Date.now(),
         scene,
       );
+      live.current.auto = null; // ⭐ le verrou, au SUCCÈS seulement.
+      assemblyFailures.current = 0;
       onCalibrated(out.cal, [
         `✅ Calibration acquise — c'est terminé (${m.usableFrames} images utiles). ` +
           `La collecte s'est arrêtée ; la caméra continue pour l'essayage.`,
         ...out.notes,
       ]);
     } catch (err) {
-      // Grandeur hors plage anatomique : recommencer est la seule réparation.
-      setPhase({ kind: 'mesure-auto', status: failedStatusOf(err) });
+      // Grandeur hors plage anatomique. Recommencer est la seule réparation —
+      // encore faut-il qu'il reste quelque chose pour recommencer.
+      assemblyFailures.current++;
+      if (assemblyFailures.current <= MAX_ASSEMBLY_RETRIES) {
+        live.current.auto = new AutoCalibrationEngine();
+        frontal.current = null;
+        sides.current = { neg: null, pos: null };
+      } else {
+        // Retry CONTRÔLÉ : après trois refus d'affilée, ce n'est plus du bruit.
+        // On cesse de boucler, l'écran dit pourquoi et propose ses deux sorties
+        // — et l'essayage, lui, continue de s'afficher en aperçu.
+        live.current.auto = null;
+      }
+      setPhase({
+        kind: 'mesure-auto',
+        status: failedStatusOf(err, assemblyFailures.current),
+      });
     }
   }, [live, canvasRef, cameraProfile, onCalibrated, setPhase]);
 
@@ -149,8 +185,15 @@ export function useAutoCalibration(deps: AutoCalibrationDeps): AutoCalibration {
  * tentative ratée — pas comme un état terminal : depuis l'audit du 2026-08-21,
  * il n'existe plus d'état qui condamne la séance.
  */
-function failedStatusOf(err: unknown): import('../core/autoCalibration.js').AutoStatus {
-  const label = err instanceof Error ? err.message : String(err);
+function failedStatusOf(
+  err: unknown,
+  attempts: number,
+): import('../core/autoCalibration.js').AutoStatus {
+  const base = err instanceof Error ? err.message : String(err);
+  const label =
+    attempts <= MAX_ASSEMBLY_RETRIES
+      ? `${base} Je continue de mesurer.`
+      : `${base} Après ${attempts} essais, je m'arrête là : reprenez la mesure, ou utilisez une carte.`;
   return {
     state: 'collecting',
     usableFrames: 0,
@@ -161,7 +204,7 @@ function failedStatusOf(err: unknown): import('../core/autoCalibration.js').Auto
     rejected: { 'no-face': 0, 'eyes-too-small': 0, 'turn-to-front': 0, 'straighten-head': 0 },
     primaryRejectReason: null,
     scaleStandardError: 0,
-    attempts: 1,
+    attempts,
     lastAttemptFailure: { code: 'eyes-too-small', label },
   };
 }

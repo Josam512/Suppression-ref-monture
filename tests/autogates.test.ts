@@ -197,20 +197,20 @@ describe('audit 4 — le produit ne reste plus vide : TRACKING ≠ MÉTROLOGIE',
     expect(focalPx).toBeGreaterThan(0);
   });
 
-  it('🔴 l’aperçu porte un biais de PARALLAXE connu — et c’est pour ça qu’aucun mm n’est affiché', () => {
-    // Constat mesuré en écrivant ce test, et NON corrigé : l'échelle provisoire
-    // convertit une largeur prise au plan des TEMPES avec un mm/px valable au
-    // plan des YEUX. Il manque donc le terme de parallaxe que `calibrateAuto`
-    // applique, lui, sur la mesure définitive — d'où un aperçu quelques pour
-    // cent trop étroit, ET dépendant de la distance.
+  it('🔴 l’aperçu ne saute plus avec la distance (audit du 2026-08-21, point 2)', () => {
+    // ⚠️ RÈGLE CHANGÉE. Ce test verrouillait l'inverse : il ACTAIT un biais de
+    // parallaxe de ~4 % entre 40 et 70 cm, parce que l'aperçu convertissait une
+    // largeur du plan des TEMPES avec un mm/px du plan des YEUX. L'audit a
+    // demandé de traiter ce saut comme un bug — il l'était : la monture était
+    // peinte 6 à 10 % trop large, puis rétrécissait à la calibration. L'aperçu
+    // emprunte désormais la MÊME chaîne d'assemblage, donc le biais a disparu.
+    // Le détail chiffré, avant/après, vit dans `tests/plane.test.ts`.
     const near = provisionalScale(validFace(400), W, H, IRIS_DISCREPANCY_MAX, 0)!;
     const far = provisionalScale(validFace(700), W, H, IRIS_DISCREPANCY_MAX, 0)!;
     const drift = Math.abs(far.cal.faceWidthMm - near.cal.faceWidthMm) / far.cal.faceWidthMm;
-    expect(drift).toBeGreaterThan(0.01); // le biais EXISTE : ne pas prétendre le contraire
-    expect(drift).toBeLessThan(0.10); //  …et il reste borné : l'aperçu tient debout
-    // La conséquence, verrouillée ici : un aperçu ne publie JAMAIS de millimètre.
-    // C'est `renderScene.ts` qui l'applique — `verdict` reste null sans `cal`.
-    expect(near.cal.faceWidthMm).toBeLessThan(138); // systématiquement sous la vérité
-    expect(far.cal.faceWidthMm).toBeLessThan(138);
+    expect(drift).toBeLessThan(0.005);
+    // …et les deux retrouvent la vérité terrain, au lieu de la sous-estimer.
+    expect(near.cal.faceWidthMm).toBeCloseTo(138, 0);
+    expect(far.cal.faceWidthMm).toBeCloseTo(138, 0);
   });
 });
