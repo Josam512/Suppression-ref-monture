@@ -26,7 +26,7 @@ import { assertPlausibleFaceWidth, type UserCalibration } from './calibration.js
 import { CARD_TO_TEMPLE_DEPTH_MM, CARD_TO_TEMPLE_DEPTH_SD_MM } from './cardOptics.js';
 import { focalPxFor, isProfileUsable, type CameraProfile } from './cameraProfile.js';
 import { CalibrationError, type NormalizedLandmark } from './geom.js';
-import { HVID_MEAN_MM, type AutoMeasures } from './autoCalibration.js';
+import { HVID_MEAN_MM, MIN_SPLIT_FRAMES, type AutoMeasures } from './autoCalibration.js';
 import { convergenceRelError, distanceFromIrisMm, farPdFromNear } from './pupillary.js';
 import type { ImageBuffer } from './silhouette.js';
 import { measureTemporalWidth } from './temporalWidth.js';
@@ -106,37 +106,56 @@ export function calibrateAuto(
       : `Distance déduite de vos iris avec un champ de caméra supposé (${AUTO_ASSUMED_HFOV_DEG}°) : ${(distanceMm / 10).toFixed(0)} cm (±${(focalRel * 100).toFixed(0)} %). Elle ne pèse que sur des termes du second ordre.`,
   );
 
-  // — PD : correction de convergence (fixation proche → loin), PAR ŒIL.
+  // — PD : correction de convergence (fixation proche → loin).
+  //
+  // Le TOTAL vient de `pdSumNearMm`, accumulé au gate large (8°) : la somme des
+  // deux demi-écarts est invariante au yaw au premier ordre. Les DEMI-écarts,
+  // eux, ne sont publiés que si assez de frames de face STRICTE les portent
+  // (`MIN_SPLIT_FRAMES`) : au-delà de ~3° de yaw, l'artefact de projection
+  // mesuré sur sujet réel (−1,1 mm/°) fabriquerait une fausse asymétrie.
   //
   // Le facteur (D + 13,5)/(D + 3,05) est le même pour les deux yeux tant que la
   // fixation est sur l'axe médian (HYPOTHÈSE : le client regarde son reflet) :
   // l'appliquer à chaque demi-écart MESURÉ préserve donc l'asymétrie mesurée —
   // jamais de retour déguisé à « PD/2 de chaque côté ».
   const convergence = convergenceRelError(distanceMm, focalRel);
-  const pdRightMm = farPdFromNear(m.pdRightNearMm, distanceMm);
-  const pdLeftMm = farPdFromNear(m.pdLeftNearMm, distanceMm);
-  const pdMm = pdRightMm + pdLeftMm;
-  const pdRelError = Math.hypot(m.priorRelError, m.scaleStandardError, convergence);
-  // Chaque demi-écart porte SON bruit de détection : un œil moins net, plus
-  // près du bord ou partiellement occulté a une erreur-type plus large.
-  const halfUnc = (halfMm: number, se: number): number =>
-    halfMm * Math.hypot(m.priorRelError, se, convergence);
-  const pdHalfUncertaintyMm = {
-    right: halfUnc(pdRightMm, m.pdRightSE),
-    left: halfUnc(pdLeftMm, m.pdLeftSE),
-  };
+  const pdMm = farPdFromNear(m.pdSumNearMm, distanceMm);
+  const pdRelError = Math.hypot(m.priorRelError, m.pdSumSE, convergence);
   if (!(pdMm >= PD_MIN_MM && pdMm <= PD_MAX_MM)) {
     throw new CalibrationError(
       `Écart pupillaire obtenu : ${pdMm.toFixed(1)} mm, hors plage anatomique. ` +
         `La détection des yeux a probablement échoué — recommencez face à la caméra, sans lunettes.`,
     );
   }
-  notes.push(
-    `Écart pupillaire : ${pdMm.toFixed(1)} mm ± ${(pdMm * pdRelError).toFixed(1)} mm — ` +
-      `demi-PD droite ${pdRightMm.toFixed(1)} ± ${pdHalfUncertaintyMm.right.toFixed(1)} mm, ` +
-      `demi-PD gauche ${pdLeftMm.toFixed(1)} ± ${pdHalfUncertaintyMm.left.toFixed(1)} mm ` +
-      `(dont correction de convergence +${(pdMm - m.pdRightNearMm - m.pdLeftNearMm).toFixed(1)} mm, déduite de la distance).`,
-  );
+
+  const splitUsable = m.splitFrames >= MIN_SPLIT_FRAMES;
+  let halfFields: Pick<UserCalibration, 'pdLeftMm' | 'pdRightMm' | 'pdHalfUncertaintyMm'> = {};
+  if (splitUsable) {
+    const pdRightMm = farPdFromNear(m.pdRightNearMm, distanceMm);
+    const pdLeftMm = farPdFromNear(m.pdLeftNearMm, distanceMm);
+    // Chaque demi-écart porte SON bruit de détection : un œil moins net, plus
+    // près du bord ou partiellement occulté a une erreur-type plus large.
+    const halfUnc = (halfMm: number, se: number): number =>
+      halfMm * Math.hypot(m.priorRelError, se, convergence);
+    const pdHalfUncertaintyMm = {
+      right: halfUnc(pdRightMm, m.pdRightSE),
+      left: halfUnc(pdLeftMm, m.pdLeftSE),
+    };
+    halfFields = { pdLeftMm, pdRightMm, pdHalfUncertaintyMm };
+    notes.push(
+      `Écart pupillaire : ${pdMm.toFixed(1)} mm ± ${(pdMm * pdRelError).toFixed(1)} mm — ` +
+        `demi-PD droite ${pdRightMm.toFixed(1)} ± ${pdHalfUncertaintyMm.right.toFixed(1)} mm, ` +
+        `demi-PD gauche ${pdLeftMm.toFixed(1)} ± ${pdHalfUncertaintyMm.left.toFixed(1)} mm, ` +
+        `mesurées sur ${m.splitFrames} images de face stricte ` +
+        `(dont correction de convergence +${(pdMm - m.pdSumNearMm).toFixed(1)} mm, déduite de la distance).`,
+    );
+  } else {
+    notes.push(
+      `Écart pupillaire : ${pdMm.toFixed(1)} mm ± ${(pdMm * pdRelError).toFixed(1)} mm. ` +
+        `Demi-PD non séparées : pas assez d'images de face stricte (${m.splitFrames}/${MIN_SPLIT_FRAMES}) — ` +
+        `regardez l'écran bien en face quelques secondes pour les obtenir. Rien n'est deviné.`,
+    );
+  }
 
   // — Largeur 234↔454 : échelle des yeux ramenée au plan des tempes (1/z).
   const depthCorrection = 1 + EYEPLANE_TO_TEMPLE_DEPTH_MM / distanceMm;
@@ -202,9 +221,7 @@ export function calibrateAuto(
     measuredAt: nowMs,
     pdMm,
     pdRelError,
-    pdLeftMm,
-    pdRightMm,
-    pdHalfUncertaintyMm,
+    ...halfFields,
     ...temporalFields,
   };
   return { cal, notes };

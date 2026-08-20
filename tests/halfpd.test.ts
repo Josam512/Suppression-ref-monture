@@ -12,7 +12,12 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { AutoCalibrationEngine, MAX_AUTO_YAW_RAD } from '../src/core/autoCalibration.js';
+import {
+  AutoCalibrationEngine,
+  MAX_AUTO_YAW_RAD,
+  MAX_SPLIT_YAW_RAD,
+  MIN_SPLIT_FRAMES,
+} from '../src/core/autoCalibration.js';
 import { calibrateAuto, AUTO_ASSUMED_HFOV_DEG } from '../src/core/autoCalibrate.js';
 import { HVID_MEAN_MM } from '../src/core/ocularScale.js';
 import {
@@ -102,21 +107,46 @@ describe('YAW : gate strict, pas de double correction', () => {
     }
   });
 
-  it('sous le gate (±6°), les demi-PD restent stables à mieux que 1 %', () => {
-    // Le rapport demi-PD / iris est invariant au yaw au premier ordre (les
-    // deux se projettent depuis le même plan) — aucune correction n'est
-    // appliquée, donc aucune ne peut être appliquée DEUX fois. Le résidu
-    // théorique à 6° est 1 − cos(6°) ≈ 0,55 % si les iris ne tournent pas
-    // avec la tête (fixation caméra) : sous 1 % dans tous les cas.
+  it('à ±6° (sous le gate large, au-dessus du gate strict) : PD TOTAL stable, demi-PD ABSENTES', () => {
+    // Mesuré sur le sujet réel (2026-08-20) : au-delà de ~3° de yaw, la
+    // séparation OD/OG dérive de −1,1 mm/° (artefact de projection du
+    // sellion). La SOMME, elle, reste invariante au premier ordre. Le moteur
+    // publie donc le total et REFUSE les demi-écarts au lieu de publier une
+    // fausse asymétrie — rien n'est deviné.
     const frontal = calibrated(asymScene(30, 34, 500, 0));
     for (const deg of [6, -6]) {
       const yaw = (deg * Math.PI) / 180;
+      expect(Math.abs(yaw)).toBeGreaterThan(MAX_SPLIT_YAW_RAD);
       const e = new AutoCalibrationEngine();
       for (let i = 0; i < 80; i++) e.offer(asymScene(30, 34, 500, yaw), yaw, 0, W, H, i * 33);
       const out = calibrateAuto(e.measures()!, W, null, 0);
-      expect(Math.abs(out.cal.pdRightMm! - frontal.cal.pdRightMm!) / 30).toBeLessThan(0.01);
-      expect(Math.abs(out.cal.pdLeftMm! - frontal.cal.pdLeftMm!) / 34).toBeLessThan(0.01);
+      expect(Math.abs(out.cal.pdMm! - frontal.cal.pdMm!) / 64).toBeLessThan(0.01);
+      expect(out.cal.pdRightMm).toBeUndefined();
+      expect(out.cal.pdLeftMm).toBeUndefined();
+      expect(out.cal.pdHalfUncertaintyMm).toBeUndefined();
+      expect(out.notes.join(' ')).toMatch(/Demi-PD non séparées/);
     }
+  });
+
+  it(`les demi-PD reviennent dès ${MIN_SPLIT_FRAMES} images de face stricte dans la séance`, () => {
+    // Séance mixte : la tête tourne à 6° presque tout du long, avec un court
+    // passage bien de face — exactement le « regardez l'écran quelques
+    // secondes ». Les demi-écarts sont publiés depuis CES images-là seulement.
+    const yaw6 = (6 * Math.PI) / 180;
+    const run = (frontFrames: number) => {
+      const e = new AutoCalibrationEngine();
+      let t = 0;
+      for (let i = 0; i < frontFrames; i++) e.offer(asymScene(30, 34, 500, 0), 0, 0, W, H, (t += 33));
+      for (let i = 0; i < 80; i++) e.offer(asymScene(30, 34, 500, yaw6), yaw6, 0, W, H, (t += 33));
+      return calibrateAuto(e.measures()!, W, null, 0);
+    };
+    const tooFew = run(MIN_SPLIT_FRAMES - 1);
+    expect(tooFew.cal.pdRightMm).toBeUndefined();
+    const enough = run(MIN_SPLIT_FRAMES);
+    expect(enough.cal.pdRightMm!).toBeCloseTo(30, 0);
+    expect(enough.cal.pdLeftMm!).toBeCloseTo(34, 0);
+    // Et l'asymétrie publiée vient des frames de FACE : pas de dérive due aux 6°.
+    expect(enough.cal.pdLeftMm! - enough.cal.pdRightMm!).toBeCloseTo(4, 0);
   });
 });
 

@@ -24,6 +24,7 @@
  * (mission §9).
  */
 
+import { median, relStandardError, type AutoMeasures } from './autoMeasures.js';
 import { faceWidthPx } from './faceMetrics.js';
 import type { NormalizedLandmark } from './geom.js';
 import { eyePlaneScale, ocularPixelsOf, HVID_MEAN_MM } from './ocularScale.js';
@@ -34,6 +35,25 @@ export const MIN_IRIS_PX = 8;
 /** Frontal exigé pour l'échelle oculaire : au-delà, les iris se raccourcissent. */
 export const MAX_AUTO_YAW_RAD = 0.14; // ~8°
 export const MAX_AUTO_ROLL_RAD = 0.26; // ~15°
+
+/**
+ * Les DEMI-écarts ne s'accumulent qu'au regard de face STRICT. Mesuré sur le
+ * sujet réel (2026-08-20, 161 images) : l'asymétrie OG−OD dérive de −1,1 mm/°
+ * de yaw et s'inverse avec son signe — artefact de projection (le sellion sort
+ * du plan des pupilles), pas une anatomie. Sous ~3° il reste < ±0,3 mm. La
+ * SOMME, invariante au premier ordre, garde le gate large de 8°.
+ */
+export const MAX_SPLIT_YAW_RAD = 0.05; // ~2,9°
+/** En deçà, les demi-PD ne sont pas publiées — la somme l'est toujours. */
+export const MIN_SPLIT_FRAMES = 8;
+
+/**
+ * Au-delà, le client est trop PRÈS (< ~27 cm au champ supposé de 70°, même
+ * hypothèse que `AUTO_ASSUMED_HFOV_DEG`) : la correction de plan yeux→tempes
+ * domine et la marge sur la largeur explose (±10–14 mm constatés sur le sujet
+ * réel à ~20 cm, contre ±6 mm à 40–60 cm). On guide au lieu de mesurer large.
+ */
+export const MAX_IRIS_FRACTION_OF_WIDTH = 0.031; // iris/largeur d'image
 
 /** Condition de réussite nominale. */
 export const MIN_AUTO_FRAMES = 30;
@@ -50,6 +70,7 @@ export type AutoState = 'collecting' | 'calibrated' | 'failed';
 export type WhyCode =
   | 'no-face'
   | 'eyes-too-small'
+  | 'step-back'
   | 'turn-to-front'
   | 'straighten-head'
   | 'need-more-frames'
@@ -71,48 +92,9 @@ export interface AutoStatus {
   rejected: Record<Exclude<WhyCode, 'need-more-frames' | 'unstable-scale'>, number>;
 }
 
-/** Les grandeurs MESURÉES, prêtes pour `calibrateAuto` (core/autoCalibrate.ts). */
-export interface AutoMeasures {
-  /** Échelle médiane au plan des yeux, mm par pixel. */
-  mmPerPxEye: number;
-  /** Borne du prior périoculaire utilisée (majorité des frames). */
-  priorRelError: number;
-  /** Erreur-type de la médiane d'échelle (bruit de détection, réduit en 1/√n). */
-  scaleStandardError: number;
-  /**
-   * Demi-écarts pupillaires ANATOMIQUES médians (plan des pupilles, fixation
-   * proche), en mm. Chacun est MESURÉ pupille ↔ pied du sellion projeté
-   * (`core/pupillary.ts`) : aucun n'est jamais `pd / 2`. `right` = œil droit
-   * du client (OD, côté landmarks 468) ; `left` = œil gauche (OG, côté 473).
-   */
-  pdRightNearMm: number;
-  pdLeftNearMm: number;
-  /** Erreurs-types RELATIVES de chaque demi-écart — différentes si un œil est
-   *  moins bien détecté. S'ajoutent au prior, ne le remplacent jamais. */
-  pdRightSE: number;
-  pdLeftSE: number;
-  /** Largeur 234↔454 apparente, convertie au plan des yeux (mm, SANS parallaxe). */
-  faceWidthEyePlaneMm: number;
-  /** Taille médiane de l'iris en pixels — porte l'estimation de distance. */
-  hvidPx: number;
-  usableFrames: number;
-  /** Vrai si la conclusion vient du timeout, pas de la convergence. */
-  degraded: boolean;
-}
-
-function median(xs: readonly number[]): number {
-  const s = [...xs].sort((a, b) => a - b);
-  const mid = Math.floor(s.length / 2);
-  return s.length % 2 === 1 ? (s[mid] ?? NaN) : ((s[mid - 1] ?? 0) + (s[mid] ?? 0)) / 2;
-}
-
-/** Erreur-type RELATIVE de la médiane, par MAD — même choix que cardSweep. */
-function relStandardError(xs: readonly number[]): number {
-  const m = median(xs);
-  if (!(m > 0)) return Infinity;
-  const mad = median(xs.map((x) => Math.abs(x - m))) * 1.4826;
-  return mad / Math.sqrt(xs.length) / m;
-}
+/** Le contrat de sortie et ses statistiques robustes vivent dans
+ *  `core/autoMeasures.ts` (scission §3) — ré-exporté pour les consommateurs. */
+export type { AutoMeasures } from './autoMeasures.js';
 
 export class AutoCalibrationEngine {
   private state_: AutoState = 'collecting';
@@ -123,12 +105,14 @@ export class AutoCalibrationEngine {
   private readonly relErrors: number[] = [];
   private readonly pdRightNear: number[] = [];
   private readonly pdLeftNear: number[] = [];
+  private readonly pdSumNear: number[] = [];
   private readonly faceEye: number[] = [];
   private readonly hvid: number[] = [];
 
   private readonly rejects = {
     'no-face': 0,
     'eyes-too-small': 0,
+    'step-back': 0,
     'turn-to-front': 0,
     'straighten-head': 0,
   };
@@ -159,6 +143,8 @@ export class AutoCalibrationEngine {
       const eyes = ocularPixelsOf(lm, w, h);
       if (Math.min(eyes.hvidLeftPx, eyes.hvidRightPx) < MIN_IRIS_PX) {
         this.rejects['eyes-too-small']++;
+      } else if ((eyes.hvidLeftPx + eyes.hvidRightPx) / 2 / w > MAX_IRIS_FRACTION_OF_WIDTH) {
+        this.rejects['step-back']++;
       } else {
         const scale = eyePlaneScale(eyes);
         const pupils = pupilPixelsOf(lm, w, h);
@@ -166,8 +152,13 @@ export class AutoCalibrationEngine {
         else {
           this.mmPerPx.push(scale.mmPerPx);
           this.relErrors.push(scale.relError);
-          this.pdRightNear.push(pupils.rightPx * scale.mmPerPx);
-          this.pdLeftNear.push(pupils.leftPx * scale.mmPerPx);
+          this.pdSumNear.push((pupils.rightPx + pupils.leftPx) * scale.mmPerPx);
+          // Les demi-écarts, EUX, exigent le regard de face strict (artefact
+          // de −1,1 mm/° au-delà, mesuré sur sujet réel — cf. MAX_SPLIT_YAW_RAD).
+          if (Math.abs(yawRad) <= MAX_SPLIT_YAW_RAD) {
+            this.pdRightNear.push(pupils.rightPx * scale.mmPerPx);
+            this.pdLeftNear.push(pupils.leftPx * scale.mmPerPx);
+          }
           this.faceEye.push(faceWidthPx(lm, w, h) * scale.mmPerPx);
           this.hvid.push((eyes.hvidLeftPx + eyes.hvidRightPx) / 2);
         }
@@ -202,10 +193,13 @@ export class AutoCalibrationEngine {
       mmPerPxEye: median(this.mmPerPx),
       priorRelError: median(this.relErrors),
       scaleStandardError: relStandardError(this.mmPerPx),
-      pdRightNearMm: median(this.pdRightNear),
-      pdLeftNearMm: median(this.pdLeftNear),
+      pdRightNearMm: this.pdRightNear.length > 0 ? median(this.pdRightNear) : NaN,
+      pdLeftNearMm: this.pdLeftNear.length > 0 ? median(this.pdLeftNear) : NaN,
       pdRightSE: relStandardError(this.pdRightNear),
       pdLeftSE: relStandardError(this.pdLeftNear),
+      pdSumNearMm: median(this.pdSumNear),
+      pdSumSE: relStandardError(this.pdSumNear),
+      splitFrames: this.pdRightNear.length,
       faceWidthEyePlaneMm: median(this.faceEye),
       hvidPx: median(this.hvid),
       usableFrames: this.mmPerPx.length,
@@ -219,6 +213,7 @@ export class AutoCalibrationEngine {
     const labels: Record<keyof typeof r, string> = {
       'no-face': `Je ne vous ai pas vu : placez votre visage face à la caméra, bien éclairé.`,
       'eyes-too-small': `Vos yeux sont trop petits à l'image : rapprochez-vous de la caméra.`,
+      'step-back': `Reculez un peu — tenez l'appareil à 40–60 cm de votre visage.`,
       'turn-to-front': `Votre tête était trop tournée : regardez droit vers l'écran quelques secondes.`,
       'straighten-head': `Votre tête était trop inclinée : redressez-la quelques secondes.`,
     };
@@ -248,7 +243,8 @@ export class AutoCalibrationEngine {
     if (this.state_ === 'collecting') {
       if (n < MIN_AUTO_FRAMES) {
         const r = this.rejects;
-        const rejected = r['no-face'] + r['eyes-too-small'] + r['turn-to-front'] + r['straighten-head'];
+        const rejected =
+          r['no-face'] + r['eyes-too-small'] + r['step-back'] + r['turn-to-front'] + r['straighten-head'];
         // La consigne dominante d'abord, si les rejets dominent la collecte.
         why =
           rejected > n && rejected > 10

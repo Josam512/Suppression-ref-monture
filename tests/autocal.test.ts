@@ -128,6 +128,27 @@ describe('3. une calibration non terminée a TOUJOURS une raison', () => {
     expect(e.failure()?.code).toBe('turn-to-front');
   });
 
+  it('trop près (< ~27 cm au champ supposé) : frames refusées, la consigne dit « Reculez »', () => {
+    // À ~20 cm, la correction de plan yeux→tempes devient le terme dominant et
+    // la marge sur la largeur explose (constaté sur le sujet réel : ±10–14 mm
+    // contre ±6 mm à 40–60 cm). Le moteur guide au lieu de mesurer large.
+    const e = new AutoCalibrationEngine();
+    const lm = scene({ distanceMm: 200 }).lm;
+    for (let i = 0; i * 500 <= AUTO_TIMEOUT_MS + 500; i++) e.offer(lm, 0, 0, W, H, i * 500);
+    expect(e.state).toBe('failed');
+    expect(e.failure()?.code).toBe('step-back');
+    expect(e.failure()?.label).toMatch(/Reculez.*40–60 cm/);
+  });
+
+  it('à 40–60 cm, la garde de distance ne refuse RIEN', () => {
+    for (const distanceMm of [400, 500, 600]) {
+      const e = new AutoCalibrationEngine();
+      film(e, 80, scene({ distanceMm }).lm);
+      expect(e.state).toBe('calibrated');
+      expect(e.status().rejected['step-back']).toBe(0);
+    }
+  });
+
   it('le timeout avec assez de matière CONCLUT au lieu d’échouer — et le dit', () => {
     const e = new AutoCalibrationEngine();
     const lm = scene().lm;
