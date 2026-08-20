@@ -33,7 +33,7 @@ export const FACE_OVAL = [
  * ⚠️ Ce n'est pas un branchement sur un « mode » : c'est la présence, ou non,
  * d'un fichier embarqué. Le code ne sait pas pourquoi il est là.
  */
-async function visionFileset(): Promise<{ wasmLoaderPath: string; wasmBinaryPath: string }> {
+export async function visionFileset(): Promise<{ wasmLoaderPath: string; wasmBinaryPath: string }> {
   const loader = 'wasm/vision_wasm_internal.js';
   const binary = 'wasm/vision_wasm_internal.wasm';
   if (isInlined(loader) && isInlined(binary)) {
@@ -84,26 +84,35 @@ async function fetchModel(onProgress: (ratio: number) => void): Promise<Uint8Arr
 
 export type Delegate = 'GPU' | 'CPU';
 
-/**
- * 🔴 Constaté sur le téléphone du sujet réel (2026-08-20, navigateur intégré
- * Android) : le délégué GPU s'initialise sans erreur et ne détecte JAMAIS rien
- * — vidéo parfaite à l'écran, « détection perdue : 528 frames ». Aucune
- * exception, donc aucun des filets existants ne se déclenchait. Quand le GPU
- * n'a RIEN donné depuis le début pendant autant de frames, l'appelant doit
- * recréer le landmarker en CPU (XNNPACK) et continuer — jamais rester muet.
- */
-export const GPU_SILENT_FALLBACK_LOST = 60; // ~2 s à 30 images/s
+/** Preuves de chargement (§6 du cahier détection) : affichables au diagnostic. */
+export interface ModelInitReport {
+  modelUrl: string;
+  modelBytes: number;
+  fetchMs: number;
+  initMs: number;
+  delegateRequested: Delegate;
+}
+
+let lastReport: ModelInitReport | null = null;
+
+/** Le rapport de la DERNIÈRE création — `createFromOptions` qui rend une
+ *  instance n'est pas une preuve que tout va bien ; ces chiffres, si. */
+export function lastInitReport(): ModelInitReport | null {
+  return lastReport;
+}
 
 export async function createLandmarker(
   onProgress: (ratio: number) => void = () => {},
   delegate: Delegate = 'GPU',
 ): Promise<FaceLandmarker> {
+  const t0 = performance.now();
   const [fileset, modelAssetBuffer] = await Promise.all([
     visionFileset(),
     fetchModel(onProgress),
   ]);
+  const t1 = performance.now();
 
-  return FaceLandmarker.createFromOptions(fileset, {
+  const landmarker = await FaceLandmarker.createFromOptions(fileset, {
     baseOptions: { modelAssetBuffer, delegate },
     runningMode: 'VIDEO',
     numFaces: 1,
@@ -111,6 +120,14 @@ export async function createLandmarker(
     // ⚠️ Activé UNIQUEMENT pour en extraire la ROTATION (§4).
     outputFacialTransformationMatrixes: true,
   });
+  lastReport = {
+    modelUrl: MODEL_URL,
+    modelBytes: modelAssetBuffer.length,
+    fetchMs: t1 - t0,
+    initMs: performance.now() - t1,
+    delegateRequested: delegate,
+  };
+  return landmarker;
 }
 
 /**
@@ -131,103 +148,6 @@ export function yawFromMatrix(m: ArrayLike<number>): number {
   const r22 = m[10];
   if (r02 === undefined || r22 === undefined) return 0;
   return Math.atan2(r02, r22);
-}
-
-export interface LoopHandlers {
-  /** Appelé une fois par frame utile, avec les landmarks et le yaw mesuré. */
-  onFrame(lm: ReadonlyArray<{ x: number; y: number; z?: number }>, yawRad: number): void;
-  /** Appelé quand la détection échoue ou ne trouve aucun visage. */
-  onLost(consecutiveFailures: number): void;
-}
-
-export interface LoopControl {
-  stop(): void;
-}
-
-/**
- * ⭐ Correctif S5 — `@mediapipe/tasks-vision` n'expose pas `estimateFaces`.
- *
- * `detectForVideo(video, timestampMs)` est SYNCHRONE et lève si le timestamp
- * n'est pas strictement croissant, ce qui survient dès qu'une frame se répète
- * (webcam lente, onglet en arrière-plan). Un try/catch seul ne suffit pas : la
- * boucle passerait son temps à catcher et le compteur d'échecs saturerait sans
- * cause réelle — un compteur qui monte alors que rien ne va mal apprend à
- * ignorer l'alarme.
- */
-export function startLoop(
-  landmarker: FaceLandmarker,
-  video: HTMLVideoElement,
-  handlers: LoopHandlers,
-): LoopControl {
-  let running = true;
-  let lastVideoTime = -1;
-  let lastTimestampMs = -1;
-  let consecutiveFailures = 0;
-
-  // 🔴 Le détecteur ne lit JAMAIS l'élément <video> directement. Sur plusieurs
-  // WebViews Android, la texture vidéo livrée au wasm est TOURNÉE de 90° (la
-  // rotation du capteur n'est appliquée qu'à l'affichage) ou vide — l'écran
-  // montre un visage droit, le détecteur reçoit un visage couché qu'il ne
-  // trouve jamais, sans lever la moindre erreur. On recopie donc chaque frame
-  // dans un canvas 2D : les pixels détectés sont EXACTEMENT ceux affichés.
-  const feed = document.createElement('canvas');
-  const feedCtx = feed.getContext('2d', { willReadFrequently: true });
-
-  function loop(): void {
-    if (!running) return;
-
-    if (video.readyState < 2) {
-      requestAnimationFrame(loop); // ✅ replanifie toujours
-      return;
-    }
-
-    // ⭐ Garde S5 — frame répétée : on ne redétecte pas, et ce n'est PAS un échec.
-    if (video.currentTime === lastVideoTime) {
-      requestAnimationFrame(loop);
-      return;
-    }
-    lastVideoTime = video.currentTime;
-
-    // ⭐ Garde S5 — timestamp strictement croissant, exigé par tasks-vision.
-    const ts = Math.max(performance.now(), lastTimestampMs + 1);
-    lastTimestampMs = ts;
-
-    try {
-      let source: HTMLVideoElement | HTMLCanvasElement = video;
-      if (feedCtx !== null) {
-        if (feed.width !== video.videoWidth || feed.height !== video.videoHeight) {
-          feed.width = video.videoWidth;
-          feed.height = video.videoHeight;
-        }
-        feedCtx.drawImage(video, 0, 0);
-        source = feed;
-      }
-      const res = landmarker.detectForVideo(source, ts);
-      const lm = res.faceLandmarks[0];
-      const mat = res.facialTransformationMatrixes[0];
-
-      if (lm !== undefined && lm.length > 0) {
-        consecutiveFailures = 0;
-        handlers.onFrame(lm, mat !== undefined ? yawFromMatrix(mat.data) : 0);
-      } else {
-        consecutiveFailures++;
-        handlers.onLost(consecutiveFailures);
-      }
-    } catch (err) {
-      consecutiveFailures++;
-      console.error('Detection error:', err); // ✅ visible, jamais avalé
-      handlers.onLost(consecutiveFailures);
-    }
-
-    requestAnimationFrame(loop); // ✅ atteint dans tous les cas
-  }
-
-  requestAnimationFrame(loop);
-  return {
-    stop(): void {
-      running = false;
-    },
-  };
 }
 
 /** Contour du visage en coordonnées écran, pour l'occlusion de la branche. */

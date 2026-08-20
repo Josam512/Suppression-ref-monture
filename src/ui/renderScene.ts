@@ -69,13 +69,27 @@ export function paintScene(
  * peindre : détection perdue = canvas figé sur la dernière image, et l'alarme
  * exigée n'apparaissait jamais. La panne était strictement indiscernable d'un
  * fonctionnement normal. Le banc navigateur le vérifie à chaque exécution.
+ *
+ * §11 (mission détection) : deux états SÉPARÉS, plus jamais confondus —
+ * une entrée caméra cassée n'est pas « mettez-vous de face », et un visage
+ * non trouvé non plus : la contrainte de pose appartient aux MESURES.
  */
-export function paintLost(ctx: CanvasRenderingContext2D, consecutiveFailures: number): void {
+export function paintLost(
+  ctx: CanvasRenderingContext2D,
+  consecutiveFailures: number,
+  cause: 'invalid-input' | 'no-face',
+  reason: string | null,
+): void {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   drawOverlay(ctx, {
     verdict: null,
     consecutiveFailures,
-    hint: consecutiveFailures > 5 ? 'Placez votre visage bien en face de la caméra.' : null,
+    hint:
+      cause === 'invalid-input'
+        ? `Problème d'entrée caméra : ${reason ?? 'frame invalide'}.`
+        : consecutiveFailures > 5
+          ? 'Recherche du visage…'
+          : null,
   });
 }

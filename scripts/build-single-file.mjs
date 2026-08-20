@@ -29,6 +29,9 @@ const ASSETS = [
   ['wasm/vision_wasm_internal.js', 'text/javascript', true],
   ['wasm/vision_wasm_internal.wasm', 'application/wasm', true],
   ['models/face_landmarker.task', 'application/octet-stream', true],
+  // Second avis de la couche détection (tracking/faceProbe.ts) : la bascule
+  // GPU→CPU exige une preuve, donc le détecteur simple embarque aussi.
+  ['models/blaze_face_short_range.tflite', 'application/octet-stream', true],
   ['frames/index.json', 'application/json', true],
 ];
 for (const { slug } of JSON.parse(readFileSync('public/frames/index.json', 'utf8')).frames) {

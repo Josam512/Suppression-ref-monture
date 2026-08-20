@@ -1,29 +1,30 @@
 /**
- * ui/useCameraLoop.ts — webcam, modèle, boucle de rendu. Montés UNE fois.
+ * ui/useCameraLoop.ts — webcam + boucle de détection (couches 1-4). Monté UNE fois.
  *
- * Extrait de `TryOn.tsx` pour tenir la règle des 300 lignes (§3), mais aussi
- * parce que c'est la partie du code où une régression coûte le plus cher :
- * elle porte la garde de monotonie S5 et le chemin d'échec qui DOIT dessiner
- * (§1 bug #3). Isolée, elle se relit d'un seul tenant.
+ * Reprise de fond (mission détection 2026-08-20) : la boucle elle-même vit dans
+ * `tracking/faceLoop.ts` — acquisition, normalisation et validité des frames
+ * (frameFeed), second avis FaceDetector (faceProbe), landmarks (landmarker),
+ * décisions PROUVÉES (detectionPlan). Ici, il ne reste que ce qui est propre à
+ * l'IHM : getUserMedia, le dimensionnement du canvas, le cycle de vie React.
  *
- * ⚠️ Les gestionnaires sont lus dans une `ref` à chaque frame. Recréer la
- * boucle à chaque rendu React lui ferait perdre son compteur d'échecs et son
- * timestamp monotone — c'est-à-dire les deux choses qui empêchent le bug #3 de
- * revenir.
+ * ⚠️ Les gestionnaires sont lus dans une `ref` à chaque frame : recréer la
+ * boucle à chaque rendu React lui ferait perdre ses compteurs (§1 bug #3).
  */
 
 import { useEffect, useRef, type RefObject } from 'react';
-import {
-  createLandmarker,
-  GPU_SILENT_FALLBACK_LOST,
-  startLoop,
-  type Delegate,
-} from '../tracking/landmarker.js';
+import { startFaceLoop, type FaceLoopControl, type LostCause } from '../tracking/faceLoop.js';
 import type { NormalizedLandmark } from '../core/geom.js';
 
 export interface CameraHandlers {
   onFrame(ctx: CanvasRenderingContext2D, lm: readonly NormalizedLandmark[], yawRad: number): void;
-  onLost(ctx: CanvasRenderingContext2D, consecutiveFailures: number): void;
+  /**
+   * Pas de landmarks sur cette frame. `cause` sépare (§11) :
+   *  - 'invalid-input' : problème d'ENTRÉE caméra (frame noire, 0×0…), nommé ;
+   *  - 'no-face'       : frame valide, visage non trouvé — « recherche… ».
+   * La pose (« mettez-vous de face ») n'est PAS un état de détection : elle
+   * appartient aux gates de mesure.
+   */
+  onLost(ctx: CanvasRenderingContext2D, n: number, cause: LostCause, reason: string | null): void;
   onProgress(ratio: number): void;
   /** Appelé une fois, quand la caméra et le modèle sont prêts. */
   onReady(): void;
@@ -57,12 +58,8 @@ export function useCameraLoop(
   held.current = handlers;
 
   useEffect(() => {
-    // Initialisées à un no-op (pas à null) : elles sont réassignées DANS des
-    // fermetures (bascule GPU→CPU), ce que le narrowing de TypeScript ignore —
-    // un type union rendrait leurs appels « never » aux points d'usage.
-    let stopLoop: () => void = () => {};
+    let loop: FaceLoopControl | null = null;
     let stream: MediaStream | null = null;
-    let close: () => void = () => {};
     let disposed = false;
 
     void (async () => {
@@ -102,61 +99,23 @@ export function useCameraLoop(
         const ctx = canvas.getContext('2d');
         if (ctx === null) throw new Error('Contexte 2D indisponible.');
 
-        // 🔴 Constaté sur téléphone réel : le délégué GPU peut s'initialiser
-        // sans erreur et ne JAMAIS rien détecter (navigateur intégré Android —
-        // vidéo parfaite, « détection perdue : 528 frames »). Si aucun visage
-        // n'a été vu depuis le démarrage au bout de `GPU_SILENT_FALLBACK_LOST`
-        // frames, le landmarker est recréé en CPU et la boucle repart —
-        // l'écran ne reste jamais muet.
-        let everDetected = false;
-        let fellBack = false;
-
-        const make = async (delegate: Delegate, onProgress: (r: number) => void) => {
-          const landmarker = await createLandmarker(onProgress, delegate);
-          // Le modèle tient des ressources WASM/GPU : il se ferme TOUJOURS au
-          // démontage (audit A2 — fuite à chaque entrée/sortie d'essayage).
-          close = () => landmarker.close();
-          return landmarker;
-        };
-
-        const start = (landmarker: import('@mediapipe/tasks-vision').FaceLandmarker, delegate: Delegate): void => {
-          const control = startLoop(landmarker, video, {
-            onFrame: (lm, yawRad) => {
-              everDetected = true;
-              held.current.onFrame(ctx, lm, yawRad);
-            },
-            onLost: (n) => {
-              held.current.onLost(ctx, n);
-              if (!everDetected && !fellBack && delegate === 'GPU' && n >= GPU_SILENT_FALLBACK_LOST) {
-                fellBack = true;
-                console.warn('Détection GPU muette : bascule en mode compatibilité (CPU).');
-                stopLoop();
-                close();
-                // Recréation silencieuse (le modèle sort du cache) : pas de
-                // retour à l'écran « Chargement », la vidéo reste affichée.
-                void make('CPU', () => {})
-                  .then((cpu) => {
-                    if (disposed) close();
-                    else start(cpu, 'CPU');
-                  })
-                  .catch((err) => {
-                    if (!disposed) held.current.onError(describeInitError(err));
-                  });
-              }
-            },
-          });
-          stopLoop = () => control.stop();
-        };
-
-        const gpu = await make('GPU', (ratio) => {
-          if (!disposed) held.current.onProgress(ratio);
+        const control = await startFaceLoop(video, {
+          onLandmarks: (lm, yawRad) => held.current.onFrame(ctx, lm, yawRad),
+          onLost: (n, cause, reason) => held.current.onLost(ctx, n, cause, reason),
+          onTransition: (reason) => console.warn(`Détection — ${reason}`),
+          onProgress: (r) => {
+            if (!disposed) held.current.onProgress(r);
+          },
+          onError: (message) => {
+            if (!disposed) held.current.onError(message);
+          },
         });
         if (disposed) {
-          close();
+          control.stop();
           return;
         }
+        loop = control;
         held.current.onReady();
-        start(gpu, 'GPU');
       } catch (err) {
         if (!disposed) held.current.onError(describeInitError(err));
       }
@@ -164,8 +123,7 @@ export function useCameraLoop(
 
     return () => {
       disposed = true;
-      stopLoop();
-      close();
+      loop?.stop();
       stream?.getTracks().forEach((t) => t.stop());
     };
   }, [videoRef, canvasRef, attempt]);

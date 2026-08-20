@@ -1,20 +1,12 @@
 /**
  * ui/TryOn.tsx — l'essayage live, commun aux deux versions.
  *
- * ⚠️ AUCUN slider de taille. L'échelle est calculée (§4), jamais réglée.
- * ⚠️ Aucun tri, aucune recommandation : deux chiffres et une image (§0.0.1).
+ * ⚠️ AUCUN slider de taille (§4) ; aucun tri ni recommandation (§0.0.1). La
+ * boucle se monte UNE fois et lit un `live` mutable (compteurs, garde S5).
  *
- * La boucle de rendu se monte UNE fois et lit un `live` mutable : une boucle
- * recréée à chaque état perdrait son compteur d'échecs et son timestamp
- * monotone (garde S5).
- *
- * ## Le parcours V2 (mission 2026-08-19) : calibration AUTOMATIQUE, sans carte
- *
- * Ouvrir la caméra → regarder l'écran quelques secondes → « calibration
- * acquise » → essayage. Le moteur (`core/autoCalibration.ts`) a des conditions
- * de sortie explicites et dit à tout instant ce qui lui manque (WHY_NOT_DONE).
- * La carte ISO reste disponible en MODE DIAGNOSTIC : séance filmée arrêtée par
- * le client (arbitrage 2026-08-18), assemblage sans cul-de-sac inchangés.
+ * Parcours : caméra → quelques secondes de regard → « calibration acquise » →
+ * essayage (`core/autoCalibration.ts`, WHY_NOT_DONE à tout instant). La carte
+ * ISO reste disponible en mode diagnostic (arbitrage 2026-08-18).
  */
 
 import { useCallback, useMemo, useRef, useState } from 'react';
@@ -42,6 +34,9 @@ import { useCameraLoop } from './useCameraLoop.js';
 import { useSprites } from './useSprites.js';
 
 export type Mode = 'online' | 'store';
+
+/** Micro-perte repeinte (rendu SEUL) — alignée sur la règle 3 (> 5 = perdu). */
+export const RENDER_HOLD_FRAMES = 5;
 
 export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -96,10 +91,8 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
     setPhase({ kind: 'essayage' });
   }, []);
 
-  /**
-   * Gèle l'image ET ses repères d'un seul geste (`ui/freezeFrame.ts`) : la
-   * chaîne aval mesure le visage sur les MÊMES pixels que l'étalon (§0.0.2).
-   */
+  /** Gèle l'image ET ses repères d'un seul geste (`ui/freezeFrame.ts`) :
+   *  la chaîne aval mesure sur les MÊMES pixels que l'étalon (§0.0.2). */
   const freeze = useCallback((kind: 'mesure-monture') => {
     const shot = freezeFrame(videoRef.current, live.current.lastLandmarks);
     if (shot === null) {
@@ -165,6 +158,7 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
       const h = ctx.canvas.height;
       const s = live.current;
       s.lastLandmarks = lm;
+      s.lastYawRad = yawRad;
 
       // ⭐ V2 — la mesure automatique. Publiée seulement quand son état change ;
       // le moteur décide seul de sa fin, et sa fin est annoncée.
@@ -195,12 +189,19 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
   );
 
   const renderLost = useCallback(
-    (ctx: CanvasRenderingContext2D, n: number): void => {
-      live.current.verdict = null;
-      // La détection perdue est une INFORMATION pour le moteur automatique :
-      // c'est elle qui nourrit la raison « je ne vous vois pas » (audit §2).
+    (ctx: CanvasRenderingContext2D, n: number, cause: 'invalid-input' | 'no-face', reason: string | null): void => {
+      // La perte nourrit le moteur automatique (« je ne vous vois pas »),
+      // JAMAIS le maintien de rendu ci-dessous, qui ne mesure rien : une
+      // micro-perte (≤ 5 frames) repeint la dernière pose connue au lieu de
+      // faire clignoter la monture ; au-delà, l'alarme brute (§1 bug #3).
       pump(null, 0, ctx.canvas.width, ctx.canvas.height);
-      paintLost(ctx, n);
+      const s = live.current;
+      if (cause === 'no-face' && n <= RENDER_HOLD_FRAMES && s.lastLandmarks !== null && phaseRef.current === 'essayage') {
+        paintScene(ctx, s, s.lastLandmarks, s.lastYawRad, videoRef.current);
+        return;
+      }
+      s.verdict = null;
+      paintLost(ctx, n, cause, reason);
     },
     [pump],
   );

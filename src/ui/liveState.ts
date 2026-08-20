@@ -42,6 +42,8 @@ export interface Live {
   sprites: SpritesState;
   overlayPaddingMm: number;
   lastLandmarks: readonly NormalizedLandmark[] | null;
+  /** Yaw de la dernière frame détectée — pour le maintien de rendu (≤ 5 frames). */
+  lastYawRad: number;
   verdict: SizeVerdict | null;
   /** Non nul pendant la collecte des deux vues tournées (§4, parade B4 n°2). */
   probe: RotationProbe | null;
@@ -81,6 +83,7 @@ export function createLive(sprites: SpritesState, spec: FrameSpec | null, cal: U
     sprites,
     overlayPaddingMm,
     lastLandmarks: null,
+    lastYawRad: 0,
     verdict: null,
     probe: null,
     lastProbeRatio: -1,
