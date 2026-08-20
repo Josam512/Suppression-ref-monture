@@ -1,20 +1,25 @@
 /**
- * tests/detection.test.ts — la refonte de la couche détection (mission
- * 2026-08-20), en calcul pur : validité des frames AVANT inférence, et machine
- * d'état à transitions PROUVÉES (plus de retry aveugle).
+ * tests/detection.test.ts — la couche détection (mission 2026-08-20), en calcul
+ * pur : validité des frames AVANT inférence, et échelle de stratégies gravie
+ * par PREUVES (plus de retry aveugle). L'échelle vient du cas mesuré sur
+ * l'appareil réel : FaceDetector 0,91 / FaceLandmarker 0 sur la même frame.
  */
 
 import { describe, expect, it } from 'vitest';
 
 import { frameValidity, MIN_MEAN_LUMA } from '../src/tracking/frameFeed.js';
 import {
+  currentStrategy,
+  DETECTION_STRATEGIES,
   initialPlan,
   planStep,
   shouldProbe,
+  unpadPoint,
   PROBE_EVERY,
   SWAP_BLIND_AFTER,
   SWAP_WITH_EVIDENCE_AFTER,
   type DetectionObservation,
+  type DetectionPlan,
 } from '../src/tracking/detectionPlan.js';
 
 function rgba(pixels: Array<[number, number, number]>): Uint8ClampedArray {
@@ -59,25 +64,37 @@ const silent = (probeFound: boolean | null = null): DetectionObservation => ({
   probeFound,
 });
 
-describe('machine d’état — la bascule CPU exige une PREUVE', () => {
-  it('sonde OUI + landmarker GPU muet → bascule CPU, raison nommée', () => {
+/** Nourrit des frames muettes jusqu'à la prochaine montée ; rend sa raison. */
+function feedUntilAdvance(plan: DetectionPlan, probeSees: boolean, cap: number): string | null {
+  for (let i = 0; i < cap; i++) {
+    const t = planStep(plan, silent(shouldProbe(plan) ? probeSees : null));
+    if (t.advanceTo !== null) return t.reason;
+  }
+  return null;
+}
+
+describe('échelle de stratégies — chaque montée exige une PREUVE', () => {
+  it('sonde OUI + landmarker muet → montée, raison nommée, dans l’ordre de l’échelle', () => {
     const plan = initialPlan();
-    let swapped: string | null = null;
-    for (let i = 0; i < SWAP_WITH_EVIDENCE_AFTER + 1 && swapped === null; i++) {
-      const t = planStep(plan, silent(shouldProbe(plan) ? true : null));
-      if (t.action === 'swap-to-cpu') swapped = t.reason;
-    }
-    expect(swapped).toMatch(/FaceDetector voit un visage/);
-    expect(plan.delegate).toBe('CPU');
+    expect(currentStrategy(plan).id).toBe('gpu');
+    const r1 = feedUntilAdvance(plan, true, SWAP_WITH_EVIDENCE_AFTER + 1);
+    expect(r1).toMatch(/FaceDetector voit un visage/);
+    expect(currentStrategy(plan).id).toBe('cpu');
+    const r2 = feedUntilAdvance(plan, true, SWAP_WITH_EVIDENCE_AFTER + 1);
+    expect(r2).toMatch(/marge/);
+    expect(currentStrategy(plan).id).toBe('cpu-marge');
+    const r3 = feedUntilAdvance(plan, true, SWAP_WITH_EVIDENCE_AFTER + 1);
+    expect(r3).toMatch(/seuils/);
+    expect(currentStrategy(plan).id).toBe('cpu-seuils');
   });
 
-  it('les DEUX muets → bascule par élimination, seulement après une longue attente', () => {
+  it('les DEUX muets → montée par élimination, seulement après une longue attente', () => {
     const plan = initialPlan();
     let swappedAt = -1;
     let reason = '';
     for (let i = 1; i <= SWAP_BLIND_AFTER + 1 && swappedAt === -1; i++) {
       const t = planStep(plan, silent(shouldProbe(plan) ? false : null));
-      if (t.action === 'swap-to-cpu') {
+      if (t.advanceTo !== null) {
         swappedAt = i;
         reason = t.reason ?? '';
       }
@@ -86,25 +103,24 @@ describe('machine d’état — la bascule CPU exige une PREUVE', () => {
     expect(reason).toMatch(/élimination/);
   });
 
-  it('🔴 les frames INVALIDES ne justifient JAMAIS une bascule de délégué', () => {
+  it('🔴 les frames INVALIDES ne font JAMAIS monter l’échelle', () => {
     const plan = initialPlan();
     for (let i = 0; i < SWAP_BLIND_AFTER * 3; i++) {
       const t = planStep(plan, { frameValid: false, landmarksFound: false, probeFound: null });
-      expect(t.action).toBeNull();
+      expect(t.advanceTo).toBeNull();
     }
-    expect(plan.delegate).toBe('GPU');
+    expect(currentStrategy(plan).id).toBe('gpu');
     expect(plan.silentValidFrames).toBe(0); // une entrée cassée ne dit rien des détecteurs
   });
 
-  it('🔴 un délégué qui a DÉJÀ suivi un visage n’est jamais accusé (sortie du champ ≠ panne)', () => {
+  it('🔴 une stratégie qui a DÉJÀ suivi un visage n’est jamais quittée (sortie du champ ≠ panne)', () => {
     const plan = initialPlan();
     planStep(plan, { frameValid: true, landmarksFound: true, probeFound: null });
     expect(plan.phase).toBe('tracking');
     for (let i = 0; i < SWAP_BLIND_AFTER * 2; i++) {
-      const t = planStep(plan, silent(shouldProbe(plan) ? true : null));
-      expect(t.action).toBeNull();
+      expect(planStep(plan, silent(shouldProbe(plan) ? true : null)).advanceTo).toBeNull();
     }
-    expect(plan.delegate).toBe('GPU');
+    expect(currentStrategy(plan).id).toBe('gpu');
   });
 
   it('la sonde tourne par échantillonnage, pas à chaque frame', () => {
@@ -118,15 +134,33 @@ describe('machine d’état — la bascule CPU exige une PREUVE', () => {
     expect(probes).toBeLessThanOrEqual(3);
   });
 
-  it('après la bascule CPU, plus aucune autre bascule — pas de ping-pong', () => {
+  it('en haut de l’échelle : on continue de chercher, honnêtement — pas de ping-pong', () => {
     const plan = initialPlan();
-    for (let i = 0; i < SWAP_WITH_EVIDENCE_AFTER + 1; i++) {
-      planStep(plan, silent(shouldProbe(plan) ? true : null));
+    for (let i = 0; i < DETECTION_STRATEGIES.length - 1; i++) {
+      expect(feedUntilAdvance(plan, true, SWAP_WITH_EVIDENCE_AFTER + 1)).not.toBeNull();
     }
-    expect(plan.delegate).toBe('CPU');
+    expect(currentStrategy(plan).id).toBe('cpu-seuils');
     for (let i = 0; i < SWAP_BLIND_AFTER * 2; i++) {
-      expect(planStep(plan, silent(true)).action).toBeNull();
+      expect(planStep(plan, silent(true)).advanceTo).toBeNull();
     }
-    expect(plan.delegate).toBe('CPU');
+    expect(currentStrategy(plan).id).toBe('cpu-seuils');
+    expect(plan.phase).toBe('searching');
+  });
+
+  it('l’échelle finit sur la stratégie la plus permissive : marge + seuils 0,25 en CPU', () => {
+    const last = DETECTION_STRATEGIES[DETECTION_STRATEGIES.length - 1]!;
+    expect(last.minConfidence).toBe(0.25);
+    expect(last.padFraction).not.toBeNull();
+    expect(last.delegate).toBe('CPU');
+  });
+
+  it('le dé-mappage de la marge est EXACT : centre → centre, bords → bords', () => {
+    // Position, dans le cadre paddé, d'un point situé à xn du cadre d'origine :
+    const padded = (xn: number, p: number): number => (p + xn) / (1 + 2 * p);
+    for (const p of [0.1, 0.25, 0.4]) {
+      for (const xn of [0, 0.25, 0.5, 0.77, 1]) {
+        expect(unpadPoint(padded(xn, p), p)).toBeCloseTo(xn, 12);
+      }
+    }
   });
 });

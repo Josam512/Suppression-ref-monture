@@ -12,7 +12,7 @@ import type { Mode } from './TryOn.js';
  * depuis une capture d'écran si le client teste la version corrigée ou une
  * vieille copie. Trois allers-retours ont été perdus exactement là-dessus.
  */
-export const BUILD_TAG = 'b6 · 2026-08-20 16:40';
+export const BUILD_TAG = 'b7 · 2026-08-20 18:10';
 
 export function TryOnHeader(props: { mode: Mode; onQuit(): void }): JSX.Element {
   return (

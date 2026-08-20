@@ -4,45 +4,85 @@
  *   Couche 1-2  frameFeed.ts      → une frame caméra VALIDE, pixels normalisés
  *   Couche 3    faceProbe.ts      → « y a-t-il un visage ? » (second avis)
  *   Couche 4    landmarker.ts     → les 478 landmarks
- *   Décision    detectionPlan.ts  → machine d'état, transitions PROUVÉES
+ *   Décision    detectionPlan.ts  → échelle de stratégies, montées PROUVÉES
  *
- * Remplace l'ancien `startLoop` : même garantie « la boucle ne meurt jamais »
- * (§1 bug #3), plus la séparation stricte entre « entrée invalide », « visage
- * non trouvé » et « pose inadaptée » — cette dernière n'existe pas ici : elle
- * appartient aux couches de MESURE (règle 3, gates de calibration), jamais à
- * la détection.
+ * L'échelle (GPU → CPU → entrée réduite → seuils abaissés) vient du cas prouvé
+ * sur l'appareil réel : FaceDetector 0,91 / FaceLandmarker 0 sur la même
+ * frame. Chaque montée est annoncée avec sa raison. La séparation stricte
+ * demeure : « entrée invalide » ≠ « visage non trouvé » ≠ « pose inadaptée »
+ * (cette dernière appartient aux couches de MESURE, jamais à la détection).
  *
  * Concurrence (§16) : une seule inférence à la fois — les rappels de snapshot
- * sont sériels et `detectForVideo` est synchrone ; pendant une bascule de
- * délégué (asynchrone), les frames sont ignorées, aucun compteur n'avance.
+ * sont sériels et `detectForVideo` est synchrone ; pendant une montée de
+ * stratégie (asynchrone), les frames sont ignorées, aucun compteur n'avance.
  */
 
 import { createLandmarker, yawFromMatrix } from './landmarker.js';
 import type { FaceLandmarker } from '@mediapipe/tasks-vision';
 import { attachFrameFeed, type FrameSnapshot } from './frameFeed.js';
 import { createFaceProbe, type FaceProbe, type FaceProbeResult } from './faceProbe.js';
-import { initialPlan, planStep, shouldProbe, type DetectionPlan } from './detectionPlan.js';
+import {
+  currentStrategy,
+  initialPlan,
+  planStep,
+  shouldProbe,
+  unpadPoint,
+  type DetectionPlan,
+  type DetectionStrategy,
+} from './detectionPlan.js';
 
 export type LostCause = 'invalid-input' | 'no-face';
 
 export interface FaceLoopHandlers {
-  /** Couche 4 OK : landmarks bruts de CETTE frame. */
+  /** Couche 4 OK : landmarks bruts de CETTE frame (coordonnées normalisées). */
   onLandmarks(lm: ReadonlyArray<{ x: number; y: number; z?: number }>, yawRad: number): void;
   /**
-   * Pas de landmarks sur cette frame. `cause` sépare « entrée caméra cassée »
-   * (reason nommée) de « frame valide, visage non trouvé » (§11 : deux états).
+   * Pas de landmarks sur cette frame. `cause` sépare (§11) « entrée caméra
+   * cassée » (raison nommée) de « frame valide, visage non trouvé ».
    */
   onLost(consecutive: number, cause: LostCause, reason: string | null): void;
-  /** Transition de la machine d'état, avec sa raison (§17). */
+  /** Montée de stratégie, avec sa raison (§17). */
   onTransition?(reason: string): void;
   onProgress?(ratio: number): void;
-  /** Erreur fatale (création de délégué impossible…) — la boucle s'arrête. */
+  /** Erreur fatale (création de stratégie impossible…). */
   onError?(message: string): void;
 }
 
 export interface FaceLoopControl {
   stop(): void;
   plan(): Readonly<DetectionPlan>;
+}
+
+/** Ajoute la marge (letterbox) de la stratégie autour de la frame : le crop
+ *  interne du landmarker (×1,5, mis au carré) cesse de déborder hors image sur
+ *  un visage très proche — le mécanisme prouvé du « FaceDetector voit,
+ *  FaceLandmarker rend 0 ». Les landmarks sont dé-mappés par `unpadPoint`. */
+function inputFor(
+  s: FrameSnapshot,
+  strategy: DetectionStrategy,
+  scratch: HTMLCanvasElement,
+): HTMLCanvasElement {
+  const pad = strategy.padFraction;
+  if (pad === null) return s.source;
+  const w = Math.round(s.w * (1 + 2 * pad));
+  const h = Math.round(s.h * (1 + 2 * pad));
+  if (scratch.width !== w || scratch.height !== h) {
+    scratch.width = w;
+    scratch.height = h;
+  }
+  const g = scratch.getContext('2d')!;
+  g.fillStyle = '#7f7f7f'; // remplissage neutre, comme le letterbox interne de MediaPipe
+  g.fillRect(0, 0, w, h);
+  g.drawImage(s.source, Math.round(s.w * pad), Math.round(s.h * pad));
+  return scratch;
+}
+
+/** Dé-mappe les landmarks du cadre AVEC marge vers le cadre d'origine. */
+function unpadLandmarks(
+  lm: ReadonlyArray<{ x: number; y: number; z?: number }>,
+  pad: number,
+): ReadonlyArray<{ x: number; y: number; z?: number }> {
+  return lm.map((q) => ({ ...q, x: unpadPoint(q.x, pad), y: unpadPoint(q.y, pad) }));
 }
 
 export async function startFaceLoop(
@@ -52,7 +92,8 @@ export async function startFaceLoop(
   const plan = initialPlan();
   let landmarker: FaceLandmarker | null = await createLandmarker(
     (r) => handlers.onProgress?.(r),
-    'GPU',
+    currentStrategy(plan).delegate,
+    currentStrategy(plan).minConfidence,
   );
   let probe: FaceProbe | null = null;
   let probeLoading = false;
@@ -60,13 +101,7 @@ export async function startFaceLoop(
   let disposed = false;
   let lostStreak = 0;
   let lastTs = -1;
-
-  const closeAll = (): void => {
-    landmarker?.close();
-    landmarker = null;
-    probe?.close();
-    probe = null;
-  };
+  const scratch = document.createElement('canvas');
 
   const onSnapshot = (s: FrameSnapshot): void => {
     if (disposed || swapping || landmarker === null) return;
@@ -83,13 +118,17 @@ export async function startFaceLoop(
 
     let lm: ReadonlyArray<{ x: number; y: number; z?: number }> | undefined;
     let yaw = 0;
+    const strategy = currentStrategy(plan);
     try {
-      const res = landmarker.detectForVideo(s.source, ts);
+      const res = landmarker.detectForVideo(inputFor(s, strategy, scratch), ts);
       lm = res.faceLandmarks[0];
       const mat = res.facialTransformationMatrixes[0];
-      if (mat !== undefined) yaw = yawFromMatrix(mat.data);
+      if (mat !== undefined) yaw = yawFromMatrix(mat.data); // rotation : insensible à la marge
     } catch (err) {
       console.error('Detection error:', err);
+    }
+    if (lm !== undefined && strategy.padFraction !== null) {
+      lm = unpadLandmarks(lm, strategy.padFraction);
     }
 
     if (lm !== undefined && lm.length > 0) {
@@ -111,23 +150,25 @@ export async function startFaceLoop(
             if (disposed) p.close();
             else probe = p;
           })
-          .catch(() => {}); // sonde indisponible : la machine basculera par élimination
+          .catch(() => {}); // sonde indisponible : la machine montera par élimination
       }
     }
 
     const t = planStep(plan, { frameValid: true, landmarksFound: false, probeFound });
     handlers.onLost(lostStreak, 'no-face', null);
 
-    if (t.action === 'swap-to-cpu') {
+    if (t.advanceTo !== null) {
       swapping = true;
-      handlers.onTransition?.(t.reason ?? 'bascule CPU');
+      const next = currentStrategy(plan);
+      handlers.onTransition?.(t.reason ?? next.label);
       landmarker.close();
       landmarker = null;
-      void createLandmarker(() => {}, 'CPU')
-        .then((cpu) => {
-          if (disposed) cpu.close();
+      void createLandmarker(() => {}, next.delegate, next.minConfidence)
+        .then((fresh) => {
+          if (disposed) fresh.close();
           else {
-            landmarker = cpu;
+            landmarker = fresh;
+            lastTs = -1; // nouvelle instance → nouveau domaine de timestamps
             swapping = false;
           }
         })
@@ -142,7 +183,10 @@ export async function startFaceLoop(
     stop(): void {
       disposed = true;
       feed.stop();
-      closeAll();
+      landmarker?.close();
+      landmarker = null;
+      probe?.close();
+      probe = null;
     },
     plan(): Readonly<DetectionPlan> {
       return plan;

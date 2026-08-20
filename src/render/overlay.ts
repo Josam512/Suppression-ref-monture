@@ -29,7 +29,10 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, state: OverlayState):
     }
   } else {
     // Le null gèle la légende, jamais l'image : la monture reste à l'écran.
-    lines.push('mesure indisponible sur cette pose');
+    // Libellé NEUTRE : ce null couvre aussi « visage pas encore trouvé » —
+    // accuser la pose sans preuve était le mensonge relevé au §11 de la
+    // mission détection (capture du 2026-08-20).
+    lines.push('mesure indisponible');
   }
 
   if (state.hint !== null) lines.push(state.hint);

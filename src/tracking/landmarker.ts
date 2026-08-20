@@ -104,6 +104,10 @@ export function lastInitReport(): ModelInitReport | null {
 export async function createLandmarker(
   onProgress: (ratio: number) => void = () => {},
   delegate: Delegate = 'GPU',
+  /** Seuils detection/presence/tracking abaissés — dernière marche de l'échelle
+   *  de stratégies (detectionPlan). N'affaiblit AUCUNE mesure : la détection
+   *  d'un visage et les gates métrologiques restent deux couches distinctes. */
+  minConfidence: number | null = null,
 ): Promise<FaceLandmarker> {
   const t0 = performance.now();
   const [fileset, modelAssetBuffer] = await Promise.all([
@@ -119,6 +123,13 @@ export async function createLandmarker(
     outputFaceBlendshapes: false,
     // ⚠️ Activé UNIQUEMENT pour en extraire la ROTATION (§4).
     outputFacialTransformationMatrixes: true,
+    ...(minConfidence !== null
+      ? {
+          minFaceDetectionConfidence: minConfidence,
+          minFacePresenceConfidence: minConfidence,
+          minTrackingConfidence: minConfidence,
+        }
+      : {}),
   });
   lastReport = {
     modelUrl: MODEL_URL,
