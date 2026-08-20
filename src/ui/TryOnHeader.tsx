@@ -6,13 +6,22 @@
 import { OVERLAY_PADDING_MM } from '../render/composite.js';
 import type { Mode } from './TryOn.js';
 
+/**
+ * Tampon de build, AFFICHÉ à l'écran. Raison d'être : les pages autonomes sont
+ * servies par des CDN qui cachent — sans tampon visible, impossible de savoir
+ * depuis une capture d'écran si le client teste la version corrigée ou une
+ * vieille copie. Trois allers-retours ont été perdus exactement là-dessus.
+ */
+export const BUILD_TAG = 'b5 · 2026-08-20 15:45';
+
 export function TryOnHeader(props: { mode: Mode; onQuit(): void }): JSX.Element {
   return (
     <p>
       <button type="button" onClick={props.onQuit}>
-        ← Changer de version
+        ↺ Recommencer
       </button>{' '}
-      <strong>{props.mode === 'store' ? 'V2 — Mode magasin' : 'V1 — Vente en ligne'}</strong>
+      <strong>Essayage</strong>
+      <span style={{ opacity: 0.55, fontSize: '.8em' }}> · {BUILD_TAG}</span>
       {props.mode === 'store' && (
         <span style={{ opacity: 0.75 }}>
           {' '}
