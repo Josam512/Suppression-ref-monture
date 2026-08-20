@@ -1173,3 +1173,36 @@ rien, sous roulis chaque axe garde sa référence.
 journey navigateur vert.** Non démontré, inchangé : précision absolue sur sujets
 réels (protocole N≥50), biais populationnel HVID, δz yeux→tempes 45±12 mm
 (hypothèse), tenons non marqués sur les fiches existantes (repli en service).
+
+## 2026-08-20 — Prototypes HORS PRODUCTION : temporal frontal + repos du pont (baseline intouchée)
+
+**Baseline verrouillée, vérifiée avant/après** : 254 tests d'origine verts,
+smoke vert, journey vert, aucun fichier de `core/render/ui/tracking/prep`
+modifié. Le VTO est DÉJÀ immédiat sans rotation (prouvé par le journey : photo
+statique frontale → « Calibration acquise » → essayage ; la rotation n'a jamais
+été bloquante — elle reste un raffinement facultatif de l'écart temporal).
+
+**`src/experimental/` — jamais importé par la production (test-garde-fou).**
+
+1. `frontTemporal.ts` : écart temporal sur UNE vue frontale via segmentation
+   sémantique (MediaPipe selfie_multiclass_256x256, 16,4 Mo, même runtime que
+   le FaceLandmarker — modèle NON vendorisé, hors bundle). Cheveux ou branche
+   de lunettes collés au bord de peau → refus nommé, jamais une valeur.
+   Testé en calcul pur (8 tests) + accord ≤ 2 mm avec le moteur rotation sur
+   scène commune. Sur le sujet réel (photo sans lunettes) : REFUS honnête —
+   les cheveux couvrent les deux tempes à hauteur des yeux. Inférence : 589 ms
+   médian en wasm CPU headless à 512 px (GPU delegate navigateur : ~3–30 ms
+   annoncés ; à mesurer sur appareils réels).
+
+2. `noseContact.ts` : repos du pont par la règle paramétrique lunetière
+   (le pont descend jusqu'où le nez atteint sa largeur DBL). Paires de PAROIS
+   nasales SONDÉES sur le sujet réel (16,0→23,4 mm, croissant, asym ≤ 0,9 mm) —
+   le premier jet suivait l'arête (~11 mm) et l'auto-défense du module l'a
+   signalé sur la vraie photo avant toute correction. Résultat sur le sujet :
+   repos à +9,6 mm sous la ligne des yeux, soit ~20 mm SOUS le pont actuel —
+   contredit la position réellement portée (photo avec lunettes) : la largeur
+   FRONTALE projetée n'est pas la largeur de PRISE des plaquettes (profondeur
+   manquante). CURRENT_POSE (§14.6) reste la référence ; candidat non branché.
+
+**Non commité (temporaire)** : `tests/preview-vto.html`, `*.tmp.mjs`, modèle
+tflite, captures — outils de preview de session.
