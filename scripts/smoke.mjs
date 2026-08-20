@@ -83,12 +83,12 @@ try {
 
   await page.goto(BASE, { waitUntil: 'load' });
 
-  // L'accueil propose les deux versions : il faut en ouvrir une pour arriver
-  // sur le flux vidéo. On teste la V1, celle du client à distance.
-  const v1 = page.getByRole('button', { name: /Ouvrir V1/ });
-  const v2 = page.getByRole('button', { name: /Ouvrir V2/ });
-  check('les deux versions sont proposées à l’accueil', (await v1.count()) === 1 && (await v2.count()) === 1);
-  await v1.click();
+  // ⚖️ Arbitrage 2026-08-20 : plus d'écran de choix — l'essayage démarre
+  // directement, la V2 magasin ne se présente plus.
+  check(
+    "l'essayage démarre directement (plus d'écran V1/V2)",
+    (await page.getByRole('button', { name: /Ouvrir V/ }).count()) === 0,
+  );
   await page.waitForTimeout(12000);
 
   const video = await page.evaluate(() => {
@@ -124,7 +124,7 @@ try {
   check('détection perdue → la boucle affiche quand même l’échec (§1 bug #3)', painted);
 
   const texteAuto = await page.locator('body').innerText();
-  check('V1 annonce clairement sa version', texteAuto.includes('V1 — Vente en ligne'));
+  check("l'en-tête porte le tampon de build (cache CDN traçable)", /b\d+ · 20\d\d-/.test(texteAuto));
 
   // ⭐ MISSION 2026-08-19 : le parcours normal est la mesure AUTOMATIQUE, sans
   // carte. Le client regarde l'écran, la machine dit ce qui lui manque
@@ -228,16 +228,9 @@ try {
    * la carte ne detourne pas la mesure.
    */
 
-  // La V2 doit s'ouvrir aussi, et annoncer sa dilatation de sprite.
-  const store = await ctx.newPage();
-  const storeErrors = [];
-  store.on('pageerror', (e) => storeErrors.push(e.message));
-  await store.goto(BASE, { waitUntil: 'load' });
-  await store.getByRole('button', { name: /Ouvrir V2/ }).click();
-  await store.waitForTimeout(9000);
-  const storeText = await store.locator('body').innerText();
-  check('V2 s’ouvre et annonce son mode', storeText.includes('V2 — Mode magasin'), storeErrors.join(' | '));
-  check('V2 annonce la dilatation du sprite (§11.6)', /dilaté de 1\.5 mm/.test(storeText));
+  // ⚖️ Arbitrage 2026-08-20 : la V2 magasin ne se présente plus à l'écran.
+  // Son code reste dans le dépôt (couvert par les tests unitaires), mais
+  // aucune page ne l'affiche : rien à vérifier ici.
 
   check('aucune exception non rattrapée', pageErrors.length === 0, pageErrors.join(' | '));
 
@@ -251,7 +244,6 @@ try {
     ),
   );
   await revenant.goto(BASE, { waitUntil: 'load' });
-  await revenant.getByRole('button', { name: /Ouvrir V1/ }).click();
   await revenant.waitForTimeout(9000);
   const texteRevenant = await revenant.locator('body').innerText();
   check(
