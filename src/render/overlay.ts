@@ -46,6 +46,11 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, state: OverlayState):
   ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
   ctx.fillRect(0, 0, ctx.canvas.width, boxH);
 
+  // Le canvas vit DANS le conteneur miroité (CSS scaleX(-1), §6 : le miroir
+  // s'applique une seule fois, au conteneur). La géométrie y est indifférente,
+  // pas le TEXTE : sans contre-miroir il s'affiche inversé — constaté au banc
+  // sur la page autonome. On le peint donc retourné, pour qu'il se lise droit.
+  ctx.setTransform(-1, 0, 0, 1, ctx.canvas.width, 0);
   ctx.fillStyle = '#fff';
   lines.forEach((line, i) => {
     ctx.fillText(line, PADDING, PADDING / 2 + i * LINE_HEIGHT);
