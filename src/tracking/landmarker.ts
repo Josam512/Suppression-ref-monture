@@ -164,6 +164,15 @@ export function startLoop(
   let lastTimestampMs = -1;
   let consecutiveFailures = 0;
 
+  // 🔴 Le détecteur ne lit JAMAIS l'élément <video> directement. Sur plusieurs
+  // WebViews Android, la texture vidéo livrée au wasm est TOURNÉE de 90° (la
+  // rotation du capteur n'est appliquée qu'à l'affichage) ou vide — l'écran
+  // montre un visage droit, le détecteur reçoit un visage couché qu'il ne
+  // trouve jamais, sans lever la moindre erreur. On recopie donc chaque frame
+  // dans un canvas 2D : les pixels détectés sont EXACTEMENT ceux affichés.
+  const feed = document.createElement('canvas');
+  const feedCtx = feed.getContext('2d', { willReadFrequently: true });
+
   function loop(): void {
     if (!running) return;
 
@@ -184,7 +193,16 @@ export function startLoop(
     lastTimestampMs = ts;
 
     try {
-      const res = landmarker.detectForVideo(video, ts);
+      let source: HTMLVideoElement | HTMLCanvasElement = video;
+      if (feedCtx !== null) {
+        if (feed.width !== video.videoWidth || feed.height !== video.videoHeight) {
+          feed.width = video.videoWidth;
+          feed.height = video.videoHeight;
+        }
+        feedCtx.drawImage(video, 0, 0);
+        source = feed;
+      }
+      const res = landmarker.detectForVideo(source, ts);
       const lm = res.faceLandmarks[0];
       const mat = res.facialTransformationMatrixes[0];
 
