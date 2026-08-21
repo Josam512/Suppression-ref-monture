@@ -62,16 +62,11 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
   const selected = essayables.find((s) => s.slug === selectedSlug) ?? essayables[0] ?? null;
   const sprites = useSprites(selected);
 
-  // ⭐ V2 — le modèle PHYSIQUEMENT PORTÉ. Son sprite sert de masque au
-  // recoloriage 2,5 D : on repeint la monture réelle (§11.6, liseré).
   const [wornSpec, setWornSpec] = useState<FrameSpec | null>(null);
   const wornSprites = useSprites(wornSpec);
 
-  // Le mode ne descend jamais dans core/ : c'est une VALEUR qui descend.
   const overlayPaddingMm = props.mode === 'store' ? OVERLAY_PADDING_MM : 0;
 
-  // ⚠️ La phase, lue DEPUIS LA BOUCLE : une closure capturerait une valeur
-  // périmée (stale closure) — seule une ref est une lecture juste ici.
   const phaseRef = useRef<Phase['kind']>('loading');
   phaseRef.current = phase.kind;
 
@@ -91,8 +86,6 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
     setPhase({ kind: 'essayage' });
   }, []);
 
-  /** Gèle l'image ET ses repères d'un seul geste (`ui/freezeFrame.ts`) :
-   *  la chaîne aval mesure sur les MÊMES pixels que l'étalon (§0.0.2). */
   const freeze = useCallback((kind: 'mesure-monture') => {
     const shot = freezeFrame(videoRef.current, live.current.lastLandmarks);
     if (shot === null) {
@@ -103,16 +96,11 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
     setPhase({ kind, frozen: shot.frozen, lm: shot.lm });
   }, []);
 
-  /** Mode diagnostic : la consigne carte. Aucune mesure ne tourne à ce stade. */
   const enterCard = useCallback(() => {
     Object.assign(live.current, { probe: null, pendingCard: null, auto: null });
     setPhase({ kind: 'mesure-carte' });
   }, []);
 
-  /**
-   * ⭐ V2 — la calibration automatique (`ui/useAutoCalibration.ts`) : le moteur
-   * décide seul de sa fin, l'annonce, et la collecte s'arrête — pas la caméra.
-   */
   const { startAuto, pump } = useAutoCalibration({
     live,
     videoRef,
@@ -125,7 +113,6 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
     },
   });
 
-  /** Repartir à zéro : la calibration mémorisée est jetée, la mesure reprend. */
   const restart = useCallback(() => {
     clearCalibration();
     live.current.cal = null;
@@ -160,19 +147,14 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
       s.lastLandmarks = lm;
       s.lastYawRad = yawRad;
 
-      // ⭐ V2 — la mesure automatique. Publiée seulement quand son état change ;
-      // le moteur décide seul de sa fin, et sa fin est annoncée.
       pump(lm, yawRad, w, h);
 
-      // Étape carte (diagnostic) : rien ne mesure, la vidéo passe sous un
-      // canvas vide — le client lit la consigne et appuie quand il veut.
       if (phaseRef.current === 'mesure-carte') {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, w, h);
         return;
       }
 
-      // 🔴 Compte rendu de la séance filmée : seul « J'ai fini » déclenche le calcul.
       const rot = stepRotation(s, lm, yawRad, w, h);
       if (rot !== null) {
         setPhase({ kind: 'mesure-rotation', degrees: rot.degrees, cardViews: rot.cardViews });
@@ -181,7 +163,9 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
       const warn = stepCrossCheck(s, lm, w, h);
       if (warn !== null) setNotices((prev) => [...prev, warn]);
 
-      paintScene(ctx, s, lm, yawRad, videoRef.current);
+      // IMPORTANT : même profil caméra que la calibration définitive, sinon
+      // l'aperçu peut changer d'échelle au moment où la calibration aboutit.
+      paintScene(ctx, s, lm, yawRad, videoRef.current, cameraProfile.current);
 
       drawOverlay(ctx, { verdict: s.verdict, consecutiveFailures: 0, hint: sceneHint(s) });
     },
@@ -190,14 +174,10 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
 
   const renderLost = useCallback(
     (ctx: CanvasRenderingContext2D, n: number, cause: 'invalid-input' | 'no-face', reason: string | null): void => {
-      // La perte nourrit le moteur automatique (« je ne vous vois pas »),
-      // JAMAIS le maintien de rendu ci-dessous, qui ne mesure rien : une
-      // micro-perte (≤ 5 frames) repeint la dernière pose connue au lieu de
-      // faire clignoter la monture ; au-delà, l'alarme brute (§1 bug #3).
       pump(null, 0, ctx.canvas.width, ctx.canvas.height);
       const s = live.current;
       if (cause === 'no-face' && n <= RENDER_HOLD_FRAMES && s.lastLandmarks !== null && phaseRef.current === 'essayage') {
-        paintScene(ctx, s, s.lastLandmarks, s.lastYawRad, videoRef.current);
+        paintScene(ctx, s, s.lastLandmarks, s.lastYawRad, videoRef.current, cameraProfile.current);
         return;
       }
       s.verdict = null;
@@ -206,7 +186,6 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
     [pump],
   );
 
-  /** Après une erreur caméra/modèle, tout se remonte : plus de cul-de-sac (audit E1). */
   const [attempt, setAttempt] = useState(0);
 
   useCameraLoop(
@@ -226,7 +205,6 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
     attempt,
   );
 
-  /** V2 — la monture physiquement portée sert d'étalon (§11.3). */
   const onWornFrameValidated = useMemo(
     () =>
       wornFrameHandlerOf({
