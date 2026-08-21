@@ -103,6 +103,28 @@ describe('échelle de stratégies — chaque montée exige une PREUVE', () => {
     expect(reason).toMatch(/élimination/);
   });
 
+  it('🔴 SONDE INDISPONIBLE : l’échelle monte QUAND MÊME (jamais de blocage)', () => {
+    // Le bug mesuré sur l'appareil réel le 2026-08-21 : la montée par
+    // élimination exigeait `probeTried > 0`. Sonde non chargée ⇒ compteur à
+    // zéro ⇒ échelle figée sur la première marche À VIE. 1199 frames perdues,
+    // toujours en « délégué GPU ». Une élimination qui dépend d'un témoin
+    // n'est pas une élimination.
+    const plan = initialPlan();
+    let advanced = 0;
+    let lastReason = '';
+    // `probeFound` reste TOUJOURS null : la sonde n'a jamais tourné.
+    for (let i = 0; i < SWAP_BLIND_AFTER * (DETECTION_STRATEGIES.length + 1); i++) {
+      const t = planStep(plan, { frameValid: true, landmarksFound: false, probeFound: null });
+      if (t.advanceTo !== null) {
+        advanced++;
+        lastReason = t.reason ?? '';
+      }
+    }
+    expect(advanced).toBe(DETECTION_STRATEGIES.length - 1); // toute l'échelle gravie
+    expect(currentStrategy(plan).id).toBe('cpu-seuils');
+    expect(lastReason).toMatch(/sonde indisponible/);
+  });
+
   it('🔴 les frames INVALIDES ne font JAMAIS monter l’échelle', () => {
     const plan = initialPlan();
     for (let i = 0; i < SWAP_BLIND_AFTER * 3; i++) {

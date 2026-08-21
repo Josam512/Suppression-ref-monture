@@ -117,5 +117,20 @@ export function paintLost(
         : consecutiveFailures > 5
           ? 'Recherche du visage…'
           : null,
+    // ⭐ 2026-08-21 : sans ces deux informations, une capture d'écran ne permet
+    // PAS de savoir où en est la machine ni dans quel navigateur elle tourne.
+    // Un aller-retour entier a été perdu faute de les afficher.
+    detail: consecutiveFailures > 5 && cause === 'no-face' ? `${reason ?? '—'} · ${browserNote()}` : null,
   });
+}
+
+/**
+ * Le navigateur, dit en clair. Un navigateur INTÉGRÉ (celui qui s'ouvre depuis
+ * une messagerie) n'a ni les mêmes accélérations ni les mêmes permissions qu'un
+ * navigateur complet : c'est une piste de diagnostic, jamais une excuse.
+ */
+function browserNote(): string {
+  const ua = navigator.userAgent;
+  const embedded = / wv\)|; wv|FBAN|FBAV|Instagram|WhatsApp|Line\/|MicroMessenger/i.test(ua);
+  return embedded ? 'navigateur intégré (essayez d’ouvrir dans Chrome)' : 'navigateur complet';
 }

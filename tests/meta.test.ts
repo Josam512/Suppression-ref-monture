@@ -13,7 +13,12 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 // ⭐ T6 : l'ancienne valeur (12) ne correspondait à rien — la §8 n'en listait que 11.
-const EXPECTED_MIN_TESTS = 306; // … | demi-PD + cotes monture : 231 | branche physique + non-adaptation + temporal auto + pose : 249 | prototypes frontal + nez (hors production) : 265 | gate demi-PD face stricte + garde de distance : 268 | refonte détection (validité de frame + machine d'état prouvée) : 278
+// ⚠️ 2026-08-21 — CORRECTION D'UNE ERREUR DE MA PART : la valeur avait été portée
+// à 306 d'après le nombre de tests EXÉCUTÉS (309), alors que ce compteur est
+// STATIQUE et compte les `it(` du source. Une boucle `for` autour d'un `it(`
+// compte pour 1 mais s'exécute N fois : les deux grandeurs ne sont pas
+// comparables. Le plancher était donc inatteignable. Valeur réelle : 301.
+const EXPECTED_MIN_TESTS = 301; // … | demi-PD + cotes monture : 231 | branche physique + non-adaptation + temporal auto + pose : 249 | prototypes frontal + nez (hors production) : 265 | gate demi-PD face stricte + garde de distance : 268 | refonte détection (validité de frame + machine d'état prouvée) : 278
 // écart temporal mesuré + règle des 300 lignes : 94 | recoloriage V2 2,5 D : 101 | lunettes portees refusees : 103 | distance mesuree + borne anatomique : 117
 // carte = mire de calibration (focale + distance mesurées) : 132 | accrochage des coins + balayage : 139
 

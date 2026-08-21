@@ -15,6 +15,9 @@ export interface OverlayState {
   consecutiveFailures: number;
   /** Message d'aide à la pose, ex. « reculez un peu ». Jamais un avis sur la monture. */
   hint: string | null;
+  /** Détail TECHNIQUE (stratégie active, navigateur) : rend une capture d'écran
+   *  auto-suffisante pour le diagnostic. Absent en fonctionnement nominal. */
+  detail?: string | null;
 }
 
 export function drawOverlay(ctx: CanvasRenderingContext2D, state: OverlayState): void {
@@ -36,6 +39,7 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, state: OverlayState):
   }
 
   if (state.hint !== null) lines.push(state.hint);
+  if (state.detail != null) lines.push(state.detail);
   if (state.consecutiveFailures > 5) {
     lines.push(`détection perdue : ${state.consecutiveFailures} frames`);
   }

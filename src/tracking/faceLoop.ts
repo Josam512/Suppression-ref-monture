@@ -155,7 +155,14 @@ export async function startFaceLoop(
     }
 
     const t = planStep(plan, { frameValid: true, landmarksFound: false, probeFound });
-    handlers.onLost(lostStreak, 'no-face', null);
+    // La raison NOMME l'état de la machine : sans elle, une capture d'écran
+    // ne distingue pas « bloqué sur la 1re marche » de « échelle gravie en
+    // vain ». C'est ce qui a coûté un aller-retour complet le 2026-08-21.
+    handlers.onLost(
+      lostStreak,
+      'no-face',
+      `${strategy.label} · sonde ${probe === null ? 'indisponible' : `${plan.probeHits}/${plan.probeTried}`}`,
+    );
 
     if (t.advanceTo !== null) {
       swapping = true;

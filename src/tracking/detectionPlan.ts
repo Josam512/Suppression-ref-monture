@@ -169,12 +169,23 @@ export function planStep(plan: DetectionPlan, obs: DetectionObservation): Detect
         `(« ${from} ») → « ${next.label} »`,
     };
   }
-  if (plan.probeTried > 0 && plan.silentValidFrames >= SWAP_BLIND_AFTER) {
+  // 🔴 CORRECTIF 2026-08-21 — cette montée était conditionnée à `probeTried > 0`.
+  // Quand la sonde ne se charge PAS (modèle indisponible, contexte navigateur
+  // restreint), `probeTried` reste à zéro pour toujours : l'échelle ne montait
+  // alors JAMAIS, et la détection restait bloquée sur sa première marche
+  // indéfiniment. Constaté sur l'appareil réel : 1199 frames perdues, toujours
+  // en « délégué GPU ». Le commentaire de `faceLoop.ts` promettait pourtant
+  // l'inverse — « sonde indisponible : la machine montera par élimination ».
+  // Une montée par ÉLIMINATION ne peut pas dépendre de la disponibilité d'un
+  // témoin : c'est la définition même de l'élimination.
+  if (plan.silentValidFrames >= SWAP_BLIND_AFTER) {
     advance(plan);
     return {
       advanceTo: plan.strategyIndex,
       reason:
-        `aucun des deux détecteurs ne voit de visage sur ${SWAP_BLIND_AFTER} frames valides ` +
+        (plan.probeTried > 0
+          ? `aucun des deux détecteurs ne voit de visage sur ${SWAP_BLIND_AFTER} frames valides `
+          : `sonde indisponible, et rien détecté sur ${SWAP_BLIND_AFTER} frames valides `) +
         `(« ${from} ») → « ${next.label} » par élimination`,
     };
   }
