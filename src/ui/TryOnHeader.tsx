@@ -4,15 +4,11 @@
  */
 
 import { OVERLAY_PADDING_MM } from '../render/composite.js';
+import { APP_BUILD_TAG } from '../core/versions.js';
 import type { Mode } from './TryOn.js';
 
-/**
- * Tampon de build, AFFICHÉ à l'écran. Raison d'être : les pages autonomes sont
- * servies par des CDN qui cachent — sans tampon visible, impossible de savoir
- * depuis une capture d'écran si le client teste la version corrigée ou une
- * vieille copie. Trois allers-retours ont été perdus exactement là-dessus.
- */
-export const BUILD_TAG = 'b11 · 2026-08-21 13:30';
+/** Tampon de build — défini dans `core/versions.ts` (complément 43), affiché ici. */
+export const BUILD_TAG = APP_BUILD_TAG;
 
 export function TryOnHeader(props: { mode: Mode; onQuit(): void }): JSX.Element {
   return (

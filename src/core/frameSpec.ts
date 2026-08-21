@@ -206,6 +206,48 @@ export function parseFrameSpec(raw: unknown): FrameSpec {
 
   const spec = raw as FrameSpec;
 
+  // ⭐ Guide point 55 — validation STRICTE : une fiche mauvaise est UNE
+  // monture invalide, jamais une application invalide (le catalogue l'isole).
+  for (const [name, v] of [
+    ['aMm', spec.aMm],
+    ['pontMm', spec.pontMm],
+    ['brancheMm', spec.brancheMm],
+    ['totalWidthMm', spec.totalWidthMm],
+    ['spritePxPerMm', spec.spritePxPerMm],
+  ] as const) {
+    if (!(v > 0)) {
+      throw new CalibrationError(`spec.json (${spec.slug}) : "${name}" doit être strictement positif (${v}).`);
+    }
+  }
+  const bb = spec.alphaBBox;
+  if (!(bb.w > 0) || !(bb.h > 0) || !Number.isFinite(bb.x) || !Number.isFinite(bb.y) || bb.x < 0 || bb.y < 0) {
+    throw new CalibrationError(`spec.json (${spec.slug}) : alphaBBox dégénérée (${bb.x},${bb.y},${bb.w},${bb.h}).`);
+  }
+  // Les ancres doivent vivre DANS l'image (bbox + marges) : un bridgeCenter à
+  // (0,0) décalerait toute la monture sans rien signaler.
+  const maxX = bb.x + bb.w * 1.5;
+  const maxY = bb.y + bb.h * 3;
+  for (const [name, p] of [
+    ['bridgeCenter', spec.bridgeCenter],
+    ['lensCenterL', spec.lensCenterL],
+    ['lensCenterR', spec.lensCenterR],
+  ] as const) {
+    if (!Number.isFinite(p.x) || !Number.isFinite(p.y) || p.x < 0 || p.y < 0 || p.x > maxX || p.y > maxY) {
+      throw new CalibrationError(
+        `spec.json (${spec.slug}) : "${name}" (${p.x}, ${p.y}) hors de l'image du sprite.`,
+      );
+    }
+  }
+  for (const [name, v] of [
+    ['profilePxPerMm', spec.profilePxPerMm],
+    ['profileReferenceLengthMm', spec.profileReferenceLengthMm],
+    ['templeRectifiedMm', spec.templeRectifiedMm],
+  ] as const) {
+    if (v !== undefined && !(v > 0)) {
+      throw new CalibrationError(`spec.json (${spec.slug}) : "${name}" présent mais non positif (${v}).`);
+    }
+  }
+
   // Cohérence interne : totalWidthMm DOIT être la bbox convertie, pas une saisie libre.
   const derived = totalFrameWidthMm(spec);
   if (Math.abs(derived - spec.totalWidthMm) > 0.5) {
