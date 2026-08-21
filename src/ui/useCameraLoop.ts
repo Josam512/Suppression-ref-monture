@@ -1,14 +1,5 @@
 /**
- * ui/useCameraLoop.ts — webcam + boucle de détection (couches 1-4). Monté UNE fois.
- *
- * Reprise de fond (mission détection 2026-08-20) : la boucle elle-même vit dans
- * `tracking/faceLoop.ts` — acquisition, normalisation et validité des frames
- * (frameFeed), second avis FaceDetector (faceProbe), landmarks (landmarker),
- * décisions PROUVÉES (detectionPlan). Ici, il ne reste que ce qui est propre à
- * l'IHM : getUserMedia, le dimensionnement du canvas, le cycle de vie React.
- *
- * ⚠️ Les gestionnaires sont lus dans une `ref` à chaque frame : recréer la
- * boucle à chaque rendu React lui ferait perdre ses compteurs (§1 bug #3).
+ * ui/useCameraLoop.ts — webcam + boucle de détection. Monté UNE fois.
  */
 
 import { useEffect, useRef, type RefObject } from 'react';
@@ -17,28 +8,15 @@ import type { NormalizedLandmark } from '../core/geom.js';
 
 export interface CameraHandlers {
   onFrame(ctx: CanvasRenderingContext2D, lm: readonly NormalizedLandmark[], yawRad: number): void;
-  /**
-   * Pas de landmarks sur cette frame. `cause` sépare (§11) :
-   *  - 'invalid-input' : problème d'ENTRÉE caméra (frame noire, 0×0…), nommé ;
-   *  - 'no-face'       : frame valide, visage non trouvé — « recherche… ».
-   * La pose (« mettez-vous de face ») n'est PAS un état de détection : elle
-   * appartient aux gates de mesure.
-   */
   onLost(ctx: CanvasRenderingContext2D, n: number, cause: LostCause, reason: string | null): void;
   onProgress(ratio: number): void;
-  /** Appelé une fois, quand la caméra et le modèle sont prêts. */
-  onReady(): void;
+  /** Appelé quand caméra + modèle sont prêts, avec l'identité caméra réellement ouverte. */
+  onReady(settings: MediaTrackSettings): void;
   onError(message: string): void;
 }
 
-/** Au-delà, l'init est déclarée en échec au lieu de rester `loading` à vie (audit A3). */
 export const CAMERA_INIT_TIMEOUT_MS = 15_000;
 
-/**
- * Un échec d'init peut remonter un `Event` (chargement WASM, piste vidéo) dont
- * `String(err)` donne « [object Event] » — le message vide de sens que l'audit a
- * reproduit sur un clone frais. On nomme la cause probable à la place.
- */
 function describeInitError(err: unknown): string {
   if (err instanceof Error && err.message.length > 0) return err.message;
   return (
@@ -51,7 +29,6 @@ export function useCameraLoop(
   videoRef: RefObject<HTMLVideoElement | null>,
   canvasRef: RefObject<HTMLCanvasElement | null>,
   handlers: CameraHandlers,
-  /** Incrémenté par le bouton « Réessayer » : tout se remonte proprement. */
   attempt = 0,
 ): void {
   const held = useRef(handlers);
@@ -74,9 +51,6 @@ export function useCameraLoop(
         video.srcObject = stream;
         await video.play();
 
-        // Dimensionner le canvas PUIS seulement démarrer la boucle (§2).
-        // ⚠️ Avec délai : une promesse qui n'arrive jamais laissait la page en
-        // `loading` pour toujours, sans raison affichée (audit A3).
         if (video.readyState < 2) {
           await new Promise<void>((resolve, reject) => {
             const t = setTimeout(
@@ -115,7 +89,8 @@ export function useCameraLoop(
           return;
         }
         loop = control;
-        held.current.onReady();
+        const track = stream.getVideoTracks()[0];
+        held.current.onReady(track?.getSettings() ?? {});
       } catch (err) {
         if (!disposed) held.current.onError(describeInitError(err));
       }
