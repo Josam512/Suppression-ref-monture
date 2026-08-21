@@ -37,8 +37,17 @@ export interface FaceProbe {
 
 export async function createFaceProbe(delegate: Delegate = 'CPU'): Promise<FaceProbe> {
   const fileset = await visionFileset();
+  // 🔴 2026-08-21 — le modèle était fourni par `modelAssetPath`, donc par une
+  // URL que MediaPipe va chercher lui-même. Dans la page autonome cette URL est
+  // un `blob:` créé par le document ; sur l'appareil réel la sonde ne s'est
+  // JAMAIS chargée (« sonde indisponible » à l'écran) alors que le landmarker,
+  // lui, se créait — et lui reçoit ses OCTETS, jamais une URL. On aligne donc
+  // la sonde sur le chemin qui fonctionne : on récupère les octets nous-mêmes.
+  const res = await fetch(assetUrl(FACE_PROBE_MODEL));
+  if (!res.ok) throw new Error(`sonde : modèle introuvable (${res.status})`);
+  const modelAssetBuffer = new Uint8Array(await res.arrayBuffer());
   const detector = await FaceDetector.createFromOptions(fileset, {
-    baseOptions: { modelAssetPath: assetUrl(FACE_PROBE_MODEL), delegate },
+    baseOptions: { modelAssetBuffer, delegate },
     runningMode: 'VIDEO',
   });
 

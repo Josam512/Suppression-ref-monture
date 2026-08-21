@@ -99,12 +99,27 @@ export async function startFaceLoop(
   let probeLoading = false;
   let swapping = false;
   let disposed = false;
+  /** Dernière erreur de CRÉATION d'un modèle. Jamais avalée : affichée. */
+  let modelError: string | null = null;
+  /** Erreur de chargement de la SONDE. Idem — `.catch(() => {})` était un
+   *  échec silencieux, très exactement ce que le §1 bug #3 interdit. */
+  let probeError: string | null = null;
   let lostStreak = 0;
   let lastTs = -1;
   const scratch = document.createElement('canvas');
 
   const onSnapshot = (s: FrameSnapshot): void => {
-    if (disposed || swapping || landmarker === null) return;
+    if (disposed) return;
+    // 🔴 2026-08-21 — ce `return` muet figeait l'écran. Quand la création du
+    // modèle suivant échouait, `swapping` restait vrai et `landmarker` nul
+    // POUR TOUJOURS : plus aucun `onLost`, compteur gelé, séance morte, et
+    // rien à l'écran pour le dire. Constaté sur l'appareil réel : figé à 130.
+    if (swapping || landmarker === null) {
+      lostStreak++;
+      handlers.onLost(lostStreak, 'no-face', modelError ?? 'changement de stratégie en cours');
+      if (landmarker === null && !swapping) ensureLandmarker();
+      return;
+    }
 
     if (!s.validity.valid) {
       lostStreak++;
@@ -150,7 +165,13 @@ export async function startFaceLoop(
             if (disposed) p.close();
             else probe = p;
           })
-          .catch(() => {}); // sonde indisponible : la machine montera par élimination
+          .catch((err: unknown) => {
+            // 🔴 L'erreur était jetée à la poubelle : impossible de savoir
+            // POURQUOI la sonde manquait. Elle est désormais retenue et
+            // affichée — la machine, elle, monte quand même par élimination.
+            probeError = err instanceof Error ? err.message.slice(0, 80) : String(err).slice(0, 80);
+            probeLoading = false;
+          });
       }
     }
 
@@ -161,29 +182,50 @@ export async function startFaceLoop(
     handlers.onLost(
       lostStreak,
       'no-face',
-      `${strategy.label} · sonde ${probe === null ? 'indisponible' : `${plan.probeHits}/${plan.probeTried}`}`,
+      `${strategy.label} · sonde ${
+        probe !== null ? `${plan.probeHits}/${plan.probeTried}` : (probeError ?? 'en chargement')
+      }`,
     );
 
     if (t.advanceTo !== null) {
-      swapping = true;
-      const next = currentStrategy(plan);
-      handlers.onTransition?.(t.reason ?? next.label);
+      handlers.onTransition?.(t.reason ?? currentStrategy(plan).label);
       landmarker.close();
       landmarker = null;
-      void createLandmarker(() => {}, next.delegate, next.minConfidence)
-        .then((fresh) => {
-          if (disposed) fresh.close();
-          else {
-            landmarker = fresh;
-            lastTs = -1; // nouvelle instance → nouveau domaine de timestamps
-            swapping = false;
-          }
-        })
-        .catch((err) => {
-          handlers.onError?.(err instanceof Error ? err.message : String(err));
-        });
+      ensureLandmarker();
     }
   };
+
+  /**
+   * (Re)crée le modèle de la stratégie courante. Idempotente, et surtout : un
+   * échec ne laisse JAMAIS la boucle sans issue — on redescend d'une marche
+   * (celle qui s'était créée) et on réessaie à la frame suivante. Le seul état
+   * durable possible est « un modèle vivant », ou « une erreur affichée ».
+   */
+  function ensureLandmarker(): void {
+    if (disposed || swapping || landmarker !== null) return;
+    swapping = true;
+    const target = currentStrategy(plan);
+    void createLandmarker(() => {}, target.delegate, target.minConfidence)
+      .then((fresh) => {
+        if (disposed) fresh.close();
+        else {
+          landmarker = fresh;
+          modelError = null;
+          lastTs = -1; // nouvelle instance → nouveau domaine de timestamps
+        }
+      })
+      .catch((err: unknown) => {
+        modelError = `modèle « ${target.label} » indisponible : ${
+          err instanceof Error ? err.message.slice(0, 70) : String(err).slice(0, 70)
+        }`;
+        handlers.onError?.(modelError);
+        // Repli : la marche précédente s'était créée, elle vaut mieux que rien.
+        if (plan.strategyIndex > 0) plan.strategyIndex--;
+      })
+      .finally(() => {
+        swapping = false;
+      });
+  }
 
   const feed = attachFrameFeed(video, onSnapshot);
   return {
