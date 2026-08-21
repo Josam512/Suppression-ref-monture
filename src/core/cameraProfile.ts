@@ -6,17 +6,10 @@ import { CalibrationError } from './geom.js';
 import { FOCAL_MAX_REL, FOCAL_MIN_REL } from './cardPose.js';
 
 export interface CameraProfile {
-  /** Focale ÷ largeur d'image. Invariante par changement de résolution. */
   focalPerWidth: number;
   relError: number;
   views: number;
   measuredAt: number;
-  /**
-   * Identité du périphérique getUserMedia ayant produit la focale, quand elle
-   * est disponible après autorisation caméra. Sans ce lien, un profil mesuré
-   * sur une caméra frontale peut être réutilisé sur un autre objectif/crop et
-   * contaminer distance + correction de plan pendant six mois.
-   */
   deviceId?: string;
 }
 
@@ -53,8 +46,6 @@ export function profileFromSweep(
 }
 
 export function mergeProfile(stored: CameraProfile | null, fresh: CameraProfile): CameraProfile {
-  // Deux deviceId explicitement différents = deux objectifs. Ne jamais les
-  // moyenner comme s'il s'agissait de mesures répétées du même instrument.
   if (
     stored !== null &&
     stored.deviceId !== undefined &&
@@ -69,13 +60,14 @@ export function mergeProfile(stored: CameraProfile | null, fresh: CameraProfile)
   const wb = 1 / fresh.relError ** 2;
   const focalPerWidth = (stored.focalPerWidth * wa + fresh.focalPerWidth * wb) / (wa + wb);
   const combined = 1 / Math.sqrt(wa + wb);
+  const deviceId = fresh.deviceId ?? stored.deviceId;
 
   return {
     focalPerWidth,
     relError: Math.max(combined, FOCAL_SYSTEMATIC_FLOOR),
     views: stored.views + fresh.views,
     measuredAt: fresh.measuredAt,
-    deviceId: fresh.deviceId ?? stored.deviceId,
+    ...(deviceId !== undefined ? { deviceId } : {}),
   };
 }
 
@@ -87,11 +79,8 @@ export function isProfileUsable(profile: CameraProfile | null, now: number): boo
   return now - profile.measuredAt <= PROFILE_MAX_AGE_MS;
 }
 
-/** Profil compatible avec la caméra effectivement ouverte dans cette session. */
 export function isProfileForDevice(profile: CameraProfile | null, deviceId: string | undefined): boolean {
   if (profile === null) return false;
-  // Si le navigateur ne fournit pas d'identité, on ne prétend pas pouvoir
-  // vérifier : l'appelant décidera s'il accepte le profil ou revient au prior.
   if (deviceId === undefined || deviceId.length === 0) return profile.deviceId === undefined;
   return profile.deviceId === deviceId;
 }
