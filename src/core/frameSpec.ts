@@ -79,7 +79,19 @@ export interface FrameSpec {
   profilePxPerMm?: number;
   /** Angle de vue MESURE sur la photo 3/4, en degres. Traçabilite seulement. */
   profileViewAngleDeg?: number;
-  /** Longueur de branche obtenue apres redressement. C'est un CONTROLE, pas un reglage. */
+  /**
+   * ⭐ Complément 30 — longueur de RÉFÉRENCE du sprite de profil : la longueur
+   * de branche telle que le redressement l'a LUE dans les pixels, celle contre
+   * laquelle `profilePxPerMm` a été calibrée. Elle ne sert QU'À ça.
+   *
+   * 🔴 Ce n'est PAS la longueur physique de la branche : c'est `brancheMm`
+   * (la cote fabricant) que le renderer peint — les fiches réelles montraient
+   * des écarts énormes (147 → 137,1 ; 145 → 174,5) et l'ancien nom
+   * `templeRectifiedMm` avait fini par SERVIR de longueur physique. Le rapport
+   * `brancheMm / profileReferenceLengthMm` corrige l'échelle du sprite.
+   */
+  profileReferenceLengthMm?: number;
+  /** Nom HISTORIQUE de `profileReferenceLengthMm` — lu en repli, plus jamais écrit. */
   templeRectifiedMm?: number;
 
   calibratedAt: string;

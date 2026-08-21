@@ -24,6 +24,7 @@ import {
   spriteToScreen,
   templeAffine,
   templeLengthMm,
+  profileScaleCorrection,
 } from '../src/core/transform.js';
 import { totalFrameWidthMm } from '../src/core/frameSpec.js';
 import { makeCal, specForTotalWidthMm, SPRITE_PX_PER_MM, W, H } from './fixtures/builders.js';
@@ -138,9 +139,20 @@ describe('BRANCHE : échelle PHYSIQUE, départ au tenon, fin libre (2026-08-19)'
     expect(paintedMm).toBeCloseTo(140 * Math.sin(Math.PI / 6), 6);
   });
 
-  it('templeRectifiedMm (profil redressé) PRIME sur la longueur nominale', () => {
+  it('🔴 RÈGLE CHANGÉE (guide pt 51/c30) : la longueur PEINTE est la cote FABRICANT', () => {
+    // L'ancien test verrouillait l'inverse — « templeRectifiedMm PRIME » — et
+    // c'est exactement ce que le guide interdit : les fiches réelles portaient
+    // 147 → 137,1 et 145 → 174,5, trois longueurs physiques contradictoires
+    // pour le même objet. Le redressement ne calibre que les PIXELS du sprite
+    // (profileScaleCorrection) ; la longueur physique reste `brancheMm`.
     const redresse = { ...b140, templeRectifiedMm: 174.5, profilePxPerMm: 4.86 };
-    expect(templeLengthMm(redresse)).toBeCloseTo(174.5, 6);
+    expect(templeLengthMm(redresse)).toBeCloseTo(b140.brancheMm, 6);
+    expect(profileScaleCorrection(redresse)).toBeCloseTo(b140.brancheMm / 174.5, 6);
+    // Le nouveau nom explicite est lu en priorité, l'historique en repli.
+    const renomme = { ...b140, profileReferenceLengthMm: 150, templeRectifiedMm: 174.5 };
+    expect(profileScaleCorrection(renomme)).toBeCloseTo(b140.brancheMm / 150, 6);
+    // Sans référence (profil photographié à plat) : aucune correction.
+    expect(profileScaleCorrection(b140)).toBe(1);
   });
 
   it('le DÉPART est le tenon : explicite s’il est marqué, approximation sinon', () => {

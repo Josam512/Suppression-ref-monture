@@ -17,35 +17,16 @@ import type { FrameMetrics } from './faceMetrics.js';
 
 
 /**
- * ⭐ `VERTICAL_OFFSET_MM` a été SUPPRIMÉE. Ce commentaire prend sa place pour
- * que personne ne la réintroduise en croyant combler un trou.
+ * ⭐ `VERTICAL_OFFSET_MM` a été SUPPRIMÉE — ne pas la réintroduire.
  *
- * ## Pourquoi elle était incalibrable, et pas seulement non calibrée
- *
- * Elle décalait le centre du PONT sous le sellion. Or ce n'est pas le pont que
- * l'œil juge, ce sont les CENTRES OPTIQUES — et sur une monture réelle ils sont
- * franchement plus bas que le pont : 10,4 mm sur la fiche `severine`, valeur
- * lue dans son `spec.json`, et qui change d'une monture à l'autre. Ancrer le
- * pont à 3 mm sous le sellion envoyait donc les centres optiques ~13 mm sous la
- * ligne des yeux. C'est ce que montrent les photos de vérification : les
- * pupilles se retrouvent tout en haut des verres.
- *
- * Aucune valeur de cette constante ne pouvait corriger ça, parce qu'elle
- * ignorait la seule grandeur qui décide : l'écart pont ↔ centres optiques,
- * propre à CHAQUE monture.
- *
- * ## Ce qui la remplace : rien à calibrer
- *
- * `core/faceMetrics.ts` → `poseAnchorOf` : la médiane du nez donne le X, la
- * ligne des yeux donne le Y. Le sprite est ancré par ses PROPRES centres
- * optiques. Il n'y a plus de paramètre libre, donc plus de séance d'opticien
- * pour cette grandeur — c'est le lot 8 amputé de sa moitié.
- *
- * ⚠️ Hypothèse assumée, et qui doit rester écrite : la monture est montrée
- * telle qu'un opticien l'ajusterait, plaquettes réglées pour amener le centre
- * optique à hauteur de pupille. Une monture dont les plaquettes ne le
- * permettraient pas sur ce nez-là n'est pas modélisée. C'est une convention de
- * pose déclarée, pas une constante cachée.
+ * Elle décalait le centre du PONT sous le sellion, alors que l'œil juge les
+ * CENTRES OPTIQUES (10,4 mm plus bas sur la fiche `severine`, et cet écart
+ * change par monture) : les pupilles finissaient tout en haut des verres, et
+ * AUCUNE valeur ne pouvait corriger ça. Remplacée par `poseAnchorOf`
+ * (`core/faceMetrics.ts`) : médiane du nez en X, ligne des yeux en Y, le
+ * sprite ancré par ses PROPRES centres optiques — zéro paramètre libre.
+ * Hypothèse assumée : la monture est montrée telle qu'un opticien la
+ * réglerait, centre optique à hauteur de pupille (convention déclarée).
  */
 
 /** Matrice affine au format `ctx.setTransform(a, b, c, d, e, f)`. */
@@ -231,7 +212,11 @@ export function templeAffine(spec: FrameSpec, m: FrameMetrics, side: 1 | -1): Af
   // Échelle PHYSIQUE, sans paramètre libre. Le long de la branche : sin(|yaw|).
   // Perpendiculairement : l'épaisseur reste à l'échelle réelle — un raccourci
   // de perspective raccourcit, il n'amincit pas.
-  const s = m.livePxPerMm / (spec.profilePxPerMm ?? spec.spritePxPerMm);
+  //
+  // ⭐ Complément 30 — le sprite redressé est corrigé du rapport
+  // `brancheMm / profileReferenceLengthMm` : sa longueur PEINTE est la cote
+  // FABRICANT, pas ce que le redressement a cru lire (145 → 174,5 constaté).
+  const s = (m.livePxPerMm * profileScaleCorrection(spec)) / (spec.profilePxPerMm ?? spec.spritePxPerMm);
   const along = s * Math.sin(Math.abs(m.yawRad));
 
   const a = ux * along;
@@ -252,15 +237,41 @@ export function templeAffine(spec: FrameSpec, m: FrameMetrics, side: 1 | -1): Af
   };
 }
 
-/** Longueur de branche du sprite de profil, en mm. Redressée si elle l'a été. */
+/**
+ * ⭐ Complément 30 / point 51 — la longueur de RÉFÉRENCE du sprite de profil :
+ * ce que la calibration du sprite a lu, jamais ce que le renderer peint.
+ */
+export function profileReferenceLengthMm(spec: FrameSpec): number | null {
+  return spec.profileReferenceLengthMm ?? spec.templeRectifiedMm ?? null;
+}
+
+/**
+ * Correction d'échelle du sprite de profil : `brancheMm / référence`.
+ * Vaut 1 quand le profil a été photographié à plat (aucune référence) —
+ * `profilePxPerMm`/`spritePxPerMm` y est déjà la vraie échelle.
+ */
+export function profileScaleCorrection(spec: FrameSpec): number {
+  const ref = profileReferenceLengthMm(spec);
+  if (ref === null || !(ref > 0) || !(spec.brancheMm > 0)) return 1;
+  return spec.brancheMm / ref;
+}
+
+/**
+ * Longueur PHYSIQUE de la branche, en mm : la cote FABRICANT, toujours.
+ *
+ * 🔴 Point 51 — l'ancienne version rendait `templeRectifiedMm ?? brancheMm` :
+ * la longueur issue du redressement photo SERVAIT de longueur physique, avec
+ * des contradictions énormes sur les fiches réelles (147 → 137,1 mm ;
+ * 145 → 174,5 mm). La référence du sprite ne calibre que ses pixels
+ * (`profileScaleCorrection`) ; la longueur peinte est celle du fabricant.
+ */
 export function templeLengthMm(spec: FrameSpec): number {
-  const mm = spec.templeRectifiedMm ?? spec.brancheMm;
-  if (!(mm > 0)) {
+  if (!(spec.brancheMm > 0)) {
     throw new CalibrationError(
       `Longueur de branche nulle sur "${spec.slug}" : sprite de profil non préparé.`,
     );
   }
-  return mm;
+  return spec.brancheMm;
 }
 
 /**

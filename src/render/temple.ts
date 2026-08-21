@@ -7,7 +7,16 @@
 
 import type { FrameSpec } from '../core/frameSpec.js';
 import type { FrameMetrics } from '../core/faceMetrics.js';
-import { templeAffine } from '../core/transform.js';
+import { spriteToScreen, templeAffine, templeRootOf } from '../core/transform.js';
+
+/**
+ * ⭐ Guide point 52 — rayon PROTÉGÉ autour du tenon, en mm réels : l'occlusion
+ * du visage n'a pas le droit d'effacer la racine de la branche. Le tenon est
+ * projeté SUR le visage (il en sort), et `destination-out` y découpait un trou
+ * — « tenon → trou → branche » donnait l'impression d'une géométrie fausse
+ * alors que c'était le masque qui l'effaçait.
+ */
+export const TEMPLE_ROOT_PROTECT_MM = 8;
 
 export interface ProfileSprite {
   img: CanvasImageSource;
@@ -71,7 +80,20 @@ export function drawTemple(
   if (faceOutline !== null) {
     octx.setTransform(1, 0, 0, 1, 0, 0); // le contour est déjà en coordonnées écran
     octx.globalCompositeOperation = 'destination-out';
+    // ⭐ Point 52 — le masque s'applique PARTOUT SAUF autour du tenon : un
+    // disque de TEMPLE_ROOT_PROTECT_MM y est retranché du masque (clip
+    // evenodd), la racine de la branche reste attachée à la face.
+    const anchor = spriteToScreen(templeRootOf(profile.spec, side), profile.spec, m);
+    const r = TEMPLE_ROOT_PROTECT_MM * m.livePxPerMm;
+    octx.save();
+    if (Number.isFinite(anchor.x) && Number.isFinite(anchor.y) && Number.isFinite(r) && r > 0) {
+      const clipZone = new Path2D();
+      clipZone.rect(0, 0, off.width, off.height);
+      clipZone.arc(anchor.x, anchor.y, r, 0, 2 * Math.PI);
+      octx.clip(clipZone, 'evenodd');
+    }
     octx.fill(faceOutline);
+    octx.restore();
   }
 
   ctx.save();
