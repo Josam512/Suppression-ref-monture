@@ -23,6 +23,7 @@ import {
   assembleFaceScale,
   assemblePd,
   assembleTemporal,
+  distanceNotes,
   focalChoiceFor,
   pdFieldsOf,
 } from '../core/autoCalibrate.js';
@@ -149,6 +150,7 @@ export function useAutoCalibration(deps: AutoCalibrationDeps): AutoCalibration {
     let distanceMm: number | null = null;
     try {
       distanceMm = assembleDistanceMm(m, focal);
+      notes.push(...distanceNotes(focal, distanceMm));
     } catch (err) {
       const f = failureOf(err);
       if (st.pd.phase !== 'ready') st.pd = { ...st.pd, phase: 'retrying', failure: f };

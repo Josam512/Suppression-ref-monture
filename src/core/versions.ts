@@ -36,3 +36,12 @@ export const CAMERA_PROFILE_VERSION = 2; // identité d'objectif (deviceId/facin
  * perdus exactement là-dessus.
  */
 export const APP_BUILD_TAG = 'b12 · 2026-08-21';
+
+declare const __GIT_SHA__: string | undefined;
+
+/**
+ * SHA du commit injecté au BUILD (vite `define`, complément 38) : le HUD dit
+ * exactement quel code tourne — un `?v=…` d'URL n'a jamais rien prouvé.
+ * « dev » hors build (serveur de dev, tests).
+ */
+export const GIT_SHA: string = typeof __GIT_SHA__ === 'string' ? __GIT_SHA__ : 'dev';

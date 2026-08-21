@@ -18,7 +18,8 @@ import { describe, expect, it } from 'vitest';
 // STATIQUE et compte les `it(` du source. Une boucle `for` autour d'un `it(`
 // compte pour 1 mais s'exécute N fois : les deux grandeurs ne sont pas
 // comparables. Le plancher était donc inatteignable. Valeur réelle : 301.
-const EXPECTED_MIN_TESTS = 301; // … | demi-PD + cotes monture : 231 | branche physique + non-adaptation + temporal auto + pose : 249 | prototypes frontal + nez (hors production) : 265 | gate demi-PD face stricte + garde de distance : 268 | refonte détection (validité de frame + machine d'état prouvée) : 278
+const EXPECTED_MIN_TESTS = 351; // … | demi-PD + cotes monture : 231 | branche physique + non-adaptation + temporal auto + pose : 249 | prototypes frontal + nez (hors production) : 265 | gate demi-PD face stricte + garde de distance : 268 | refonte détection (validité de frame + machine d'état prouvée) : 278
+// fiabilisation 2026-08-21 (guide maître 80+47 pts) : 351
 // écart temporal mesuré + règle des 300 lignes : 94 | recoloriage V2 2,5 D : 101 | lunettes portees refusees : 103 | distance mesuree + borne anatomique : 117
 // carte = mire de calibration (focale + distance mesurées) : 132 | accrochage des coins + balayage : 139
 

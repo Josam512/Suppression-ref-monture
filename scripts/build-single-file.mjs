@@ -153,9 +153,13 @@ ${styles}
 </script>
 `;
 
+// ⚠️ Remplacement PAR FONCTION, jamais par chaine : `String.replace` interprete
+// les motifs `$&`/`$'` DANS la chaine de remplacement — le bundle React contient
+// des `"$&/"` litteraux qui se faisaient reecrire en « APP_PLACEHOLDER/ » et
+// corrompaient l'application embarquee (constate au banc smoke-single).
 writeFileSync(
   OUT,
-  html.replace('PAYLOAD_PLACEHOLDER', JSON.stringify(payload)).replace('APP_PLACEHOLDER', app),
+  html.replace('PAYLOAD_PLACEHOLDER', () => JSON.stringify(payload)).replace('APP_PLACEHOLDER', () => app),
 );
 
 const mo = (n) => (n / 1024 / 1024).toFixed(2) + ' Mo';

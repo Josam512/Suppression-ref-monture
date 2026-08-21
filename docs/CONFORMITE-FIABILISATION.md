@@ -152,3 +152,30 @@ Statuts : ✅ déjà conforme · 🔴 bug confirmé · 🟠 risque/partiel · �
 7. **Rendu avancé** — occlusion racine (52), temple naming (51/c30), verrous hook.
 8. **Persistence/catalogue** — versions+migration (58/c43/c44), spec strict (55), resetTestSession (59), colorways single (63), capacités (28), états 68/69.
 9. **CI/chaos** — HUD (71–73, c6/c10/c11/c38/c41), journey réécrit (75), smoke-single (62/c40), faults (74/76/77/c42), chaos (c46), tests cohérence (78–80, c15/c17/c34), invariants (c45), meta.
+
+## État livré (2026-08-21, fin de refonte) — écarts résiduels ASSUMÉS
+
+Tout le reste du tableau est implémenté et testé (`npm run ci` : typecheck →
+361 tests unitaires → build → single → smoke → smoke-single → journey →
+faults S1–S10 → chaos 100 s). Restent, dits plutôt que tus :
+
+- **74 (matrice)** : couverts en banc — localStorage KO, front/profil 404,
+  spec corrompue, tempête drawImage, rVFC mort, ancienne version d'algo,
+  profil d'un autre appareil, frames noires, échelle GPU→CPU. Couverts en
+  CALCUL PUR (unit) : 0/400 landmarks, gates, retry, fenêtres propres,
+  timeouts. NON exercés en banc : échec de création GPU forcé (le conteneur
+  crée toujours), swap KO transactionnel (logique dans `modelLifecycle`,
+  exercée indirectement par les transitions S9), changement de caméra à
+  chaud, frame figée. À couvrir quand un appareil réel le permettra.
+- **72 (HUD)** : compteurs par étage, heartbeats, iris L/R + écart, échelle
+  de pose, saut aperçu→calibré, PD/OD/OG/temporal/distance de la calibration.
+  Les MÉDIANES INTERMÉDIAIRES de la collecte (PD near live) ne sont pas
+  affichées — l'état par métrique du panneau les remplace.
+- **c41** : SHA-256 du modèle FaceLandmarker affiché au HUD ; le WASM n'est
+  pas hashé (il est vendorisé par `sync-wasm` depuis node_modules, même
+  version que le paquet npm verrouillé par le lockfile).
+- **c31** : l'occlusion est vérifiée au banc à 20° (racine protégée, cœur
+  occlus) — pas encore la série 0/10/30°.
+- **7/c7 (échelle frontale)** : AUCUNE correction appliquée, conformément au
+  complément — l'instrumentation (HUD + render-proof) est en place pour le
+  protocole 40/50/60 cm sur monture connue avant toute décision.

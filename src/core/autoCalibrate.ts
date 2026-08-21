@@ -138,6 +138,25 @@ export interface AutoCalibrationOutput {
   notes: string[];
 }
 
+/** Les notes de PROVENANCE de la distance — mesurée, héritée ou supposée. */
+export function distanceNotes(focal: FocalChoice, distanceMm: number): string[] {
+  const notes: string[] = [];
+  if (distanceMm < CLOSE_DISTANCE_MM) {
+    notes.push(
+      `Vous teniez l'appareil près du visage (~${(distanceMm / 10).toFixed(0)} cm estimés) : ` +
+        `la mesure est faite, avec une marge élargie. À 40–60 cm elle serait plus fine.`,
+    );
+  }
+  notes.push(
+    focal.measured
+      ? `Distance déduite de vos iris et de votre objectif — MESURÉ lors d'une séance ` +
+          `carte précédente sur cet appareil : ${(distanceMm / 10).toFixed(0)} cm (±${(focal.focalRel * 100).toFixed(0)} %). ` +
+          `Sans cet héritage, la marge serait un peu plus large ; la mesure, elle, resterait la même.`
+      : `Distance déduite de vos iris avec un champ de caméra supposé (${AUTO_ASSUMED_HFOV_DEG}°) : ${(distanceMm / 10).toFixed(0)} cm (±${(focal.focalRel * 100).toFixed(0)} %). Elle ne pèse que sur des termes du second ordre.`,
+  );
+  return notes;
+}
+
 /**
  * ⭐ Ce que la séance filmée fournit — quand elle le fournit — pour mesurer
  * l'ÉCART TEMPORAL sur la silhouette. L'image frontale est UNE frame figée
@@ -197,23 +216,9 @@ export function calibrateAuto(
   nowMs: number,
   temporal: AutoTemporalScene | null = null,
 ): AutoCalibrationOutput {
-  const notes: string[] = [];
   const focal = focalChoiceFor(imageWidthPx, storedProfile, nowMs);
   const distanceMm = assembleDistanceMm(m, focal);
-
-  if (distanceMm < CLOSE_DISTANCE_MM) {
-    notes.push(
-      `Vous teniez l'appareil près du visage (~${(distanceMm / 10).toFixed(0)} cm estimés) : ` +
-        `la mesure est faite, avec une marge élargie. À 40–60 cm elle serait plus fine.`,
-    );
-  }
-  notes.push(
-    focal.measured
-      ? `Distance déduite de vos iris et de votre objectif — MESURÉ lors d'une séance ` +
-          `carte précédente sur cet appareil : ${(distanceMm / 10).toFixed(0)} cm (±${(focal.focalRel * 100).toFixed(0)} %). ` +
-          `Sans cet héritage, la marge serait un peu plus large ; la mesure, elle, resterait la même.`
-      : `Distance déduite de vos iris avec un champ de caméra supposé (${AUTO_ASSUMED_HFOV_DEG}°) : ${(distanceMm / 10).toFixed(0)} cm (±${(focal.focalRel * 100).toFixed(0)} %). Elle ne pèse que sur des termes du second ordre.`,
-  );
+  const notes: string[] = distanceNotes(focal, distanceMm);
 
   const pd = assemblePd(m, focal, distanceMm);
   notes.push(...pd.notes);

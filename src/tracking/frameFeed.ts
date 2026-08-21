@@ -226,16 +226,28 @@ export function attachFrameFeed(
   }
 
   // ⭐ Guide point 14 — la sentinelle du flux. Onglet caché exclu : rVFC et RAF
-  // y sont légitimement suspendus, ce n'est pas une panne.
+  // y sont légitimement suspendus, ce n'est pas une panne. DEUX constats
+  // consécutifs sont exigés : une compilation WASM qui bloque le thread
+  // suspend AUSSI la sentinelle, et un seul constat au réveil accusait un flux
+  // parfaitement vivant (faux positif mesuré au banc, 2026-08-21).
   stats.lastFrameAt = performance.now();
+  let framesAtSuspicion = -1;
   const watchdog = setInterval(() => {
     if (!running || !rvfcAlive) return;
     if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
       stats.lastFrameAt = performance.now(); // ne pas accuser un onglet en veille
+      framesAtSuspicion = -1;
       return;
     }
     if (video.readyState < 2) return;
-    if (performance.now() - stats.lastFrameAt <= FEED_STALL_MS) return;
+    if (performance.now() - stats.lastFrameAt <= FEED_STALL_MS) {
+      framesAtSuspicion = -1;
+      return;
+    }
+    if (framesAtSuspicion === -1 || stats.cameraFrames !== framesAtSuspicion) {
+      framesAtSuspicion = stats.cameraFrames; // premier constat : on note, on attend
+      return;
+    }
 
     stats.stalls++;
     stats.method = 'raf';

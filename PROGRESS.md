@@ -1206,3 +1206,72 @@ statique frontale → « Calibration acquise » → essayage ; la rotation n'a j
 
 **Non commité (temporaire)** : `tests/preview-vto.html`, `*.tmp.mjs`, modèle
 tflite, captures — outils de preview de session.
+
+---
+
+## 2026-08-21 — Fiabilisation MAÎTRE (guide 80 points + complément 47)
+
+Refonte complète de la fiabilité, sur cahier des charges humain (127 points,
+mappés un à un dans `docs/CONFORMITE-FIABILISATION.md`). Règle de
+non-interférence écrite dans `docs/ARCHITECTURE.md` : tracking → poses ;
+rendering consomme des poses ; metrology observe sans contrôler le rendu ;
+PD / largeur / temporal indépendants ; le verdict ne modifie rien ; la
+persistance ne pilote jamais la session live ; aucun diagnostic dans le
+chemin produit.
+
+**Ce qui a changé, par moteur :**
+
+- **A (acquisition)** : tick rVFC insubmersible (try/finally) + watchdog de
+  flux à DEUX constats (le premier accusait à tort une compilation WASM qui
+  bloque le thread) ; sonde FaceDetector SORTIE du chemin produit ; montées
+  d'échelle TEMPORELLES (2,5 s/marche à tout fps) ; création MediaPipe sous
+  watchdog 15 s, swap transactionnel (l'ancienne instance ne meurt qu'une
+  fois la neuve en service) ; modèle en cache mémoire, préchargé en parallèle
+  de la caméra ; sortie du modèle validée à la frontière (≥478, points
+  critiques finis) ; tempête d'inférence → recréation puis descente.
+- **B (rendu)** : `core/renderPose` remplace l'aperçu par `calibrateAuto` —
+  échelle de pose SANS validation anatomique, même optique/plan que
+  l'assemblage (le saut aperçu→calibré est instrumenté `live.scaleJump`,
+  jamais lissé) ; One-Euro sur la pose (rendu seul, reset après perte,
+  échelle gelée à fort yaw) ; hold de micro-perte 180 ms ; sprites
+  front/profil indépendants ; catalogue lazy ; aucun NaN au canvas.
+- **C (métrologie)** : PD total = distance DIRECTE 468↔473 ; demi-PD gardées
+  par face stricte ET projection anatomique du sellion (t∈[0,15;0,85]),
+  cohérence OD+OG≈total vérifiée ; horloge de TENTATIVE (0 frame utile en
+  20 s = tentative échouée nommée) ; fenêtre propre par génération ;
+  estimateur iris verrouillé par tentative ; assemblages SCINDÉS à codes
+  typés ; store par métrique (un PD publié survit à un échec de largeur) ;
+  calibration sans PD → essayage immédiat + collecte du manquant en fond ;
+  raffinement temporal d'arrière-plan ; stats P10/P90/outliers/dérive.
+- **D (verdict/diagnostic)** : panneau de mesures PERMANENT ; HUD `?hud=1`
+  (compteurs par étage, heartbeats, SHA du modèle, saut d'échelle) ;
+  `__VTO_HEALTH__` passif pour les bancs ; invariants dev (`devInvariant`).
+- **Persistance** : versions séparées (AUTO_METROLOGY=3, FRAME_SPEC=2,
+  CAMERA_PROFILE=2) ; migration champ par champ ; profil de focale porteur
+  de l'identité de SON objectif, jamais fusionné entre appareils ;
+  `?resetSession=1` pour les bancs ; localStorage insubmersible.
+- **Branche** : la longueur PEINTE est la cote FABRICANT (`brancheMm`) ;
+  `templeRectifiedMm` → `profileReferenceLengthMm` (calibration du sprite
+  seulement) ; racine de branche protégée de l'occlusion (disque 8 mm).
+
+**Bugs RÉELS découverts par les bancs pendant la refonte :**
+
+1. `String.replace(placeholder, app)` dans `build-single-file.mjs`
+   interprétait les `$&` du bundle React : la page autonome embarquait un
+   React corrompu (réécrit en « APP_PLACEHOLDER/ »). Remplacement par
+   fonction. L'artefact b11 testé sur Samsung portait ce risque.
+2. `onProgress(1)` ré-émis à chaque swap (cache modèle) écrasait la phase
+   `mesure-auto` par « Chargement : 100 % » — garde de non-régression.
+3. Le watchdog de flux accusait un faux `rvfc-stalled` au boot (compilation
+   WASM bloquant AUSSI la sentinelle) — deux constats consécutifs exigés.
+4. `docs/verification/essayage-severine.jpg` absente de la branche : la CI
+   n'était pas reproductible depuis un clone propre (c39) — restaurée.
+
+**CI (`npm run ci`)** : typecheck → 351 tests unitaires → build → single →
+smoke (33 contrôles) → smoke-single (l'artefact EXACT du téléphone) →
+journey (parcours fondamental pt 75 : monture AVANT calibration, PD
+61,4±2,8 mm affiché en permanence, tracking continu, changement de monture
+sans perte) → faults (9 scénarios : localStorage KO, front/profil 404, spec
+corrompue, tempête drawImage, rVFC mort, ancienne version d'algo, frames
+noires, échelle GPU→CPU) → chaos (100 s de sabotage aléatoire : 0 passage
+mort, 8 erreurs encaissées, calibration + PD acquis).

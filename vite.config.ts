@@ -1,5 +1,17 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { execSync } from 'node:child_process';
+
+/** SHA du commit, injecté au build (complément 38) — « inconnu » hors dépôt. */
+function gitSha(): string {
+  try {
+    return execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] })
+      .toString()
+      .trim();
+  } catch {
+    return 'inconnu';
+  }
+}
 
 // Le projet tourne obligatoirement sur un serveur de dev (secure context),
 // jamais en file:// — cf. CLAUDE.md §1 bug #5.
@@ -13,6 +25,7 @@ import react from '@vitejs/plugin-react';
  */
 export default defineConfig({
   base: process.env['VITE_BASE'] ?? '/',
+  define: { __GIT_SHA__: JSON.stringify(gitSha()) },
   plugins: [react()],
   server: { port: 5173 },
   build: {

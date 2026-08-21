@@ -20,9 +20,10 @@
 
 import { frameMetrics, eyeLineY } from '../src/core/faceMetrics.js';
 import { totalFrameWidthMm, type FrameSpec } from '../src/core/frameSpec.js';
-import { spriteToScreen } from '../src/core/transform.js';
+import { spriteToScreen, templeRootOf } from '../src/core/transform.js';
 import type { UserCalibration } from '../src/core/calibration.js';
 import { drawFrame, OVERLAY_PADDING_MM } from '../src/render/composite.js';
+import { drawTemple, TEMPLE_ROOT_PROTECT_MM } from '../src/render/temple.js';
 import { makeFace, makeFaceAtYaw, BASE_FACE_PX, W, H } from './fixtures/landmarks.js';
 
 const SPRITE_PX_PER_MM = 12;
@@ -231,6 +232,64 @@ export function runProof(): ProofCase[] {
       'px',
     ),
   );
+
+  // ── 9. ⭐ Guide point 52 / c31 : l'occlusion n'efface JAMAIS la racine de la
+  // branche. Une branche opaque est peinte à 20° de yaw, puis un contour de
+  // visage recouvrant TOUT le tenon lui est appliqué : les pixels dans la zone
+  // protégée (8 mm autour du tenon) doivent SURVIVRE, ceux au cœur du contour,
+  // au-delà de la protection, doivent être occlus — « tenon → trou → branche »
+  // donnait l'impression d'une géométrie fausse alors que c'était le masque.
+  {
+    const yawOcc = Math.PI / 9;
+    const lmOcc = makeFaceAtYaw(yawOcc);
+    const mOcc = frameMetrics(lmOcc, W, H, CAL, yawOcc);
+    const spec2: FrameSpec = { ...SPEC, hingeProfile: { x: 0, y: 30 } };
+    const temple = document.createElement('canvas');
+    temple.width = 145 * SPRITE_PX_PER_MM;
+    temple.height = 60;
+    const tctx = temple.getContext('2d')!;
+    tctx.fillStyle = '#101010';
+    tctx.fillRect(0, 0, temple.width, temple.height);
+
+    const side: 1 | -1 = yawOcc >= 0 ? -1 : 1;
+    const anchor = spriteToScreen(templeRootOf(spec2, side), spec2, mOcc);
+    const ear = side > 0 ? mOcc.ear.right : mOcc.ear.left;
+    const norm = Math.hypot(ear.x - anchor.x, ear.y - anchor.y);
+    const ux = (ear.x - anchor.x) / norm;
+    const uy = (ear.y - anchor.y) / norm;
+
+    // Contour « visage » : un disque de 30 mm autour du tenon — il recouvre
+    // toute la racine, exactement le cas qui la faisait disparaître.
+    const outline = new Path2D();
+    outline.arc(anchor.x, anchor.y, 30 * mOcc.livePxPerMm, 0, 2 * Math.PI);
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    drawTemple(ctx, { img: temple, spec: spec2 }, mOcc, 1, outline);
+    const alphaAt = (mm: number): number => {
+      const x = Math.round(anchor.x + ux * mm * mOcc.livePxPerMm);
+      const y = Math.round(anchor.y + uy * mm * mOcc.livePxPerMm);
+      return ctx.getImageData(x, y, 1, 1).data[3]!;
+    };
+    out.push(
+      compare(
+        'occlusion : la RACINE de branche survit (zone protégée du tenon)',
+        1,
+        alphaAt(TEMPLE_ROOT_PROTECT_MM * 0.5) > 8 ? 1 : 0,
+        0,
+        '',
+      ),
+    );
+    out.push(
+      compare(
+        'occlusion : au-delà de la protection, la branche passe bien DERRIÈRE',
+        0,
+        alphaAt(20) > 8 ? 1 : 0,
+        0,
+        '',
+      ),
+    );
+  }
 
   return out;
 }

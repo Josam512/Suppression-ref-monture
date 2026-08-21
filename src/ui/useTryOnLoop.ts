@@ -20,7 +20,48 @@ import type { Phase } from './CalibrationPanel.js';
 import { stepCrossCheck, stepRotation } from './liveSteps.js';
 import { paintLost, paintScene, sceneHint } from './renderScene.js';
 import { useCameraLoop } from './useCameraLoop.js';
+import { drawDevHud, hudEnabled } from './devHud.js';
+import { invariantReport } from '../core/invariants.js';
 import type { Live } from './liveState.js';
+
+/**
+ * Compteurs de SANTÉ, exposés en lecture seule pour les bancs (points 74–77 :
+ * le chaos test doit pouvoir affirmer « la session récupère ou dit pourquoi »
+ * sans fouiller le DOM). Passif : rien dans le produit ne le lit.
+ */
+function publishHealth(
+  live: Live,
+  stage: { metrology: number; render: number; lastMetrology: string; lastRender: string },
+): void {
+  try {
+    const w = window as unknown as { __VTO_HEALTH__?: unknown };
+    const s = live.loopStats?.() ?? null;
+    w.__VTO_HEALTH__ = {
+      renderedFrames: live.renderedFrames,
+      skippedRenderFrames: live.skippedRenderFrames,
+      lastRenderedAtMs: live.lastRenderedAtMs,
+      lastLandmarksAtMs: live.lastLandmarksAtMs,
+      cameraFrames: s?.feed?.cameraFrames ?? 0,
+      landmarkFrames: s?.landmarkFrames ?? 0,
+      inferenceErrors: s?.inferenceErrors ?? 0,
+      feedStalls: s?.feed?.stalls ?? 0,
+      metrologyErrors: stage.metrology,
+      renderErrors: stage.render,
+      // Point 70 — les DERNIÈRES erreurs, conservées et nommées, jamais avalées.
+      lastMetrologyError: stage.lastMetrology || null,
+      lastRenderError: stage.lastRender || null,
+      lastInferenceError: s?.lastInferenceError ?? null,
+      lastSnapshotError: s?.feed?.lastSnapshotError ?? null,
+      engineAlive: live.auto !== null,
+      calibrated: live.cal !== null,
+      pdReady: live.cal?.pdMm !== undefined,
+      provisional: live.provisional,
+      invariants: invariantReport(),
+    };
+  } catch {
+    // Une télémétrie qui casse la boucle serait un comble.
+  }
+}
 
 /**
  * Micro-perte repeinte (rendu SEUL), en MILLISECONDES — guide point 49 : cinq
@@ -99,11 +140,13 @@ export function useTryOnLoop(deps: TryOnLoopDeps): { retryCamera(): void } {
       try {
         paintScene(ctx, s, lm, yawRad, videoRef.current);
         drawOverlay(ctx, { verdict: s.verdict, consecutiveFailures: 0, hint: sceneHint(s) });
+        if (hudEnabled()) drawDevHud(ctx, s);
       } catch (err) {
         stageErrors.current.render++;
         stageErrors.current.lastRender = err instanceof Error ? err.message : String(err);
         console.error('Rendu —', err);
       }
+      publishHealth(s, stageErrors.current);
     },
     [live, videoRef, phaseRef, pump, setPhase, pushNotice],
   );
@@ -133,11 +176,14 @@ export function useTryOnLoop(deps: TryOnLoopDeps): { retryCamera(): void } {
           return;
         }
         s.verdict = null;
+        s.poseFilter.noteLossAt(performance.now());
         paintLost(ctx, n, cause, reason);
+        if (hudEnabled()) drawDevHud(ctx, s);
       } catch (err) {
         stageErrors.current.render++;
         stageErrors.current.lastRender = err instanceof Error ? err.message : String(err);
       }
+      publishHealth(s, stageErrors.current);
     },
     [live, videoRef, phaseRef, pump],
   );
@@ -151,7 +197,13 @@ export function useTryOnLoop(deps: TryOnLoopDeps): { retryCamera(): void } {
     {
       onFrame: renderFrame,
       onLost: renderLost,
-      onProgress: (ratio) => setPhase({ kind: 'loading', ratio }),
+      // ⚠️ La progression ne peut RÉGRESSER personne : un swap de stratégie
+      // relit le modèle en cache et ré-émet `onProgress(1)` — sans cette
+      // garde, il écrasait la phase active par « Chargement : 100 % » et
+      // l'écran de mesure disparaissait (constaté au banc, 2026-08-21).
+      onProgress: (ratio) => {
+        if (phaseRef.current === 'loading') setPhase({ kind: 'loading', ratio });
+      },
       onReady: (stats) => {
         live.current.loopStats = stats;
         onReadyAction();

@@ -11,6 +11,7 @@
  */
 
 import type { AutoStatus } from '../core/autoCalibration.js';
+import { devInvariant } from '../core/invariants.js';
 import { crossCheckWithIris } from '../core/crossCheck.js';
 import { irisWidthPx, rollRadOf } from '../core/faceMetrics.js';
 import type { NormalizedLandmark } from '../core/geom.js';
@@ -87,6 +88,12 @@ export function stepAutoCalibration(
   s.auto.offer(lm, yawRad, roll, w, h, nowMs);
 
   const status = s.auto.status();
+  // ⭐ Compléments 45 / points 68–69 — un état `collecting` publié DOIT avoir
+  // un moteur derrière lui : c'était le mensonge du bug d'origine.
+  devInvariant(
+    status.state !== 'collecting' || s.auto !== null,
+    'état « collecting » publié sans moteur vivant',
+  );
   // ⭐ Complément 4 — la clé de publication porte TOUT ce qui compte : un
   // retry, un changement de génération ou d'échec de tentative ne peut plus
   // commencer sans que React le sache. (L'ancienne clé à trois champs masquait

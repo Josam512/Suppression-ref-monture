@@ -7,6 +7,7 @@
  */
 
 import { CalibrationError } from './geom.js';
+import { devInvariant } from './invariants.js';
 import { MIN_SPLIT_FRAMES, type AutoMeasures } from './autoCalibration.js';
 import { convergenceRelError, farPdFromNear } from './pupillary.js';
 import type { UserCalibration } from './calibration.js';
@@ -73,6 +74,11 @@ export function assemblePd(m: AutoMeasures, focal: FocalChoice, distanceMm: numb
     return out;
   }
 
+  // ⭐ Complément 45 — l'invariant du contrat des demi-PD, vérifié en dev.
+  devInvariant(
+    m.splitFrames >= MIN_SPLIT_FRAMES,
+    `demi-PD publiées avec ${m.splitFrames} frames strictes (< ${MIN_SPLIT_FRAMES})`,
+  );
   const halfUnc = (halfMm: number, se: number): number =>
     halfMm * Math.hypot(m.priorRelError, se, convergence);
   out.pdRightMm = pdRightMm;
