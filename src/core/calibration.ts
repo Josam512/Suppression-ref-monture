@@ -13,10 +13,7 @@ import { refineCard, type Refinement, type TemporalScene } from './cardRefinemen
 import { CARD_WIDTH_MM } from './cardOptics.js';
 import type { RotatedView } from './parallax.js';
 
-/**
- * Ré-exports de commodité : la carte et sa distance vivent dans
- * `core/cardOptics.ts` (optique pure), mais tout l'aval les importe depuis ici.
- */
+/** Ré-exports de commodité : la carte et sa distance vivent dans `core/cardOptics.ts`. */
 export { ASSUMED_HFOV_DEG, CARD_HEIGHT_MM, CARD_TO_TEMPLE_DEPTH_MM } from './cardOptics.js';
 export { CARD_WIDTH_MM, ISO_ID1_OBJECTS, estimateDistanceMm } from './cardOptics.js';
 export { parallaxRelErrorAt, parallaxRelErrorFromCard } from './cardOptics.js';
@@ -34,7 +31,6 @@ export interface UserCalibration {
   /** iris 0.043 | carte 0.025 (B4) | monture portée 0.02 (T8) */
   relError: number;
   measuredAt: number;
-
   /**
    * ⭐ Écart temporal MESURÉ sur ce client — la largeur de sa tête à hauteur
    * des yeux, là où passe la face d'une monture (`core/temporalWidth.ts`).
@@ -52,15 +48,17 @@ export interface UserCalibration {
   /** Incertitude relative propre à l'écart temporal. Absente avec lui. */
   temporalRelError?: number;
 
+  /** ⭐ Distance caméra ↔ yeux MESURÉE, en mm (guide pt 38) : la géométrie
+   *  perspective aval la reçoit au lieu de supposer 780 mm. Absente = l'aval
+   *  retombe sur la distance nominale, en le disant. */
+  distanceMm?: number;
+
   pdMm?: number; pdRelError?: number; // ⭐ V2 : PD de loin (core/autoCalibrate.ts)
   pdLeftMm?: number; pdRightMm?: number; // demi-PD ANATOMIQUES : right = OD (œil droit)
   pdHalfUncertaintyMm?: { left: number; right: number }; // ± par œil, en mm
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Plage de plausibilité — correctif B5
-// ─────────────────────────────────────────────────────────────────────────────
-
+// ── Plage de plausibilité — correctif B5 ─────────────────────────────────────
 export const FACE_WIDTH_MIN_MM = 95; // enfant de ~3 ans, marge basse
 export const FACE_WIDTH_MAX_MM = 175; // adulte à très forte carrure, marge haute
 
@@ -87,12 +85,13 @@ const CAUSE_BY_SOURCE: Record<CalSource, string> = {
  */
 export function assertPlausibleFaceWidth(mm: number, source: CalSource): void {
   if (Number.isFinite(mm) && mm >= FACE_WIDTH_MIN_MM && mm <= FACE_WIDTH_MAX_MM) return;
-  throw new CalibrationError(`Mesure obtenue : ${mm.toFixed(1)} mm. ${CAUSE_BY_SOURCE[source]}`);
+  throw new CalibrationError(
+    `Mesure obtenue : ${mm.toFixed(1)} mm. ${CAUSE_BY_SOURCE[source]}`,
+    'face-width-out-of-range', // code TYPÉ (complément 3)
+  );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Niveau 1 — l'iris (par défaut, zéro friction)
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Niveau 1 — l'iris (par défaut, zéro friction) ──
 
 export const IRIS_DIAMETER_MM = 11.7; // Google Research, MediaPipe Iris (±0.5 mm)
 export const IRIS_REL_ERROR = 0.043; // 4,3 % — plancher biologique, non réductible
@@ -145,9 +144,7 @@ export function calibrateWithIris(
   return { faceWidthMm, source: 'iris', relError: IRIS_REL_ERROR, measuredAt: Date.now() };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Niveau 2 — la carte bancaire (déclenchée en zone grise)
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Niveau 2 — la carte bancaire (déclenchée en zone grise) ──
 
 /**
  * ⚠️ Correctif B4 — 2,5 %, PAS 1,5 %.
@@ -262,9 +259,7 @@ export function calibrateWithCardMeasured(
   return { cal, refinement };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// V2 — la monture portée comme étalon (§11.3)
-// ─────────────────────────────────────────────────────────────────────────────
+// ── V2 — la monture portée comme étalon (§11.3) ──
 
 /**
  * ⭐ Correctif T8 — 2 %, pas 1 %.

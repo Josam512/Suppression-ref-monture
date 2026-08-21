@@ -87,7 +87,20 @@ export function stepAutoCalibration(
   s.auto.offer(lm, yawRad, roll, w, h, nowMs);
 
   const status = s.auto.status();
-  const key = `${status.state}|${status.usableFrames}|${status.whyNotDone?.code ?? ''}`;
+  // ⭐ Complément 4 — la clé de publication porte TOUT ce qui compte : un
+  // retry, un changement de génération ou d'échec de tentative ne peut plus
+  // commencer sans que React le sache. (L'ancienne clé à trois champs masquait
+  // les retours de tentative.)
+  const key = [
+    status.state,
+    status.usableFrames,
+    status.whyNotDone?.code ?? '',
+    status.attempts,
+    status.lastAttemptFailure?.code ?? '',
+    status.primaryRejectReason ?? '',
+    status.generation,
+    status.phase,
+  ].join('|');
   if (key === s.lastAutoKey) return null;
   s.lastAutoKey = key;
   return status;

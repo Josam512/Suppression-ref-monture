@@ -56,9 +56,36 @@ export function at(lm: readonly NormalizedLandmark[], index: number): Normalized
   return l;
 }
 
+/**
+ * Codes TYPÉS des refus de mesure (complément 3).
+ *
+ * `failedStatusOf` rabattait toutes les erreurs d'assemblage sur
+ * « eyes-too-small » : l'utilisateur était envoyé se rapprocher de la caméra
+ * alors que le vrai problème était un PD aberrant ou une distance invalide.
+ * Chaque refus porte désormais son code ; l'UI mappe le code sur la consigne.
+ */
+export type MetricFailureCode =
+  | 'pd-out-of-range'
+  | 'face-width-out-of-range'
+  | 'invalid-distance'
+  | 'insufficient-half-pd'
+  | 'metric-assembly-error'
+  | 'internal-error';
+
 export class CalibrationError extends Error {
-  constructor(message: string) {
+  /** Nommé quand le refus est un échec d'assemblage métrique ; sinon absent. */
+  readonly code: MetricFailureCode | null;
+
+  constructor(message: string, code: MetricFailureCode | null = null) {
     super(message);
     this.name = 'CalibrationError';
+    this.code = code;
   }
+}
+
+/** Le code d'un refus, quel que soit ce qui a été levé (complément 3). */
+export function failureCodeOf(err: unknown): MetricFailureCode {
+  if (err instanceof CalibrationError && err.code !== null) return err.code;
+  if (err instanceof CalibrationError) return 'metric-assembly-error';
+  return 'internal-error';
 }

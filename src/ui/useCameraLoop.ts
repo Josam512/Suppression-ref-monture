@@ -23,6 +23,7 @@ import { useEffect, useRef, type RefObject } from 'react';
 import { startFaceLoop, type FaceLoopControl, type FaceLoopStats, type LostCause } from '../tracking/faceLoop.js';
 import type { CoordinateSpace } from '../tracking/detectionPlan.js';
 import { preloadLandmarkerAssets } from '../tracking/landmarker.js';
+import type { CameraIdentity } from '../core/cameraProfile.js';
 import type { NormalizedLandmark } from '../core/geom.js';
 
 export interface CameraHandlers {
@@ -43,6 +44,8 @@ export interface CameraHandlers {
   onProgress(ratio: number): void;
   /** Appelé une fois, quand la caméra et le modèle sont prêts. */
   onReady(stats: () => Readonly<FaceLoopStats>): void;
+  /** L'identité de l'objectif RÉELLEMENT ouvert (points 39–40) — avant onReady. */
+  onCameraIdentity?(identity: CameraIdentity): void;
   /** Dégradation RÉCUPÉRABLE (ex. GPU KO → CPU vivant). La séance continue. */
   onWarning(message: string): void;
   /** Fatal : aucune stratégie ne peut continuer. */
@@ -174,6 +177,17 @@ export function useCameraLoop(
         };
         video.addEventListener('resize', onResize);
         detachResize = () => video.removeEventListener('resize', onResize);
+
+        // ⭐ Points 39–40 — l'identité de l'objectif ouvert, pour que le profil
+        // de focale mémorisé ne soit jamais appliqué à un AUTRE objectif.
+        const settings = fresh.getVideoTracks()[0]?.getSettings();
+        if (settings !== undefined) {
+          held.current.onCameraIdentity?.({
+            ...(settings.deviceId !== undefined ? { deviceId: settings.deviceId } : {}),
+            ...(typeof settings.facingMode === 'string' ? { facingMode: settings.facingMode } : {}),
+            ...(video.videoHeight > 0 ? { aspect: video.videoWidth / video.videoHeight } : {}),
+          });
+        }
 
         const ctx = canvas.getContext('2d');
         if (ctx === null) throw new Error('Contexte 2D indisponible.');

@@ -25,6 +25,26 @@ export interface AutoCalibrationStepProps {
 export function AutoCalibrationStep(props: AutoCalibrationStepProps): JSX.Element {
   const { status } = props;
 
+  // ⭐ Guide point 69 — après trop de refus d'assemblage, l'état publié est
+  // HONNÊTE : « mesure indisponible », sa cause typée, ses deux sorties. Plus
+  // jamais un « collecte en cours » sans moteur derrière (point 68) — et
+  // l'essayage, lui, reste affiché en aperçu.
+  if (status.state === 'unavailable') {
+    return (
+      <section>
+        <h2>Mesure automatique indisponible</h2>
+        <p>{status.whyNotDone?.label ?? 'La mesure a échoué plusieurs fois de suite.'}</p>
+        <p>
+          L’essayage reste affiché en aperçu.{' '}
+          <button type="button" onClick={props.onRetry} style={{ fontWeight: 700 }}>
+            Reprendre la mesure
+          </button>{' '}
+          <button type="button" onClick={props.onUseCard}>Utiliser une carte</button>
+        </p>
+      </section>
+    );
+  }
+
   return (
     <section>
       <h2>Mesure automatique en cours — regardez simplement l’écran</h2>

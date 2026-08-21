@@ -100,11 +100,22 @@ export const MAX_PLANE_DELTA = 0.15;
  * En projection perspective l'échelle varie en 1/z : un plan plus proche de la
  * caméra est vu plus grand. `k(Δ) = k_tempes / (1 − Δ/D)`.
  *
+ * ⭐ Guide point 38 — quand la distance a été MESURÉE (calibration courante,
+ * `cal.distanceMm`), c'est ELLE qui entre ici. Le 780 mm nominal n'est plus
+ * qu'un dernier recours, pour les calibrations qui ne la portent pas : deux
+ * mesures de la même séance ne vivent plus dans deux géométries incompatibles.
+ *
  * @param templePxPerMm échelle au plan des repères 234/454 (`livePxPerMm`).
  * @param aheadMm profondeur du plan voulu devant celui des tempes.
+ * @param distanceMm distance caméra ↔ tempes — mesurée quand elle existe.
  */
-export function planeScale(templePxPerMm: number, aheadMm: number): number {
-  const delta = aheadMm / NOMINAL_DISTANCE_MM;
+export function planeScale(
+  templePxPerMm: number,
+  aheadMm: number,
+  distanceMm: number = NOMINAL_DISTANCE_MM,
+): number {
+  const d = Number.isFinite(distanceMm) && distanceMm > 0 ? distanceMm : NOMINAL_DISTANCE_MM;
+  const delta = aheadMm / d;
   if (!Number.isFinite(delta) || Math.abs(delta) > MAX_PLANE_DELTA) return templePxPerMm;
   return templePxPerMm / (1 - delta);
 }
@@ -114,8 +125,13 @@ export function planeScale(templePxPerMm: number, aheadMm: number): number {
  *
  * `d(facteur)/facteur ≈ (Δ/D) × incertitude relative sur (Δ/D)`.
  */
-export function planeScaleRelError(aheadMm: number, sdMm: number): number {
+export function planeScaleRelError(
+  aheadMm: number,
+  sdMm: number,
+  distanceMm: number = NOMINAL_DISTANCE_MM,
+): number {
   if (aheadMm === 0) return 0;
-  const delta = aheadMm / NOMINAL_DISTANCE_MM;
+  const d = Number.isFinite(distanceMm) && distanceMm > 0 ? distanceMm : NOMINAL_DISTANCE_MM;
+  const delta = aheadMm / d;
   return Math.abs(delta) * Math.hypot(sdMm / aheadMm, NOMINAL_DISTANCE_REL_ERROR);
 }

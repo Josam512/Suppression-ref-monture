@@ -1,35 +1,36 @@
 /**
  * core/autoCalibrate.ts — des mesures du moteur automatique à la calibration.
  *
- * ⚠️ Ce fichier est, avec `core/calibration.ts`, le SEUL à construire un
- * `UserCalibration` (source `'auto'`). Il n'en LIT jamais la source — la règle
- * du §4 (aucun branchement sur l'origine) reste entière.
+ * ## Assemblages SÉPARÉS (guide 2026-08-21, points 20–21, 26)
+ *
+ * Le PD et l'échelle de visage sont deux MESURES INDÉPENDANTES : un PD
+ * anatomiquement impossible ne doit pas jeter une largeur valide, ni
+ * l'inverse. `assemblePd` et `assembleFaceScale` échouent donc CHACUN POUR
+ * SOI, avec un code typé (complément 3) ; `calibrateAuto` reste l'orchestrateur
+ * « tout doit réussir » pour les chemins qui veulent la calibration entière.
  *
  * ## Les deux plans, et pourquoi la correction est indispensable
  *
- * L'échelle périoculaire vit AU PLAN DES YEUX. Les repères 234/454 — la
- * grandeur homologue de `faceWidthPx` au rendu — vivent ~45 mm EN ARRIÈRE.
- * En perspective, l'échelle varie en 1/z : convertir la largeur aux tempes
- * avec l'échelle des yeux la sous-estimerait de δz/D (≈ 9 % à 50 cm). C'est le
- * biais B4 de la carte, à l'identique — la V1 iris le laissait entier, il est
- * ici CORRIGÉ et son incertitude propagée.
- *
- * Provenance de chaque terme (RÈGLE ULTIME de la mission) :
- *   - `mmPerPxEye`, `pdNearMm`, `faceWidthEyePlaneMm`, `hvidPx` → MESURÉS ;
- *   - moyennes périoculaires → PRIOR ANTHROPOMÉTRIQUE (ocularScale) ;
- *   - distance caméra → DÉDUITE (iris + focale mesurée) ou HYPOTHÈSE (champ supposé) ;
- *   - profondeur yeux → tempes → HYPOTHÈSE dérivée de CARD_TO_TEMPLE_DEPTH_MM,
- *     à mesurer sur sujets réels (protocole : ETAT-DE-L-ART §16).
+ * L'échelle périoculaire vit AU PLAN DES YEUX. Les repères 234/454 vivent
+ * ~45 mm EN ARRIÈRE. En perspective, l'échelle varie en 1/z : convertir la
+ * largeur aux tempes avec l'échelle des yeux la sous-estimerait de δz/D
+ * (≈ 9 % à 50 cm). La conversion `eyeToTemplePlane` est appliquée UNE fois,
+ * ICI (point 37) — le renderer ne la recompte jamais.
  */
 
 import { assertPlausibleFaceWidth, type UserCalibration } from './calibration.js';
 import { CARD_TO_TEMPLE_DEPTH_MM, CARD_TO_TEMPLE_DEPTH_SD_MM } from './cardOptics.js';
 import { focalPxFor, isProfileUsable, type CameraProfile } from './cameraProfile.js';
-import { CalibrationError, type NormalizedLandmark } from './geom.js';
-import { HVID_MEAN_MM, MIN_SPLIT_FRAMES, type AutoMeasures } from './autoCalibration.js';
-import { convergenceRelError, distanceFromIrisMm, farPdFromNear } from './pupillary.js';
+import { CalibrationError, failureCodeOf, type NormalizedLandmark } from './geom.js';
+import { HVID_MEAN_MM, type AutoMeasures } from './autoCalibration.js';
+import { assemblePd, pdFieldsOf } from './pdAssembly.js';
+import { distanceFromIrisMm } from './pupillary.js';
 import type { ImageBuffer } from './silhouette.js';
 import { measureTemporalWidth } from './temporalWidth.js';
+
+/** Ré-exports : l'assemblage du PD vit dans `core/pdAssembly.ts` (§3). */
+export { assemblePd, pdFieldsOf, HALF_SUM_MAX_REL_GAP, PD_MAX_MM, PD_MIN_MM } from './pdAssembly.js';
+export type { PdAssembly } from './pdAssembly.js';
 
 /**
  * Champ horizontal SUPPOSÉ quand aucun profil d'objectif n'est mémorisé.
@@ -41,29 +42,95 @@ export const FOCAL_PRIOR_REL_ERROR = 0.3;
 
 /**
  * En deçà, le client est PRÈS de la caméra : la correction de plan yeux→tempes
- * domine et la marge sur la largeur s'élargit (±10–14 mm constatés sur le sujet
- * réel à ~20 cm, contre ±6 mm à 40–60 cm). C'est une NOTE de guidage, jamais un
- * refus : la mesure conclut à toute distance et la marge dit le reste (§14.7 —
- * un premier jet en faisait un rejet de frames, qui bloquait toute calibration
- * sur un téléphone tenu à bout de bras : ni essayage ni mesure, le cul-de-sac
- * exact que l'arbitrage interdit).
+ * domine et la marge sur la largeur s'élargit. NOTE de guidage, jamais un refus.
  */
 export const CLOSE_DISTANCE_MM = 300;
 
 /**
  * Profondeur plan des yeux → plan des repères 234/454.
- *
  * Dérivée de `CARD_TO_TEMPLE_DEPTH_MM` (57 ± 8 mm, mesurée sur sujet réel via
  * la carte) moins le recul de la cornée derrière le plan front/carte
- * (~12 ± 9 mm, anatomie ; la cornée est en retrait de la glabelle).
- * HYPOTHÈSE à ±27 % — à mesurer au protocole sujets réels.
+ * (~12 ± 9 mm, anatomie). HYPOTHÈSE à ±27 % — à mesurer au protocole sujets réels.
  */
 export const EYEPLANE_TO_TEMPLE_DEPTH_MM = CARD_TO_TEMPLE_DEPTH_MM - 12;
 export const EYEPLANE_TO_TEMPLE_DEPTH_SD_MM = Math.hypot(CARD_TO_TEMPLE_DEPTH_SD_MM, 9);
 
-/** Plage de plausibilité du PD : enfant de 3 ans (~46 mm) → adulte hors norme. */
-export const PD_MIN_MM = 40;
-export const PD_MAX_MM = 80;
+/** Dérive de série au-delà de laquelle une note « vous avez bougé » est émise. */
+export const DRIFT_NOTE_REL = 0.02;
+
+/** L'optique retenue pour un assemblage — la MÊME pour l'aperçu (renderPose). */
+export interface FocalChoice {
+  focalPx: number;
+  focalRel: number;
+  measured: boolean;
+}
+
+export function focalChoiceFor(
+  imageWidthPx: number,
+  storedProfile: CameraProfile | null,
+  nowMs: number,
+): FocalChoice {
+  const usable = isProfileUsable(storedProfile, nowMs);
+  return {
+    focalPx: usable
+      ? focalPxFor(storedProfile as CameraProfile, imageWidthPx)
+      : imageWidthPx / (2 * Math.tan(((AUTO_ASSUMED_HFOV_DEG / 2) * Math.PI) / 180)),
+    focalRel: usable ? (storedProfile as CameraProfile).relError : FOCAL_PRIOR_REL_ERROR,
+    measured: usable,
+  };
+}
+
+/** Distance caméra ↔ yeux depuis l'iris médian et l'optique retenue. */
+export function assembleDistanceMm(m: AutoMeasures, focal: FocalChoice): number {
+  const d = distanceFromIrisMm(m.hvidPx, focal.focalPx, HVID_MEAN_MM);
+  if (!Number.isFinite(d) || d <= 0) {
+    throw new CalibrationError(
+      `Distance caméra ↔ yeux incalculable (iris médian ${m.hvidPx.toFixed(1)} px).`,
+      'invalid-distance',
+    );
+  }
+  return d;
+}
+
+/** L'échelle de visage assemblée — indépendante du PD (points 21, 26). */
+export interface FaceScaleAssembly {
+  faceWidthMm: number;
+  relError: number;
+  distanceMm: number;
+  /** Conversion plan des yeux → plan des tempes appliquée (UNE fois, point 37). */
+  depthCorrection: number;
+  notes: string[];
+}
+
+/** FROM plan des yeux → TO plan des tempes : la SEULE application (points 36–37). */
+export function eyeToTemplePlane(valueEyePlaneMm: number, distanceMm: number): number {
+  return valueEyePlaneMm * (1 + EYEPLANE_TO_TEMPLE_DEPTH_MM / distanceMm);
+}
+
+export function assembleFaceScale(m: AutoMeasures, focal: FocalChoice, distanceMm: number): FaceScaleAssembly {
+  const notes: string[] = [];
+  const depthCorrection = 1 + EYEPLANE_TO_TEMPLE_DEPTH_MM / distanceMm;
+  const depthRel =
+    (EYEPLANE_TO_TEMPLE_DEPTH_MM / distanceMm) *
+    Math.hypot(EYEPLANE_TO_TEMPLE_DEPTH_SD_MM / EYEPLANE_TO_TEMPLE_DEPTH_MM, focal.focalRel);
+  const faceWidthMm = eyeToTemplePlane(m.faceWidthEyePlaneMm, distanceMm);
+  const relError = Math.hypot(m.priorRelError, m.scaleStandardError, depthRel);
+  assertPlausibleFaceWidth(faceWidthMm, 'auto');
+  notes.push(
+    `Largeur de visage : ${faceWidthMm.toFixed(0)} mm ± ${(faceWidthMm * relError).toFixed(0)} mm — ` +
+      `dont ${((depthCorrection - 1) * 100).toFixed(1)} % de correction de plan (yeux → tempes), ` +
+      `corrigée au lieu d'être supposée nulle.`,
+  );
+  // ⭐ Point 32 — la dérive de série se DIT : une personne qui avance pendant
+  // la collecte élargit la réalité derrière la médiane.
+  if (Math.abs(m.faceWidthStats.driftRel) > DRIFT_NOTE_REL) {
+    notes.push(
+      `Vous avez bougé pendant la mesure (dérive ${(m.faceWidthStats.driftRel * 100).toFixed(1)} % ` +
+        `entre le début et la fin) : la marge le couvre, mais immobile la mesure serait plus fine.`,
+    );
+  }
+  return { faceWidthMm, relError, distanceMm, depthCorrection, notes };
+}
 
 export interface AutoCalibrationOutput {
   cal: UserCalibration;
@@ -73,12 +140,10 @@ export interface AutoCalibrationOutput {
 
 /**
  * ⭐ Ce que la séance filmée fournit — quand elle le fournit — pour mesurer
- * l'ÉCART TEMPORAL sur la silhouette (§14.2, câblé au parcours sans carte le
- * 2026-08-19). L'image frontale est UNE frame figée pendant la collecte, avec
- * SES landmarks (mêmes pixels, mêmes repères — la leçon de `ui/freezeFrame.ts`) ;
- * le masque de mouvement vient des vues tournées, ou vaut null sans rotation —
- * et sans lui la silhouette n'est PAS tentée : rien ne distingue alors un bord
- * de tête d'un montant de porte.
+ * l'ÉCART TEMPORAL sur la silhouette. L'image frontale est UNE frame figée
+ * pendant la collecte, avec SES landmarks ; le masque de mouvement vient des
+ * vues tournées, ou vaut null sans rotation — et sans lui la silhouette n'est
+ * PAS tentée.
  */
 export interface AutoTemporalScene {
   frontal: ImageBuffer;
@@ -88,9 +153,42 @@ export interface AutoTemporalScene {
   h: number;
 }
 
+/** L'écart temporal, mesuré sur la scène — ne touche QUE ses deux champs (pt 46). */
+export function assembleTemporal(
+  temporal: AutoTemporalScene,
+  templePlanePxPerMm: number,
+  scaleRelError: number,
+): { fields: Pick<UserCalibration, 'temporalWidthMm' | 'temporalRelError'>; note: string } {
+  const t = measureTemporalWidth({
+    frontal: temporal.frontal,
+    motion: temporal.motion,
+    lm: [...temporal.lm],
+    w: temporal.w,
+    h: temporal.h,
+    pxPerMm: templePlanePxPerMm,
+    scaleRelError,
+  });
+  if (t.measured) {
+    return {
+      fields: { temporalWidthMm: t.widthMm, temporalRelError: t.relError },
+      note:
+        `Écart temporal MESURÉ sur votre silhouette : ${t.widthMm.toFixed(0)} mm ` +
+        `± ${(t.widthMm * t.relError).toFixed(0)} mm — c'est lui que la légende compare à la monture.`,
+    };
+  }
+  return {
+    fields: {},
+    note:
+      `Écart temporal non mesuré (${t.reason ?? 'raison inconnue'}). ` +
+      `La légende s'appuiera sur la largeur aux repères, avec sa marge — rien n'est deviné.`,
+  };
+}
+
 /**
- * Assemble la calibration automatique. Lève `CalibrationError` UNIQUEMENT si
- * une grandeur sort de sa plage anatomique — le seul cas où recommencer répare.
+ * Assemble la calibration automatique COMPLÈTE (PD et largeur exigés tous
+ * deux). Lève `CalibrationError` TYPÉE si une grandeur sort de sa plage —
+ * l'appelant qui veut la survie par métrique passe par les assemblages
+ * séparés ci-dessus (c'est ce que fait l'IHM).
  */
 export function calibrateAuto(
   m: AutoMeasures,
@@ -100,15 +198,9 @@ export function calibrateAuto(
   temporal: AutoTemporalScene | null = null,
 ): AutoCalibrationOutput {
   const notes: string[] = [];
+  const focal = focalChoiceFor(imageWidthPx, storedProfile, nowMs);
+  const distanceMm = assembleDistanceMm(m, focal);
 
-  // — Distance caméra ↔ yeux : focale mesurée si on en a une, supposée sinon.
-  const usable = isProfileUsable(storedProfile, nowMs);
-  const focalPx = usable
-    ? focalPxFor(storedProfile as CameraProfile, imageWidthPx)
-    : imageWidthPx / (2 * Math.tan(((AUTO_ASSUMED_HFOV_DEG / 2) * Math.PI) / 180));
-  const focalRel = usable ? (storedProfile as CameraProfile).relError : FOCAL_PRIOR_REL_ERROR;
-
-  const distanceMm = distanceFromIrisMm(m.hvidPx, focalPx, HVID_MEAN_MM);
   if (distanceMm < CLOSE_DISTANCE_MM) {
     notes.push(
       `Vous teniez l'appareil près du visage (~${(distanceMm / 10).toFixed(0)} cm estimés) : ` +
@@ -116,114 +208,28 @@ export function calibrateAuto(
     );
   }
   notes.push(
-    usable
+    focal.measured
       ? `Distance déduite de vos iris et de votre objectif — MESURÉ lors d'une séance ` +
-          `carte précédente sur cet appareil : ${(distanceMm / 10).toFixed(0)} cm (±${(focalRel * 100).toFixed(0)} %). ` +
+          `carte précédente sur cet appareil : ${(distanceMm / 10).toFixed(0)} cm (±${(focal.focalRel * 100).toFixed(0)} %). ` +
           `Sans cet héritage, la marge serait un peu plus large ; la mesure, elle, resterait la même.`
-      : `Distance déduite de vos iris avec un champ de caméra supposé (${AUTO_ASSUMED_HFOV_DEG}°) : ${(distanceMm / 10).toFixed(0)} cm (±${(focalRel * 100).toFixed(0)} %). Elle ne pèse que sur des termes du second ordre.`,
+      : `Distance déduite de vos iris avec un champ de caméra supposé (${AUTO_ASSUMED_HFOV_DEG}°) : ${(distanceMm / 10).toFixed(0)} cm (±${(focal.focalRel * 100).toFixed(0)} %). Elle ne pèse que sur des termes du second ordre.`,
   );
 
-  // — PD : correction de convergence (fixation proche → loin).
-  //
-  // Le TOTAL vient de `pdSumNearMm`, accumulé au gate large (8°) : la somme des
-  // deux demi-écarts est invariante au yaw au premier ordre. Les DEMI-écarts,
-  // eux, ne sont publiés que si assez de frames de face STRICTE les portent
-  // (`MIN_SPLIT_FRAMES`) : au-delà de ~3° de yaw, l'artefact de projection
-  // mesuré sur sujet réel (−1,1 mm/°) fabriquerait une fausse asymétrie.
-  //
-  // Le facteur (D + 13,5)/(D + 3,05) est le même pour les deux yeux tant que la
-  // fixation est sur l'axe médian (HYPOTHÈSE : le client regarde son reflet) :
-  // l'appliquer à chaque demi-écart MESURÉ préserve donc l'asymétrie mesurée —
-  // jamais de retour déguisé à « PD/2 de chaque côté ».
-  const convergence = convergenceRelError(distanceMm, focalRel);
-  const pdMm = farPdFromNear(m.pdSumNearMm, distanceMm);
-  const pdRelError = Math.hypot(m.priorRelError, m.pdSumSE, convergence);
-  if (!(pdMm >= PD_MIN_MM && pdMm <= PD_MAX_MM)) {
-    throw new CalibrationError(
-      `Écart pupillaire obtenu : ${pdMm.toFixed(1)} mm, hors plage anatomique. ` +
-        `La détection des yeux a probablement échoué — recommencez face à la caméra, sans lunettes.`,
-    );
-  }
-
-  const splitUsable = m.splitFrames >= MIN_SPLIT_FRAMES;
-  let halfFields: Pick<UserCalibration, 'pdLeftMm' | 'pdRightMm' | 'pdHalfUncertaintyMm'> = {};
-  if (splitUsable) {
-    const pdRightMm = farPdFromNear(m.pdRightNearMm, distanceMm);
-    const pdLeftMm = farPdFromNear(m.pdLeftNearMm, distanceMm);
-    // Chaque demi-écart porte SON bruit de détection : un œil moins net, plus
-    // près du bord ou partiellement occulté a une erreur-type plus large.
-    const halfUnc = (halfMm: number, se: number): number =>
-      halfMm * Math.hypot(m.priorRelError, se, convergence);
-    const pdHalfUncertaintyMm = {
-      right: halfUnc(pdRightMm, m.pdRightSE),
-      left: halfUnc(pdLeftMm, m.pdLeftSE),
-    };
-    halfFields = { pdLeftMm, pdRightMm, pdHalfUncertaintyMm };
-    notes.push(
-      `Écart pupillaire : ${pdMm.toFixed(1)} mm ± ${(pdMm * pdRelError).toFixed(1)} mm — ` +
-        `demi-PD droite ${pdRightMm.toFixed(1)} ± ${pdHalfUncertaintyMm.right.toFixed(1)} mm, ` +
-        `demi-PD gauche ${pdLeftMm.toFixed(1)} ± ${pdHalfUncertaintyMm.left.toFixed(1)} mm, ` +
-        `mesurées sur ${m.splitFrames} images de face stricte ` +
-        `(dont correction de convergence +${(pdMm - m.pdSumNearMm).toFixed(1)} mm, déduite de la distance).`,
-    );
-  } else {
-    notes.push(
-      `Écart pupillaire : ${pdMm.toFixed(1)} mm ± ${(pdMm * pdRelError).toFixed(1)} mm. ` +
-        `Demi-PD non séparées : pas assez d'images de face stricte (${m.splitFrames}/${MIN_SPLIT_FRAMES}) — ` +
-        `regardez l'écran bien en face quelques secondes pour les obtenir. Rien n'est deviné.`,
-    );
-  }
-
-  // — Largeur 234↔454 : échelle des yeux ramenée au plan des tempes (1/z).
-  const depthCorrection = 1 + EYEPLANE_TO_TEMPLE_DEPTH_MM / distanceMm;
-  const depthRel =
-    (EYEPLANE_TO_TEMPLE_DEPTH_MM / distanceMm) *
-    Math.hypot(EYEPLANE_TO_TEMPLE_DEPTH_SD_MM / EYEPLANE_TO_TEMPLE_DEPTH_MM, focalRel);
-  const faceWidthMm = m.faceWidthEyePlaneMm * depthCorrection;
-  const relError = Math.hypot(m.priorRelError, m.scaleStandardError, depthRel);
-  assertPlausibleFaceWidth(faceWidthMm, 'auto');
-  notes.push(
-    `Largeur de visage : ${faceWidthMm.toFixed(0)} mm ± ${(faceWidthMm * relError).toFixed(0)} mm — ` +
-      `dont ${((depthCorrection - 1) * 100).toFixed(1)} % de correction de plan (yeux → tempes), ` +
-      `corrigée au lieu d'être supposée nulle.`,
-  );
+  const pd = assemblePd(m, focal, distanceMm);
+  notes.push(...pd.notes);
+  const face = assembleFaceScale(m, focal, distanceMm);
+  notes.push(...face.notes);
   if (m.degraded) {
     notes.push(
       `Mesure conclue au délai maximal (${m.usableFrames} images utiles) : la marge est plus large que d'habitude.`,
     );
   }
 
-  // — Écart temporal : MESURÉ sur la silhouette quand la séance l'a permis,
-  //   sinon DIT absent — jamais deviné, jamais remplacé par une constante cachée
-  //   (§14.2 : son absence élargit la marge affichée, rien de plus).
-  //
-  //   L'échelle passée est celle du plan des tempes : l'échelle des yeux (le
-  //   médian de la collecte) corrigée du même 1/z que la largeur ci-dessus.
-  //   La frame figée est l'une des frames collectées : une dérive de distance
-  //   entre elle et le médian est couverte par `relError`, déjà propagée.
   let temporalFields: Pick<UserCalibration, 'temporalWidthMm' | 'temporalRelError'> = {};
   if (temporal !== null) {
-    const t = measureTemporalWidth({
-      frontal: temporal.frontal,
-      motion: temporal.motion,
-      lm: [...temporal.lm],
-      w: temporal.w,
-      h: temporal.h,
-      pxPerMm: 1 / (m.mmPerPxEye * depthCorrection),
-      scaleRelError: relError,
-    });
-    if (t.measured) {
-      temporalFields = { temporalWidthMm: t.widthMm, temporalRelError: t.relError };
-      notes.push(
-        `Écart temporal MESURÉ sur votre silhouette : ${t.widthMm.toFixed(0)} mm ` +
-          `± ${(t.widthMm * t.relError).toFixed(0)} mm — c'est lui que la légende compare à la monture.`,
-      );
-    } else {
-      notes.push(
-        `Écart temporal non mesuré (${t.reason ?? 'raison inconnue'}). ` +
-          `La légende s'appuiera sur la largeur aux repères, avec sa marge — rien n'est deviné.`,
-      );
-    }
+    const t = assembleTemporal(temporal, 1 / (m.mmPerPxEye * face.depthCorrection), face.relError);
+    temporalFields = t.fields;
+    notes.push(t.note);
   } else {
     notes.push(
       `Écart temporal non mesuré : montrez brièvement vos deux profils pendant la mesure ` +
@@ -232,14 +238,16 @@ export function calibrateAuto(
   }
 
   const cal: UserCalibration = {
-    faceWidthMm,
+    faceWidthMm: face.faceWidthMm,
     source: 'auto',
-    relError,
+    relError: face.relError,
     measuredAt: nowMs,
-    pdMm,
-    pdRelError,
-    ...halfFields,
+    distanceMm,
+    ...pdFieldsOf(pd),
     ...temporalFields,
   };
   return { cal, notes };
 }
+
+/** Ré-export pratique pour l'IHM : le code typé d'un refus (complément 3). */
+export { failureCodeOf };

@@ -63,11 +63,35 @@ export const CORNEA_TO_ENTRANCE_PUPIL_MM = 3.05;
  * grandeurs que l'opticien appelle demi-PD droite et gauche.
  */
 export interface PupilPixels {
+  /** ⭐ Distance DIRECTE pupille ↔ pupille — c'est ELLE qui porte le PD total
+   *  (guide point 22) : un sellion décroché ne peut pas la fausser. */
   pdPx: number;
   /** Demi-écart OD : pupille DROITE du client ↔ pied du sellion. Côté 468. */
   rightPx: number;
   /** Demi-écart OG : pupille GAUCHE du client ↔ pied du sellion. Côté 473. */
   leftPx: number;
+  /**
+   * ⭐ Paramètre de la projection du sellion sur le segment (OD → OG) :
+   * 0 = sur la pupille droite, 1 = sur la gauche (guide 23, complément 14).
+   * Anatomiquement il vit vers le milieu ; hors de [SELLION_T_MIN, T_MAX] le
+   * sellion est décroché et les demi-écarts de CETTE frame ne valent rien —
+   * le PD total, lui, reste bon (distance directe).
+   */
+  t: number;
+}
+
+/**
+ * Bornes anatomiques de la projection du sellion. Un nez vit entre les deux
+ * yeux : très asymétrique passe encore (0,2/0,8 ≈ demi-PD 25/75 %), mais un
+ * pied de projection COLLÉ à une pupille ou hors segment est un landmark
+ * décroché, pas une anatomie.
+ */
+export const SELLION_T_MIN = 0.15;
+export const SELLION_T_MAX = 0.85;
+
+/** Les demi-écarts de cette frame sont-ils anatomiquement exploitables ? */
+export function halfPdUsable(t: number): boolean {
+  return Number.isFinite(t) && t >= SELLION_T_MIN && t <= SELLION_T_MAX;
 }
 
 /**
@@ -99,6 +123,7 @@ export function pupilPixelsOf(
     pdPx,
     rightPx: Math.hypot(foot.x - od.x, foot.y - od.y),
     leftPx: Math.hypot(og.x - foot.x, og.y - foot.y),
+    t,
   };
 }
 

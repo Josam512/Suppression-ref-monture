@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   FOCAL_SYSTEMATIC_FLOOR,
+  identityCompatible,
   MAX_USABLE_FOCAL_REL_ERROR,
   PROFILE_MAX_AGE_MS,
   focalPxFor,
@@ -153,5 +154,51 @@ describe('une vue frontale seule redevient exploitable grâce au profil mémoris
     for (const [a, b] of [[0.5, 1.0], [1.0, 1.5], [1.5, 2.0], [2.0, 3.0]] as const) {
       expect(d(b), `${a} → ${b}`).toBeGreaterThan(d(a));
     }
+  });
+});
+
+describe('points 39-40 / compléments 23-24 — le profil appartient à SON objectif', () => {
+  const NOW2 = 1_700_000_000_000;
+  const base = { focalPerWidth: 1.0, relError: 0.03, views: 50, measuredAt: NOW2 };
+
+  it('🔴 c24 : deux appareils différents ne se FUSIONNENT jamais — la fraîche remplace', () => {
+    const stored: CameraProfile = { ...base, deviceId: 'A', focalPerWidth: 1.0 };
+    const fresh: CameraProfile = { ...base, deviceId: 'B', focalPerWidth: 1.4, views: 5 };
+    const m = mergeProfile(stored, fresh);
+    expect(m.focalPerWidth).toBe(1.4); // la fraîche, SEULE — aucun mélange
+    expect(m.deviceId).toBe('B');
+    expect(m.views).toBe(5);
+  });
+
+  it('facing arrière ↔ frontal : incompatibles', () => {
+    expect(identityCompatible({ facingMode: 'user' }, { facingMode: 'environment' })).toBe(false);
+  });
+
+  it('un champ absent d’un côté ne condamne pas (navigateur discret)', () => {
+    expect(identityCompatible({ deviceId: 'A' }, {})).toBe(true);
+    expect(identityCompatible({}, {})).toBe(true);
+  });
+
+  it('un crop de rapport d’image franchement différent est une autre optique', () => {
+    expect(identityCompatible({ aspect: 4 / 3 }, { aspect: 16 / 9 })).toBe(false);
+    expect(identityCompatible({ aspect: 16 / 9 }, { aspect: 16 / 9.02 })).toBe(true);
+  });
+
+  it('même appareil → fusion normale, identité conservée', () => {
+    const stored: CameraProfile = { ...base, deviceId: 'A' };
+    const fresh: CameraProfile = { ...base, deviceId: 'A', focalPerWidth: 1.02, views: 10 };
+    const m = mergeProfile(stored, fresh);
+    expect(m.views).toBe(60);
+    expect(m.deviceId).toBe('A');
+    expect(m.focalPerWidth).toBeGreaterThan(1.0);
+    expect(m.focalPerWidth).toBeLessThan(1.02);
+  });
+
+  it('parseCameraProfile relit l’identité, sans jamais l’inventer', () => {
+    const p = parseCameraProfile({ ...base, deviceId: 'X', facingMode: 'user', aspect: 1.78 });
+    expect(p?.deviceId).toBe('X');
+    expect(p?.facingMode).toBe('user');
+    const q = parseCameraProfile({ ...base });
+    expect(q?.deviceId).toBeUndefined();
   });
 });

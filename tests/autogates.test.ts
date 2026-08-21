@@ -92,11 +92,21 @@ describe('audit 2 — aucun état ne condamne la séance', () => {
     expect(e.state).toBe('calibrated');
   });
 
-  it('les échantillons déjà acquis ne sont PAS jetés à la tentative suivante', () => {
+  it('⭐ RÈGLE CHANGÉE (guide pt 19) : une tentative repart sur une FENÊTRE PROPRE', () => {
+    // L'ancien test verrouillait l'inverse — « les échantillons acquis sont
+    // conservés » — et c'est précisément ce que le guide de fiabilisation
+    // interdit : 5 frames prises à 40 cm mélangées à la collecte suivante à
+    // 60 cm fabriquent une médiane qui n'existe à aucune distance. La
+    // tentative N+1 repart à zéro, avec une génération NEUVE ; ce qui survit
+    // aux tentatives, ce sont les mesures PUBLIÉES (le store, point 20),
+    // jamais les échantillons bruts.
     const e = new AutoCalibrationEngine();
+    const g0 = e.generation;
     film(e, 5, 0);
     for (let i = 0; i * 500 <= AUTO_TIMEOUT_MS + 1000; i++) e.offer(null, 0, 0, W, H, 1000 + i * 500);
-    expect(e.status().usableFrames).toBe(5);
+    expect(e.status().usableFrames).toBe(0); // fenêtre propre
+    expect(e.generation).toBeGreaterThan(g0); // génération neuve (c20–c21)
+    expect(e.status().lastAttemptFailure).not.toBeNull(); // et la cause est nommée
   });
 
   it('une seule tentative est comptée par période de délai — pas de boucle folle', () => {

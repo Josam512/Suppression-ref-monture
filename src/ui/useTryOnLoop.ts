@@ -10,6 +10,7 @@
 
 import { useCallback, useRef, useState, type MutableRefObject, type RefObject } from 'react';
 
+import type { CameraIdentity } from '../core/cameraProfile.js';
 import type { CoordinateSpace } from '../tracking/detectionPlan.js';
 import type { LostCause } from '../tracking/faceLoop.js';
 import type { NormalizedLandmark } from '../core/geom.js';
@@ -36,13 +37,16 @@ export interface TryOnLoopDeps {
   pump: AutoCalibration['pump'];
   setPhase(phase: Phase): void;
   pushNotice(message: string): void;
+  /** L'identité de l'objectif ouvert (points 39–40) — remontée telle quelle. */
+  onCameraIdentity?(identity: CameraIdentity): void;
   /** Décidé par TryOn : essayage direct, gel V2, ou mesure automatique. */
   onReadyAction(): void;
   onFatalError(message: string): void;
 }
 
 export function useTryOnLoop(deps: TryOnLoopDeps): { retryCamera(): void } {
-  const { live, videoRef, canvasRef, phaseRef, pump, setPhase, pushNotice, onReadyAction, onFatalError } = deps;
+  const { live, videoRef, canvasRef, phaseRef, pump, setPhase, pushNotice, onCameraIdentity, onReadyAction, onFatalError } =
+    deps;
 
   /** Erreurs par enveloppe — comptées et NOMMÉES, jamais avalées (point 70). */
   const stageErrors = useRef({ metrology: 0, render: 0, lastMetrology: '', lastRender: '' });
@@ -152,6 +156,7 @@ export function useTryOnLoop(deps: TryOnLoopDeps): { retryCamera(): void } {
         live.current.loopStats = stats;
         onReadyAction();
       },
+      ...(onCameraIdentity !== undefined ? { onCameraIdentity } : {}),
       // ⭐ Guide point 10 — une dégradation RÉCUPÉRABLE (GPU KO → CPU vivant,
       // flux rVFC replié sur RAF…) est un bandeau, jamais une phase d'erreur.
       onWarning: pushNotice,

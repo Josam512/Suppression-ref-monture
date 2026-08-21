@@ -26,7 +26,21 @@
 import { CalibrationError } from './geom.js';
 import { FOCAL_MAX_REL, FOCAL_MIN_REL } from './cardPose.js';
 
-export interface CameraProfile {
+/**
+ * ⭐ Identité de l'OBJECTIF qui a produit un profil (guide points 39–40,
+ * compléments 23–24) : un profil de caméra arrière ne doit jamais contaminer
+ * la caméra frontale, ni celui d'un autre appareil. Chaque champ est optionnel
+ * — les navigateurs ne les donnent pas tous — et l'incompatibilité ne se
+ * prononce que sur les champs CONNUS DES DEUX côtés.
+ */
+export interface CameraIdentity {
+  deviceId?: string;
+  facingMode?: string;
+  /** largeur/hauteur de capture — un crop 4:3 → 16:9 change l'optique effective. */
+  aspect?: number;
+}
+
+export interface CameraProfile extends CameraIdentity {
   /** Focale ÷ largeur d'image. Invariante par changement de résolution. */
   focalPerWidth: number;
   /** Incertitude relative, jamais sous le plancher systématique ci-dessous. */
@@ -34,6 +48,27 @@ export interface CameraProfile {
   /** Nombre de vues cumulées qui l'ont produite, toutes séances confondues. */
   views: number;
   measuredAt: number;
+}
+
+/** Tolérance de rapport d'image : au-delà, le cadrage n'est plus le même. */
+export const ASPECT_TOLERANCE = 0.05;
+
+/**
+ * Deux identités sont-elles compatibles ? `true` quand rien ne les CONTREDIT :
+ * un champ absent d'un côté ne condamne pas — refuser un profil parce qu'un
+ * navigateur ne donne pas le deviceId pénaliserait tout le monde.
+ */
+export function identityCompatible(a: CameraIdentity, b: CameraIdentity): boolean {
+  if (a.deviceId !== undefined && b.deviceId !== undefined && a.deviceId !== b.deviceId) return false;
+  if (a.facingMode !== undefined && b.facingMode !== undefined && a.facingMode !== b.facingMode) return false;
+  if (
+    a.aspect !== undefined &&
+    b.aspect !== undefined &&
+    Math.abs(a.aspect / b.aspect - 1) > ASPECT_TOLERANCE
+  ) {
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -99,6 +134,9 @@ export function profileFromSweep(
  */
 export function mergeProfile(stored: CameraProfile | null, fresh: CameraProfile): CameraProfile {
   if (stored === null) return fresh;
+  // 🔴 Complément 24 — JAMAIS fusionner deux appareils : identités
+  // incompatibles → la mesure fraîche remplace, elle ne se mélange pas.
+  if (!identityCompatible(stored, fresh)) return fresh;
 
   const wa = 1 / stored.relError ** 2;
   const wb = 1 / fresh.relError ** 2;
@@ -110,6 +148,16 @@ export function mergeProfile(stored: CameraProfile | null, fresh: CameraProfile)
     relError: Math.max(combined, FOCAL_SYSTEMATIC_FLOOR),
     views: stored.views + fresh.views,
     measuredAt: fresh.measuredAt,
+    // L'identité s'enrichit : ce que la fraîche connaît prime, le reste survit.
+    ...(stored.deviceId !== undefined || fresh.deviceId !== undefined
+      ? { deviceId: fresh.deviceId ?? stored.deviceId }
+      : {}),
+    ...(stored.facingMode !== undefined || fresh.facingMode !== undefined
+      ? { facingMode: fresh.facingMode ?? stored.facingMode }
+      : {}),
+    ...(stored.aspect !== undefined || fresh.aspect !== undefined
+      ? { aspect: fresh.aspect ?? stored.aspect }
+      : {}),
   };
 }
 
@@ -140,5 +188,8 @@ export function parseCameraProfile(raw: unknown): CameraProfile | null {
     relError: o['relError'] as number,
     views: o['views'] as number,
     measuredAt: o['measuredAt'] as number,
+    ...(typeof o['deviceId'] === 'string' ? { deviceId: o['deviceId'] } : {}),
+    ...(typeof o['facingMode'] === 'string' ? { facingMode: o['facingMode'] } : {}),
+    ...(typeof o['aspect'] === 'number' && Number.isFinite(o['aspect']) ? { aspect: o['aspect'] as number } : {}),
   };
 }

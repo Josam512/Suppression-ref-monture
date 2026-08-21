@@ -148,12 +148,25 @@ export interface EyePlaneScale {
   pflUsed: boolean;
 }
 
+/** Les DEUX estimateurs d'une frame — la collecte les accumule séparément. */
+export interface EyePlaneScales {
+  /** HVID seul : disponible sur toute frame aux iris exploitables. */
+  base: EyePlaneScale;
+  /** HVID + fentes palpébrales, quand elles passent le gate ; null sinon. */
+  full: EyePlaneScale | null;
+}
+
 /**
- * Échelle mm/px AU PLAN DES YEUX, estimée sur une frame.
+ * Les deux échelles mm/px AU PLAN DES YEUX d'une frame.
+ *
+ * ⭐ Guide point 29 — l'estimateur ne doit pas COMMUTER frame par frame : la
+ * collecte accumule les deux séries séparément et n'en RETIENT une qu'à la
+ * conclusion. Ce qui bascule d'une frame à l'autre ici n'est donc jamais une
+ * série publiée, seulement la matière des deux séries.
  *
  * @returns null si les iris ne sont pas exploitables (œil fermé, profil).
  */
-export function eyePlaneScale(p: OcularPixels): EyePlaneScale | null {
+export function eyePlaneScales(p: OcularPixels): EyePlaneScales | null {
   if (!(p.hvidLeftPx > 1) || !(p.hvidRightPx > 1)) return null;
 
   const base = scaleFromOcular(
@@ -170,16 +183,33 @@ export function eyePlaneScale(p: OcularPixels): EyePlaneScale | null {
     Math.abs(v * base.mmPerPx - PALPEBRAL_FISSURE.meanMm) <=
       PFL_GATE_SD * PALPEBRAL_FISSURE.sdMm;
 
+  let full: EyePlaneScale | null = null;
   if (pflOk(p.pflLeftPx) && pflOk(p.pflRightPx)) {
-    const full = scaleFromOcular(
+    const f = scaleFromOcular(
       [p.hvidLeftPx, p.hvidRightPx, p.pflLeftPx, p.pflRightPx],
       FULL_MEANS,
       covarianceOf(FULL_SDS, FULL_CORR),
     );
-    if (Number.isFinite(full.mmPerPx) && full.mmPerPx > 0) {
-      return { mmPerPx: full.mmPerPx, relError: OCULAR_PRIOR_REL_ERROR, pflUsed: true };
+    if (Number.isFinite(f.mmPerPx) && f.mmPerPx > 0) {
+      full = { mmPerPx: f.mmPerPx, relError: OCULAR_PRIOR_REL_ERROR, pflUsed: true };
     }
   }
 
-  return { mmPerPx: base.mmPerPx, relError: HVID_ONLY_REL_ERROR, pflUsed: false };
+  return {
+    base: { mmPerPx: base.mmPerPx, relError: HVID_ONLY_REL_ERROR, pflUsed: false },
+    full,
+  };
+}
+
+/**
+ * Échelle mm/px AU PLAN DES YEUX, estimée sur une frame — la meilleure
+ * disponible. Sert au RENDU (une frame à la fois, pas de série) ; la collecte
+ * métrologique passe par `eyePlaneScales` pour ne pas commuter d'estimateur.
+ *
+ * @returns null si les iris ne sont pas exploitables (œil fermé, profil).
+ */
+export function eyePlaneScale(p: OcularPixels): EyePlaneScale | null {
+  const s = eyePlaneScales(p);
+  if (s === null) return null;
+  return s.full ?? s.base;
 }

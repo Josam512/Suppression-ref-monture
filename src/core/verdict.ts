@@ -19,7 +19,7 @@ import {
   type FrameMetrics,
 } from './faceMetrics.js';
 import { spriteToScreen } from './transform.js';
-import { BRIDGE_AHEAD_MM, planeScale } from './framePlane.js';
+import { BRIDGE_AHEAD_MM, NOMINAL_DISTANCE_MM, planeScale } from './framePlane.js';
 
 export type Status = 'sous-taillee' | 'correcte' | 'surtaillee' | 'indetermine';
 
@@ -112,6 +112,7 @@ function horizontalOffsetMm(
   m: FrameMetrics,
   w: number,
   h: number,
+  distanceMm: number | undefined,
 ): number {
   const eye = midpoint(px(eyeOuter, w, h), px(eyeInner, w, h));
   const lens = spriteToScreen(lensCenterSprite, spec, m);
@@ -119,9 +120,10 @@ function horizontalOffsetMm(
   const uy = Math.sin(m.rollRad);
   const dxPx = (eye.x - lens.x) * ux + (eye.y - lens.y) * uy;
   // ⭐ Le centre optique est sur la FACE AVANT de la monture, au plan du pont.
-  // C'est donc l'échelle de ce plan-là qui convertit l'écart en millimètres,
-  // et non celle des tempes (`core/framePlane.ts`).
-  return Math.abs(dxPx) / planeScale(m.livePxPerMm, BRIDGE_AHEAD_MM);
+  // C'est donc l'échelle de ce plan-là qui convertit l'écart en millimètres —
+  // avec la distance MESURÉE de la calibration quand elle existe (guide pt 38),
+  // le nominal n'étant plus qu'un dernier recours.
+  return Math.abs(dxPx) / planeScale(m.livePxPerMm, BRIDGE_AHEAD_MM, distanceMm ?? NOMINAL_DISTANCE_MM);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -234,8 +236,8 @@ export function verdict(
 
   const decentrementMm = conclusive
     ? {
-        left: horizontalOffsetMm(at(lm, EYE_L), at(lm, EYE_L_INNER), spec.lensCenterL, spec, m, w, h),
-        right: horizontalOffsetMm(at(lm, EYE_R), at(lm, EYE_R_INNER), spec.lensCenterR, spec, m, w, h),
+        left: horizontalOffsetMm(at(lm, EYE_L), at(lm, EYE_L_INNER), spec.lensCenterL, spec, m, w, h, cal.distanceMm),
+        right: horizontalOffsetMm(at(lm, EYE_R), at(lm, EYE_R_INNER), spec.lensCenterR, spec, m, w, h, cal.distanceMm),
       }
     : null;
 

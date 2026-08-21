@@ -23,10 +23,12 @@ import { FramePicker } from './FramePicker.js';
 import { createLive, type Live } from './liveState.js';
 import { useCatalogue } from './catalogue.js';
 import { useV1Calibration } from './useV1Calibration.js';
-import type { CameraProfile } from '../core/cameraProfile.js';
+import { identityCompatible, type CameraIdentity, type CameraProfile } from '../core/cameraProfile.js';
 import { loadCameraProfile, saveCameraProfile } from './cameraStorage.js';
 import { clearCalibration, loadCalibration, saveCalibration } from './calibrationStorage.js';
 import { freezeFrame } from './freezeFrame.js';
+import { MeasuresPanel } from './MeasuresPanel.js';
+import { emptyMeasurements, type MeasurementSnapshot } from './measurementStore.js';
 import { TryOnHeader } from './TryOnHeader.js';
 import { useTryOnLoop } from './useTryOnLoop.js';
 import { useSprites } from './useSprites.js';
@@ -43,9 +45,15 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
   const [cal, setCal] = useState<UserCalibration | null>(loadCalibration);
   const cameraProfile = useRef<CameraProfile | null>(loadCameraProfile());
 
+  /** Identité de l'objectif réellement ouvert — sert à étiqueter le profil. */
+  const cameraIdentity = useRef<CameraIdentity>({});
+
   const persistCamera = useCallback((next: CameraProfile) => {
-    cameraProfile.current = next;
-    saveCameraProfile(next);
+    // ⭐ Points 39–40 — le profil part avec l'identité de SON objectif.
+    const stamped = { ...next, ...cameraIdentity.current };
+    cameraProfile.current = stamped;
+    live.current.cameraProfile = stamped;
+    saveCameraProfile(stamped);
   }, []);
   const [notices, setNotices] = useState<string[]>([]);
   const pushNotice = useCallback(
@@ -113,12 +121,16 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
    * ⭐ V2 — la calibration automatique (`ui/useAutoCalibration.ts`) : le moteur
    * décide seul de sa fin, l'annonce, et la collecte s'arrête — pas la caméra.
    */
-  const { startAuto, pump } = useAutoCalibration({
+  /** ⭐ Points 27/72 — l'état PAR MÉTRIQUE, affiché en permanence. */
+  const [metrics, setMetrics] = useState<MeasurementSnapshot>(emptyMeasurements());
+
+  const { startAuto, startMissing, pump } = useAutoCalibration({
     live,
     videoRef,
     canvasRef,
     cameraProfile,
     setPhase,
+    onMetrics: setMetrics,
     onCalibrated: (next, notes) => {
       setNotices(notes);
       persist(next);
@@ -160,9 +172,27 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
     pump,
     setPhase,
     pushNotice,
+    onCameraIdentity: (identity) => {
+      cameraIdentity.current = identity;
+      // 🔴 Complément 23 — un profil mémorisé pour un AUTRE objectif est écarté
+      // pour la session : mieux vaut le champ supposé qu'une focale d'un autre
+      // capteur. Le stockage, lui, n'est pas touché.
+      const stored = cameraProfile.current;
+      if (stored !== null && !identityCompatible(stored, identity)) {
+        cameraProfile.current = null;
+        live.current.cameraProfile = null;
+        pushNotice(
+          `Le profil d'objectif mémorisé vient d'une autre caméra — il est ignoré pour cette séance.`,
+        );
+      }
+    },
     onReadyAction: () => {
-      if (live.current.cal !== null) setPhase({ kind: 'essayage' });
-      else if (props.mode === 'store') freeze('mesure-monture');
+      if (live.current.cal !== null) {
+        // ⭐ Point 28 — tests de CAPACITÉS : le rendu part tout de suite, et ce
+        // qui MANQUE à cette calibration (PD, temporal) se collecte en fond.
+        setPhase({ kind: 'essayage' });
+        startMissing();
+      } else if (props.mode === 'store') freeze('mesure-monture');
       else startAuto();
     },
     onFatalError: (message) => setPhase({ kind: 'error', message }),
@@ -207,6 +237,8 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
         onUseCard={enterCard}
         onRetryCamera={retryCamera}
       />
+
+      <MeasuresPanel metrics={metrics} cal={cal} />
 
       {notices.map((n) => (
         <p key={n}>{n}</p>

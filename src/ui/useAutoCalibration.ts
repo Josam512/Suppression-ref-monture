@@ -1,37 +1,52 @@
 /**
  * ui/useAutoCalibration.ts — la calibration automatique, côté IHM.
  *
- * Extrait de `TryOn.tsx` pour tenir la règle des 300 lignes (§3), et parce que
- * c'est ici que vit la réponse au symptôme n°1 de l'audit : le moteur conclut,
- * la collecte S'ARRÊTE (`live.auto = null`), et le succès est ANNONCÉ en clair.
- * La caméra, elle, ne change pas d'état : l'essayage continue dessus.
+ * Refonte du guide de fiabilisation (2026-08-21, points 18–28, 35, 68–69) :
+ *
+ *   - l'assemblage est SCINDÉ : le PD et l'échelle de visage réussissent ou
+ *     échouent CHACUN POUR SOI (codes typés, complément 3). Un PD validé
+ *     SURVIT à un échec de largeur — il vit dans le store de mesures, pas dans
+ *     la tentative (point 20) ;
+ *   - une calibration publiée sans PD ne ferme pas la porte : la collecte
+ *     REPART en arrière-plan, l'essayage restant affiché (point 28) ;
+ *   - l'écart temporal manquant se raffine aussi en arrière-plan, et ne touche
+ *     JAMAIS que ses deux champs (points 35 et 46) ;
+ *   - après trop de refus, l'état publié est `unavailable` — plus jamais un
+ *     faux `collecting` sans moteur (points 68–69). Le rendu, lui, continue.
  */
 
 import { useCallback, useRef, type MutableRefObject, type RefObject } from 'react';
 
 import { AutoCalibrationEngine } from '../core/autoCalibration.js';
-import { calibrateAuto, type AutoTemporalScene } from '../core/autoCalibrate.js';
+import {
+  assembleDistanceMm,
+  assembleFaceScale,
+  assemblePd,
+  assembleTemporal,
+  focalChoiceFor,
+  pdFieldsOf,
+} from '../core/autoCalibrate.js';
 import type { UserCalibration } from '../core/calibration.js';
 import type { CameraProfile } from '../core/cameraProfile.js';
+import { frameMetrics } from '../core/faceMetrics.js';
 import type { NormalizedLandmark } from '../core/geom.js';
-import { motionMask, type ImageBuffer } from '../core/silhouette.js';
+import type { ImageBuffer } from '../core/silhouette.js';
 import type { Phase } from './CalibrationPanel.js';
 import { stepAutoCalibration } from './liveSteps.js';
 import type { Live } from './liveState.js';
+import {
+  emptyMeasurements,
+  failureOf,
+  snapshotOf,
+  unavailableStatus,
+  type MeasurementSnapshot,
+} from './measurementStore.js';
+import { TemporalCapture } from './temporalCapture.js';
 
-/**
- * ⭐ Fenêtres de capture pour l'écart temporal (§14.2, sans carte) :
- * une image FRONTALE figée (yaw quasi nul, mêmes pixels que ses repères), et
- * une vue tournée de chaque côté pour le masque de mouvement — la seule chose
- * qui distingue un bord de tête d'un montant de porte. Une capture par fenêtre,
- * pas par frame : trois `getImageData` au TOTAL pour toute la séance.
- */
-export const AUTO_FRONTAL_MAX_YAW_RAD = 0.06;
-export const AUTO_SIDE_MIN_YAW_RAD = 0.17;
-export const AUTO_SIDE_MAX_YAW_RAD = 0.61;
-
-/** Refus d'ASSEMBLAGE tolérés avant d'arrêter de ré-armer (audit, point 1). */
+/** Refus d'ASSEMBLAGE tolérés avant de cesser de ré-armer (point 69). */
 export const MAX_ASSEMBLY_RETRIES = 3;
+/** Entre deux tentatives de raffinement temporal d'arrière-plan. */
+export const BACKGROUND_TEMPORAL_RETRY_MS = 10_000;
 
 export interface AutoCalibrationDeps {
   live: MutableRefObject<Live>;
@@ -39,26 +54,33 @@ export interface AutoCalibrationDeps {
   canvasRef: RefObject<HTMLCanvasElement | null>;
   cameraProfile: MutableRefObject<CameraProfile | null>;
   onCalibrated(cal: UserCalibration, notes: string[]): void;
+  /** Publication du store de mesures — le panneau permanent lit ça (point 27). */
+  onMetrics(snapshot: MeasurementSnapshot): void;
   setPhase(phase: Phase): void;
 }
 
 export interface AutoCalibration {
-  /** (Re)lance la mesure : nouveau moteur, compteurs à zéro. */
+  /** (Re)lance la mesure : nouveau moteur, compteurs à zéro, store remis à plat. */
   startAuto(): void;
   /**
-   * À appeler à CHAQUE frame de la boucle (`lm` null si détection perdue).
-   * Publie l'état quand il change, assemble et annonce quand le moteur conclut.
+   * ⭐ Point 28 — tests de CAPACITÉS, pas « une calibration existe » : une
+   * calibration mémorisée sans PD (ancienne version, séance interrompue) rend
+   * l'essayage immédiat ET relance la collecte du manquant en arrière-plan.
    */
+  startMissing(): void;
+  /** À appeler à CHAQUE frame de la boucle (`lm` null si détection perdue). */
   pump(lm: readonly NormalizedLandmark[] | null, yawRad: number, w: number, h: number): void;
 }
 
 export function useAutoCalibration(deps: AutoCalibrationDeps): AutoCalibration {
-  const { live, videoRef, canvasRef, cameraProfile, onCalibrated, setPhase } = deps;
+  const { live, videoRef, canvasRef, cameraProfile, onCalibrated, onMetrics, setPhase } = deps;
 
   /** Canvas de lecture réutilisé — même règle mémoire que `useV1Calibration`. */
   const off = useRef<HTMLCanvasElement | null>(null);
-  const frontal = useRef<{ buf: ImageBuffer; lm: NormalizedLandmark[]; w: number; h: number } | null>(null);
-  const sides = useRef<{ neg: ImageBuffer | null; pos: ImageBuffer | null }>({ neg: null, pos: null });
+  const captures = useRef(new TemporalCapture());
+  const metrics = useRef<MeasurementSnapshot>(emptyMeasurements());
+  const assemblyFailures = useRef(0);
+  const lastBgTemporalMs = useRef(0);
 
   const grab = useCallback((): ImageBuffer | null => {
     const video = videoRef.current;
@@ -75,136 +97,200 @@ export function useAutoCalibration(deps: AutoCalibrationDeps): AutoCalibration {
     return ctx.getImageData(0, 0, canvas.width, canvas.height);
   }, [videoRef]);
 
-  /** Combien de fois l'ASSEMBLAGE a refusé. Borne le ré-armement (audit 1). */
-  const assemblyFailures = useRef(0);
+  const publishMetrics = useCallback((): void => onMetrics(snapshotOf(metrics.current)), [onMetrics]);
+
+  const rearmEngine = useCallback((): void => {
+    live.current.auto = new AutoCalibrationEngine();
+    live.current.lastAutoKey = '';
+    captures.current.reset(live.current.auto.generation);
+  }, [live]);
 
   const startAuto = useCallback((): void => {
     assemblyFailures.current = 0;
     live.current.probe = null;
     live.current.pendingCard = null;
-    live.current.auto = new AutoCalibrationEngine();
-    live.current.lastAutoKey = '';
-    frontal.current = null;
-    sides.current = { neg: null, pos: null };
-    setPhase({ kind: 'mesure-auto', status: live.current.auto.status() });
-  }, [live, setPhase]);
+    metrics.current = emptyMeasurements();
+    metrics.current.pd.phase = 'collecting';
+    metrics.current.faceScale.phase = 'collecting';
+    metrics.current.temporal.phase = 'collecting';
+    rearmEngine();
+    publishMetrics();
+    setPhase({ kind: 'mesure-auto', status: live.current.auto!.status() });
+  }, [live, rearmEngine, publishMetrics, setPhase]);
 
-  /**
-   * Le moteur a conclu : on assemble UNE fois.
-   *
-   * 🔴 Audit humain du 2026-08-21, point 1 : `auto = null` était posé AVANT
-   * `calibrateAuto()`. Quand l'assemblage levait (grandeur hors plage
-   * anatomique), l'IHM affichait un statut « collecting » alors qu'il
-   * n'existait plus AUCUN moteur — la collecte ne repartait jamais. Le verrou
-   * ne se pose donc plus qu'au succès ; à l'échec on remonte explicitement un
-   * moteur neuf, parce que garder l'ancien reviendrait au même : il est déjà
-   * `calibrated`, donc `offer()` en sort immédiatement.
-   */
+  const startMissing = useCallback((): void => {
+    const cal = live.current.cal;
+    if (cal === null) {
+      startAuto();
+      return;
+    }
+    if (cal.pdMm === undefined) {
+      metrics.current.pd = { ...metrics.current.pd, phase: 'collecting' };
+      rearmEngine(); // l'essayage reste affiché : la collecte est d'arrière-plan
+    }
+    if (cal.temporalWidthMm === undefined) {
+      metrics.current.temporal = { ...metrics.current.temporal, phase: 'collecting' };
+    }
+    publishMetrics();
+  }, [live, startAuto, rearmEngine, publishMetrics]);
+
+  /** Le moteur a conclu : assemblages SÉPARÉS, survie par métrique (pts 20–26). */
   const finishAuto = useCallback((): void => {
-    const m = live.current.auto?.measures() ?? null;
+    const s = live.current;
+    const m = s.auto?.measures() ?? null;
     if (m === null) {
-      live.current.auto = null;
+      s.auto = null;
+      return;
+    }
+    const st = metrics.current;
+    const notes: string[] = [];
+    const focal = focalChoiceFor(canvasRef.current?.width ?? 1280, cameraProfile.current, Date.now());
+
+    let distanceMm: number | null = null;
+    try {
+      distanceMm = assembleDistanceMm(m, focal);
+    } catch (err) {
+      const f = failureOf(err);
+      if (st.pd.phase !== 'ready') st.pd = { ...st.pd, phase: 'retrying', failure: f };
+      if (st.faceScale.phase !== 'ready') st.faceScale = { ...st.faceScale, phase: 'retrying', failure: f };
+    }
+
+    if (distanceMm !== null) {
+      try {
+        const pd = assemblePd(m, focal, distanceMm);
+        st.pd = { phase: 'ready', value: pd, failure: null, generation: m.generation };
+        notes.push(...pd.notes);
+      } catch (err) {
+        // ⭐ Point 20 — un PD DÉJÀ publié n'est jamais jeté par un nouvel échec.
+        if (st.pd.phase !== 'ready') st.pd = { ...st.pd, phase: 'retrying', failure: failureOf(err) };
+        else notes.push(`Nouvelle mesure du PD écartée (${failureOf(err).label}) — la précédente reste valable.`);
+      }
+      try {
+        const face = assembleFaceScale(m, focal, distanceMm);
+        st.faceScale = { phase: 'ready', value: face, failure: null, generation: m.generation };
+        notes.push(...face.notes);
+      } catch (err) {
+        if (st.faceScale.phase !== 'ready') {
+          st.faceScale = { ...st.faceScale, phase: 'retrying', failure: failureOf(err) };
+        }
+      }
+    }
+
+    const face = st.faceScale.generation === m.generation ? st.faceScale.value : null;
+    if (face !== null && st.faceScale.phase === 'ready') {
+      // — Écart temporal : la scène doit venir de la MÊME génération (c21).
+      let temporalFields: Pick<UserCalibration, 'temporalWidthMm' | 'temporalRelError'> = {};
+      const scene = captures.current.generation === m.generation ? captures.current.scene() : null;
+      if (scene !== null) {
+        const t = assembleTemporal(scene, 1 / (m.mmPerPxEye * face.depthCorrection), face.relError);
+        temporalFields = t.fields;
+        notes.push(t.note);
+      } else {
+        notes.push(
+          `Écart temporal non mesuré : montrez brièvement vos deux profils ` +
+            `pour qu'il le soit — la mesure continuera en arrière-plan pendant l'essayage.`,
+        );
+      }
+      if (temporalFields.temporalWidthMm !== undefined && temporalFields.temporalRelError !== undefined) {
+        st.temporal = {
+          phase: 'ready',
+          value: { widthMm: temporalFields.temporalWidthMm, relError: temporalFields.temporalRelError },
+          failure: null,
+          generation: m.generation,
+        };
+      }
+
+      const pd = st.pd.phase === 'ready' ? st.pd.value : null; // possiblement d'une génération antérieure (pt 20)
+      const cal: UserCalibration = {
+        faceWidthMm: face.faceWidthMm,
+        source: 'auto',
+        relError: face.relError,
+        measuredAt: Date.now(),
+        distanceMm: face.distanceMm,
+        ...pdFieldsOf(pd),
+        ...temporalFields,
+      };
+      s.auto = null;
+      assemblyFailures.current = 0;
+      onCalibrated(cal, [
+        `✅ Calibration acquise — c'est terminé (${m.usableFrames} images utiles). ` +
+          `La collecte s'est arrêtée ; la caméra continue pour l'essayage.`,
+        ...notes,
+      ]);
+      // ⭐ Point 28 — un PD manquant continue de se mesurer PENDANT l'essayage.
+      if (pd === null) {
+        st.pd = { ...st.pd, phase: 'collecting' };
+        rearmEngine();
+      }
+      publishMetrics();
       return;
     }
 
-    // ⚠️ Silhouette tentée SEULEMENT avec frontale + au moins une vue tournée :
-    // sans mouvement, un montant de porte passerait pour un bord de tête.
-    const f = frontal.current;
-    const buffers = [sides.current.neg, sides.current.pos].filter((b): b is ImageBuffer => b !== null);
-    const scene: AutoTemporalScene | null =
-      f !== null && buffers.length > 0
-        ? { frontal: f.buf, motion: motionMask(f.buf, buffers), lm: f.lm, w: f.w, h: f.h }
-        : null;
-
-    try {
-      const out = calibrateAuto(
-        m,
-        canvasRef.current?.width ?? 1280,
-        cameraProfile.current,
-        Date.now(),
-        scene,
-      );
-      live.current.auto = null; // ⭐ le verrou, au SUCCÈS seulement.
-      assemblyFailures.current = 0;
-      onCalibrated(out.cal, [
-        `✅ Calibration acquise — c'est terminé (${m.usableFrames} images utiles). ` +
-          `La collecte s'est arrêtée ; la caméra continue pour l'essayage.`,
-        ...out.notes,
-      ]);
-    } catch (err) {
-      // Grandeur hors plage anatomique. Recommencer est la seule réparation —
-      // encore faut-il qu'il reste quelque chose pour recommencer.
-      assemblyFailures.current++;
-      if (assemblyFailures.current <= MAX_ASSEMBLY_RETRIES) {
-        live.current.auto = new AutoCalibrationEngine();
-        frontal.current = null;
-        sides.current = { neg: null, pos: null };
-      } else {
-        // Retry CONTRÔLÉ : après trois refus d'affilée, ce n'est plus du bruit.
-        // On cesse de boucler, l'écran dit pourquoi et propose ses deux sorties
-        // — et l'essayage, lui, continue de s'afficher en aperçu.
-        live.current.auto = null;
+    // — La largeur a refusé : tentative suivante ou arrêt honnête (68–69).
+    assemblyFailures.current++;
+    if (assemblyFailures.current <= MAX_ASSEMBLY_RETRIES) {
+      rearmEngine();
+      if (s.cal === null) setPhase({ kind: 'mesure-auto', status: s.auto!.status() });
+    } else {
+      s.auto = null;
+      st.faceScale = { ...st.faceScale, phase: 'unavailable' };
+      if (st.pd.phase === 'collecting' || st.pd.phase === 'retrying') {
+        st.pd = { ...st.pd, phase: st.pd.value !== null ? 'ready' : 'unavailable' };
       }
-      setPhase({
-        kind: 'mesure-auto',
-        status: failedStatusOf(err, assemblyFailures.current),
-      });
+      if (s.cal === null) {
+        setPhase({
+          kind: 'mesure-auto',
+          status: unavailableStatus(st.faceScale.failure, assemblyFailures.current),
+        });
+      }
     }
-  }, [live, canvasRef, cameraProfile, onCalibrated, setPhase]);
+    publishMetrics();
+  }, [live, canvasRef, cameraProfile, onCalibrated, publishMetrics, rearmEngine, setPhase]);
 
   const pump = useCallback(
     (lm: readonly NormalizedLandmark[] | null, yawRad: number, w: number, h: number): void => {
-      // — Capture opportuniste pour l'écart temporal, AVANT que le moteur ne
-      //   conclue. Les repères sont COPIÉS avec l'image : mêmes pixels, mêmes
-      //   landmarks (la leçon de `ui/freezeFrame.ts`).
-      if (live.current.auto !== null && lm !== null) {
-        const ay = Math.abs(yawRad);
-        if (ay <= AUTO_FRONTAL_MAX_YAW_RAD && frontal.current === null) {
-          const buf = grab();
-          if (buf !== null) frontal.current = { buf, lm: lm.map((p) => ({ x: p.x, y: p.y })), w, h };
-        } else if (ay >= AUTO_SIDE_MIN_YAW_RAD && ay <= AUTO_SIDE_MAX_YAW_RAD) {
-          const key = yawRad < 0 ? 'neg' : 'pos';
-          if (sides.current[key] === null) sides.current[key] = grab();
+      const s = live.current;
+      // — Captures pour l'écart temporal, étiquetées par génération (c20–21).
+      if (s.auto !== null && lm !== null) {
+        const frameScale = s.cal !== null ? frameMetrics(lm, w, h, s.cal, yawRad).livePxPerMm : null;
+        captures.current.offer(lm, yawRad, w, h, s.auto.generation, grab, frameScale);
+      }
+
+      // ⭐ Point 35 — raffinement d'ARRIÈRE-PLAN : calibré sans écart temporal,
+      // la rotation spontanée suffit. Ne touche QUE temporalWidthMm/RelError.
+      if (s.auto === null && s.cal !== null && s.cal.temporalWidthMm === undefined && lm !== null) {
+        const frameScale = frameMetrics(lm, w, h, s.cal, yawRad).livePxPerMm;
+        captures.current.offer(lm, yawRad, w, h, -1, grab, frameScale);
+        const scene = captures.current.scene();
+        const now = Date.now();
+        if (scene !== null && now - lastBgTemporalMs.current > BACKGROUND_TEMPORAL_RETRY_MS) {
+          lastBgTemporalMs.current = now;
+          const scale = captures.current.frontalFrameScale();
+          if (scale !== null) {
+            const t = assembleTemporal(scene, scale, s.cal.relError);
+            if (t.fields.temporalWidthMm !== undefined && t.fields.temporalRelError !== undefined) {
+              metrics.current.temporal = {
+                phase: 'ready',
+                value: { widthMm: t.fields.temporalWidthMm, relError: t.fields.temporalRelError },
+                failure: null,
+                generation: -1,
+              };
+              publishMetrics();
+              onCalibrated({ ...s.cal, ...t.fields }, [t.note]);
+            } else {
+              captures.current.reset(-1); // matière suivante — sans spammer
+            }
+          }
         }
       }
 
-      const status = stepAutoCalibration(live.current, lm, yawRad, w, h, Date.now());
+      const status = stepAutoCalibration(s, lm, yawRad, w, h, Date.now());
       if (status === null) return;
       if (status.state === 'calibrated') finishAuto();
-      else setPhase({ kind: 'mesure-auto', status });
+      else if (s.cal === null) setPhase({ kind: 'mesure-auto', status });
     },
-    [live, grab, finishAuto, setPhase],
+    [live, grab, finishAuto, publishMetrics, onCalibrated, setPhase],
   );
 
-  return { startAuto, pump };
-}
-
-/**
- * L'ASSEMBLAGE a refusé (grandeur hors plage anatomique). C'est le SEUL refus
- * qui subsiste, et il se répare en recommençant. On le publie comme une
- * tentative ratée — pas comme un état terminal : depuis l'audit du 2026-08-21,
- * il n'existe plus d'état qui condamne la séance.
- */
-function failedStatusOf(
-  err: unknown,
-  attempts: number,
-): import('../core/autoCalibration.js').AutoStatus {
-  const base = err instanceof Error ? err.message : String(err);
-  const label =
-    attempts <= MAX_ASSEMBLY_RETRIES
-      ? `${base} Je continue de mesurer.`
-      : `${base} Après ${attempts} essais, je m'arrête là : reprenez la mesure, ou utilisez une carte.`;
-  return {
-    state: 'collecting',
-    usableFrames: 0,
-    neededFrames: 0,
-    elapsedMs: 0,
-    acquisitionMs: 0,
-    whyNotDone: { code: 'eyes-too-small', label },
-    rejected: { 'no-face': 0, 'eyes-too-small': 0, 'turn-to-front': 0, 'straighten-head': 0 },
-    primaryRejectReason: null,
-    scaleStandardError: 0,
-    attempts,
-    lastAttemptFailure: { code: 'eyes-too-small', label },
-  };
+  return { startAuto, startMissing, pump };
 }
