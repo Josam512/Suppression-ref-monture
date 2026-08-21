@@ -1,0 +1,26 @@
+name: VTO audit
+
+on:
+  pull_request:
+    branches:
+      - claude/virtual-try-on-no-card-434axf
+  push:
+    branches:
+      - chatgpt/vto-stability-audit
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm run smoke
+      - run: npm run journey
