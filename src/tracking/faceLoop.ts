@@ -1,22 +1,8 @@
 /**
- * tracking/faceLoop.ts — l'orchestration des couches 1 à 4.
+ * tracking/faceLoop.ts — orchestration acquisition → FaceLandmarker.
  *
- *   Couche 1-2  frameFeed.ts      → une frame caméra VALIDE, pixels normalisés
- *   Couche 3    faceProbe.ts      → diagnostic séparé uniquement
- *   Couche 4    landmarker.ts     → les 478 landmarks
- *   Décision    detectionPlan.ts  → échelle de stratégies
- *
- * IMPORTANT (audit 2026-08-21) : la boucle PRODUIT ne maintient plus deux
- * Tasks MediaPipe en parallèle. Sur l'appareil réel, le FaceLandmarker VIDEO
- * fonctionne, tandis que la création d'un second modèle MediaPipe (FaceDetector
- * de sonde) peut échouer. La sonde reste disponible aux pages de diagnostic,
- * mais la boucle produit monte par élimination après des frames valides muettes.
- * Cela supprime une source de contention WASM/GPU/XNNPACK sans affaiblir la
- * métrologie : la sonde n'a jamais mesuré quoi que ce soit.
- *
- * Concurrence : une seule inférence MediaPipe à la fois. Pendant une montée de
- * stratégie (asynchrone), les frames sont nommées comme perdues ; aucun état
- * silencieux ne peut figer la session.
+ * La boucle PRODUIT ne maintient qu'UNE Task MediaPipe à la fois. La sonde
+ * FaceDetector reste réservée aux bancs diagnostics.
  */
 
 import { createLandmarker, yawFromMatrix } from './landmarker.js';
@@ -35,14 +21,10 @@ import {
 export type LostCause = 'invalid-input' | 'no-face';
 
 export interface FaceLoopHandlers {
-  /** Couche 4 OK : landmarks bruts de CETTE frame (coordonnées normalisées). */
   onLandmarks(lm: ReadonlyArray<{ x: number; y: number; z?: number }>, yawRad: number): void;
-  /** Pas de landmarks sur cette frame. */
   onLost(consecutive: number, cause: LostCause, reason: string | null): void;
-  /** Transition ou avertissement récupérable. */
   onTransition?(reason: string): void;
   onProgress?(ratio: number): void;
-  /** Erreur fatale : aucune stratégie fonctionnelle ne peut être recréée. */
   onError?(message: string): void;
 }
 
@@ -83,11 +65,31 @@ export async function startFaceLoop(
   handlers: FaceLoopHandlers,
 ): Promise<FaceLoopControl> {
   const plan = initialPlan();
-  let landmarker: FaceLandmarker | null = await createLandmarker(
-    (r) => handlers.onProgress?.(r),
-    currentStrategy(plan).delegate,
-    currentStrategy(plan).minConfidence,
-  );
+
+  // Audit prédictif 2026-08-21 : auparavant l'INITIALISATION appelait le GPU
+  // directement AVANT que la machine de stratégies n'existe réellement. Si la
+  // création GPU échouait sur un appareil, `startFaceLoop()` rejetait et l'UI
+  // passait en erreur fatale sans jamais tenter le CPU — alors que toute la
+  // ladder GPU→CPU était justement là pour ça.
+  let landmarker: FaceLandmarker | null = null;
+  try {
+    landmarker = await createLandmarker(
+      (r) => handlers.onProgress?.(r),
+      currentStrategy(plan).delegate,
+      currentStrategy(plan).minConfidence,
+    );
+  } catch (gpuErr) {
+    plan.strategyIndex = 1; // CPU pleine résolution
+    handlers.onTransition?.(
+      `initialisation GPU impossible (${gpuErr instanceof Error ? gpuErr.message.slice(0, 90) : String(gpuErr).slice(0, 90)}) → essai CPU`,
+    );
+    landmarker = await createLandmarker(
+      (r) => handlers.onProgress?.(r),
+      currentStrategy(plan).delegate,
+      currentStrategy(plan).minConfidence,
+    );
+  }
+
   let swapping = false;
   let disposed = false;
   let modelError: string | null = null;
@@ -98,7 +100,6 @@ export async function startFaceLoop(
   const onSnapshot = (s: FrameSnapshot): void => {
     if (disposed) return;
 
-    // Jamais de return muet : une création asynchrone doit rester observable.
     if (swapping || landmarker === null) {
       lostStreak++;
       handlers.onLost(
@@ -148,11 +149,6 @@ export async function startFaceLoop(
     }
 
     lostStreak++;
-
-    // Produit = UNE seule Task MediaPipe. Le second avis FaceDetector reste dans
-    // les bancs de diagnostic ; ici la machine monte par élimination après 120
-    // frames valides muettes. Aucune ressource concurrente ne peut empêcher le
-    // swap du landmarker.
     const t = planStep(plan, { frameValid: true, landmarksFound: false, probeFound: null });
     handlers.onLost(
       lostStreak,
@@ -168,13 +164,6 @@ export async function startFaceLoop(
     }
   };
 
-  /**
-   * (Re)crée le modèle de la stratégie courante.
-   *
-   * Un échec d'une marche > 0 est RÉCUPÉRABLE : retour à la dernière marche
-   * connue et nouvel essai, sans basculer l'UI en erreur fatale. Seul l'échec
-   * de la marche 0, alors qu'aucun landmarker n'est vivant, est fatal.
-   */
   function ensureLandmarker(): void {
     if (disposed || swapping || landmarker !== null) return;
     swapping = true;
@@ -195,12 +184,11 @@ export async function startFaceLoop(
         }`;
 
         if (targetIndex > 0) {
-          // Repli récupérable : ne PAS appeler le callback fatal `onError`.
           plan.strategyIndex = targetIndex - 1;
-          handlers.onTransition?.(
-            `${modelError} → repli vers « ${currentStrategy(plan).label} »`,
-          );
+          handlers.onTransition?.(`${modelError} → repli vers « ${currentStrategy(plan).label} »`);
         } else {
+          // À l'initialisation, GPU→CPU est déjà tenté ci-dessus. Ici, index 0
+          // signifie qu'une stratégie auparavant vivante n'est plus recréable.
           handlers.onError?.(modelError);
         }
       })
@@ -223,5 +211,4 @@ export async function startFaceLoop(
   };
 }
 
-/** Résultat de sonde ré-exporté pour les pages de diagnostic. */
 export type { FaceProbeResult };
