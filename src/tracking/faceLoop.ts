@@ -2,30 +2,31 @@
  * tracking/faceLoop.ts — l'orchestration des couches 1 à 4.
  *
  *   Couche 1-2  frameFeed.ts      → une frame caméra VALIDE, pixels normalisés
- *   Couche 3    faceProbe.ts      → « y a-t-il un visage ? » (second avis)
+ *   Couche 3    faceProbe.ts      → diagnostic séparé uniquement
  *   Couche 4    landmarker.ts     → les 478 landmarks
- *   Décision    detectionPlan.ts  → échelle de stratégies, montées PROUVÉES
+ *   Décision    detectionPlan.ts  → échelle de stratégies
  *
- * L'échelle (GPU → CPU → entrée réduite → seuils abaissés) vient du cas prouvé
- * sur l'appareil réel : FaceDetector 0,91 / FaceLandmarker 0 sur la même
- * frame. Chaque montée est annoncée avec sa raison. La séparation stricte
- * demeure : « entrée invalide » ≠ « visage non trouvé » ≠ « pose inadaptée »
- * (cette dernière appartient aux couches de MESURE, jamais à la détection).
+ * IMPORTANT (audit 2026-08-21) : la boucle PRODUIT ne maintient plus deux
+ * Tasks MediaPipe en parallèle. Sur l'appareil réel, le FaceLandmarker VIDEO
+ * fonctionne, tandis que la création d'un second modèle MediaPipe (FaceDetector
+ * de sonde) peut échouer. La sonde reste disponible aux pages de diagnostic,
+ * mais la boucle produit monte par élimination après des frames valides muettes.
+ * Cela supprime une source de contention WASM/GPU/XNNPACK sans affaiblir la
+ * métrologie : la sonde n'a jamais mesuré quoi que ce soit.
  *
- * Concurrence (§16) : une seule inférence à la fois — les rappels de snapshot
- * sont sériels et `detectForVideo` est synchrone ; pendant une montée de
- * stratégie (asynchrone), les frames sont ignorées, aucun compteur n'avance.
+ * Concurrence : une seule inférence MediaPipe à la fois. Pendant une montée de
+ * stratégie (asynchrone), les frames sont nommées comme perdues ; aucun état
+ * silencieux ne peut figer la session.
  */
 
 import { createLandmarker, yawFromMatrix } from './landmarker.js';
 import type { FaceLandmarker } from '@mediapipe/tasks-vision';
 import { attachFrameFeed, type FrameSnapshot } from './frameFeed.js';
-import { createFaceProbe, type FaceProbe, type FaceProbeResult } from './faceProbe.js';
+import type { FaceProbeResult } from './faceProbe.js';
 import {
   currentStrategy,
   initialPlan,
   planStep,
-  shouldProbe,
   unpadPoint,
   type DetectionPlan,
   type DetectionStrategy,
@@ -36,15 +37,12 @@ export type LostCause = 'invalid-input' | 'no-face';
 export interface FaceLoopHandlers {
   /** Couche 4 OK : landmarks bruts de CETTE frame (coordonnées normalisées). */
   onLandmarks(lm: ReadonlyArray<{ x: number; y: number; z?: number }>, yawRad: number): void;
-  /**
-   * Pas de landmarks sur cette frame. `cause` sépare (§11) « entrée caméra
-   * cassée » (raison nommée) de « frame valide, visage non trouvé ».
-   */
+  /** Pas de landmarks sur cette frame. */
   onLost(consecutive: number, cause: LostCause, reason: string | null): void;
-  /** Montée de stratégie, avec sa raison (§17). */
+  /** Transition ou avertissement récupérable. */
   onTransition?(reason: string): void;
   onProgress?(ratio: number): void;
-  /** Erreur fatale (création de stratégie impossible…). */
+  /** Erreur fatale : aucune stratégie fonctionnelle ne peut être recréée. */
   onError?(message: string): void;
 }
 
@@ -53,10 +51,6 @@ export interface FaceLoopControl {
   plan(): Readonly<DetectionPlan>;
 }
 
-/** Ajoute la marge (letterbox) de la stratégie autour de la frame : le crop
- *  interne du landmarker (×1,5, mis au carré) cesse de déborder hors image sur
- *  un visage très proche — le mécanisme prouvé du « FaceDetector voit,
- *  FaceLandmarker rend 0 ». Les landmarks sont dé-mappés par `unpadPoint`. */
 function inputFor(
   s: FrameSnapshot,
   strategy: DetectionStrategy,
@@ -71,13 +65,12 @@ function inputFor(
     scratch.height = h;
   }
   const g = scratch.getContext('2d')!;
-  g.fillStyle = '#7f7f7f'; // remplissage neutre, comme le letterbox interne de MediaPipe
+  g.fillStyle = '#7f7f7f';
   g.fillRect(0, 0, w, h);
   g.drawImage(s.source, Math.round(s.w * pad), Math.round(s.h * pad));
   return scratch;
 }
 
-/** Dé-mappe les landmarks du cadre AVEC marge vers le cadre d'origine. */
 function unpadLandmarks(
   lm: ReadonlyArray<{ x: number; y: number; z?: number }>,
   pad: number,
@@ -95,28 +88,24 @@ export async function startFaceLoop(
     currentStrategy(plan).delegate,
     currentStrategy(plan).minConfidence,
   );
-  let probe: FaceProbe | null = null;
-  let probeLoading = false;
   let swapping = false;
   let disposed = false;
-  /** Dernière erreur de CRÉATION d'un modèle. Jamais avalée : affichée. */
   let modelError: string | null = null;
-  /** Erreur de chargement de la SONDE. Idem — `.catch(() => {})` était un
-   *  échec silencieux, très exactement ce que le §1 bug #3 interdit. */
-  let probeError: string | null = null;
   let lostStreak = 0;
   let lastTs = -1;
   const scratch = document.createElement('canvas');
 
   const onSnapshot = (s: FrameSnapshot): void => {
     if (disposed) return;
-    // 🔴 2026-08-21 — ce `return` muet figeait l'écran. Quand la création du
-    // modèle suivant échouait, `swapping` restait vrai et `landmarker` nul
-    // POUR TOUJOURS : plus aucun `onLost`, compteur gelé, séance morte, et
-    // rien à l'écran pour le dire. Constaté sur l'appareil réel : figé à 130.
+
+    // Jamais de return muet : une création asynchrone doit rester observable.
     if (swapping || landmarker === null) {
       lostStreak++;
-      handlers.onLost(lostStreak, 'no-face', modelError ?? 'changement de stratégie en cours');
+      handlers.onLost(
+        lostStreak,
+        'no-face',
+        modelError ?? (swapping ? 'changement de stratégie en cours' : 'modèle indisponible, nouvelle tentative'),
+      );
       if (landmarker === null && !swapping) ensureLandmarker();
       return;
     }
@@ -138,53 +127,37 @@ export async function startFaceLoop(
       const res = landmarker.detectForVideo(inputFor(s, strategy, scratch), ts);
       lm = res.faceLandmarks[0];
       const mat = res.facialTransformationMatrixes[0];
-      if (mat !== undefined) yaw = yawFromMatrix(mat.data); // rotation : insensible à la marge
+      if (mat !== undefined) yaw = yawFromMatrix(mat.data);
     } catch (err) {
-      console.error('Detection error:', err);
+      modelError = `inférence « ${strategy.label} » : ${
+        err instanceof Error ? err.message.slice(0, 90) : String(err).slice(0, 90)
+      }`;
+      handlers.onTransition?.(modelError);
     }
+
     if (lm !== undefined && strategy.padFraction !== null) {
       lm = unpadLandmarks(lm, strategy.padFraction);
     }
 
     if (lm !== undefined && lm.length > 0) {
       lostStreak = 0;
+      modelError = null;
       planStep(plan, { frameValid: true, landmarksFound: true, probeFound: null });
       handlers.onLandmarks(lm, yaw);
       return;
     }
 
     lostStreak++;
-    // — Second avis, seulement quand la machine le demande (couche 3).
-    let probeFound: boolean | null = null;
-    if (shouldProbe(plan)) {
-      if (probe !== null) probeFound = probe.probe(s.source, ts + 0.5).found;
-      else if (!probeLoading) {
-        probeLoading = true;
-        void createFaceProbe('CPU')
-          .then((p) => {
-            if (disposed) p.close();
-            else probe = p;
-          })
-          .catch((err: unknown) => {
-            // 🔴 L'erreur était jetée à la poubelle : impossible de savoir
-            // POURQUOI la sonde manquait. Elle est désormais retenue et
-            // affichée — la machine, elle, monte quand même par élimination.
-            probeError = err instanceof Error ? err.message.slice(0, 80) : String(err).slice(0, 80);
-            probeLoading = false;
-          });
-      }
-    }
 
-    const t = planStep(plan, { frameValid: true, landmarksFound: false, probeFound });
-    // La raison NOMME l'état de la machine : sans elle, une capture d'écran
-    // ne distingue pas « bloqué sur la 1re marche » de « échelle gravie en
-    // vain ». C'est ce qui a coûté un aller-retour complet le 2026-08-21.
+    // Produit = UNE seule Task MediaPipe. Le second avis FaceDetector reste dans
+    // les bancs de diagnostic ; ici la machine monte par élimination après 120
+    // frames valides muettes. Aucune ressource concurrente ne peut empêcher le
+    // swap du landmarker.
+    const t = planStep(plan, { frameValid: true, landmarksFound: false, probeFound: null });
     handlers.onLost(
       lostStreak,
       'no-face',
-      `${strategy.label} · sonde ${
-        probe !== null ? `${plan.probeHits}/${plan.probeTried}` : (probeError ?? 'en chargement')
-      }`,
+      `${strategy.label} · sonde diagnostic désactivée dans la boucle produit`,
     );
 
     if (t.advanceTo !== null) {
@@ -196,14 +169,16 @@ export async function startFaceLoop(
   };
 
   /**
-   * (Re)crée le modèle de la stratégie courante. Idempotente, et surtout : un
-   * échec ne laisse JAMAIS la boucle sans issue — on redescend d'une marche
-   * (celle qui s'était créée) et on réessaie à la frame suivante. Le seul état
-   * durable possible est « un modèle vivant », ou « une erreur affichée ».
+   * (Re)crée le modèle de la stratégie courante.
+   *
+   * Un échec d'une marche > 0 est RÉCUPÉRABLE : retour à la dernière marche
+   * connue et nouvel essai, sans basculer l'UI en erreur fatale. Seul l'échec
+   * de la marche 0, alors qu'aucun landmarker n'est vivant, est fatal.
    */
   function ensureLandmarker(): void {
     if (disposed || swapping || landmarker !== null) return;
     swapping = true;
+    const targetIndex = plan.strategyIndex;
     const target = currentStrategy(plan);
     void createLandmarker(() => {}, target.delegate, target.minConfidence)
       .then((fresh) => {
@@ -211,16 +186,23 @@ export async function startFaceLoop(
         else {
           landmarker = fresh;
           modelError = null;
-          lastTs = -1; // nouvelle instance → nouveau domaine de timestamps
+          lastTs = -1;
         }
       })
       .catch((err: unknown) => {
         modelError = `modèle « ${target.label} » indisponible : ${
-          err instanceof Error ? err.message.slice(0, 70) : String(err).slice(0, 70)
+          err instanceof Error ? err.message.slice(0, 90) : String(err).slice(0, 90)
         }`;
-        handlers.onError?.(modelError);
-        // Repli : la marche précédente s'était créée, elle vaut mieux que rien.
-        if (plan.strategyIndex > 0) plan.strategyIndex--;
+
+        if (targetIndex > 0) {
+          // Repli récupérable : ne PAS appeler le callback fatal `onError`.
+          plan.strategyIndex = targetIndex - 1;
+          handlers.onTransition?.(
+            `${modelError} → repli vers « ${currentStrategy(plan).label} »`,
+          );
+        } else {
+          handlers.onError?.(modelError);
+        }
       })
       .finally(() => {
         swapping = false;
@@ -234,8 +216,6 @@ export async function startFaceLoop(
       feed.stop();
       landmarker?.close();
       landmarker = null;
-      probe?.close();
-      probe = null;
     },
     plan(): Readonly<DetectionPlan> {
       return plan;
