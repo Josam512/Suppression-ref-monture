@@ -1,11 +1,10 @@
 /**
  * ui/calibrationStorage.ts — persistance de la calibration client.
  *
- * Audit 2026-08-21 : une calibration automatique dépend de l'algorithme qui
- * l'a produite. La relire aveuglément après une refonte de l'échelle peut faire
- * croire qu'un nouveau build ne change rien alors que l'application réutilise
- * simplement une ancienne largeur de visage. Les calibrations auto portent
- * donc désormais une version d'algorithme.
+ * Une calibration automatique dépend de l'algorithme qui l'a produite. Les
+ * anciennes calibrations AUTO sont donc invalidées après une refonte du calcul,
+ * tandis que les vérités terrain externes (carte / monture portée) restent
+ * réutilisables.
  */
 
 import type { UserCalibration } from '../core/calibration.js';
@@ -33,11 +32,6 @@ export function loadCalibration(): UserCalibration | null {
     if (raw === null) return null;
     const parsed: unknown = JSON.parse(raw);
     if (!structurallyValid(parsed)) return null;
-
-    // Les anciennes calibrations AUTO sont volontairement invalidées : elles
-    // peuvent venir d'un algorithme de plan/iris que l'audit vient de changer.
-    // Les calibrations carte / monture portée restent utilisables : leur
-    // vérité terrain externe ne dépend pas du nouvel estimateur auto.
     if (parsed.source === 'auto' && parsed.__autoAlgoVersion !== AUTO_ALGO_VERSION) return null;
 
     const { __autoAlgoVersion: _ignored, ...cal } = parsed;
@@ -52,9 +46,23 @@ export function saveCalibration(cal: UserCalibration): void {
     cal.source === 'auto'
       ? { ...cal, [VERSION_FIELD]: AUTO_ALGO_VERSION }
       : { ...cal };
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+
+  // Audit prédictif : localStorage peut lever (navigation privée, politique
+  // d'entreprise, quota, WebView). L'ancienne version laissait l'exception
+  // remonter jusque dans `finishAuto()`, qui la prenait alors pour un ÉCHEC DE
+  // MÉTROLOGIE, recréait le moteur et recommençait la calibration. Une panne de
+  // stockage pouvait donc provoquer une boucle de mesures parfaitement valides.
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+  } catch {
+    // La séance en mémoire reste valide. La prochaine session recalibrera.
+  }
 }
 
 export function clearCalibration(): void {
-  localStorage.removeItem(STORAGE_KEY);
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Idem : l'absence de stockage persistant ne doit jamais bloquer le live.
+  }
 }
