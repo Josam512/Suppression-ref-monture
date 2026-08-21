@@ -66,11 +66,6 @@ export async function startFaceLoop(
 ): Promise<FaceLoopControl> {
   const plan = initialPlan();
 
-  // Audit prédictif 2026-08-21 : auparavant l'INITIALISATION appelait le GPU
-  // directement AVANT que la machine de stratégies n'existe réellement. Si la
-  // création GPU échouait sur un appareil, `startFaceLoop()` rejetait et l'UI
-  // passait en erreur fatale sans jamais tenter le CPU — alors que toute la
-  // ladder GPU→CPU était justement là pour ça.
   let landmarker: FaceLandmarker | null = null;
   try {
     landmarker = await createLandmarker(
@@ -79,7 +74,7 @@ export async function startFaceLoop(
       currentStrategy(plan).minConfidence,
     );
   } catch (gpuErr) {
-    plan.strategyIndex = 1; // CPU pleine résolution
+    plan.strategyIndex = 1;
     handlers.onTransition?.(
       `initialisation GPU impossible (${gpuErr instanceof Error ? gpuErr.message.slice(0, 90) : String(gpuErr).slice(0, 90)}) → essai CPU`,
     );
@@ -156,7 +151,7 @@ export async function startFaceLoop(
       `${strategy.label} · sonde diagnostic désactivée dans la boucle produit`,
     );
 
-    if (t.advanceTo !== null) {
+    if (t.advanceTo !== null || t.restartCurrent === true) {
       handlers.onTransition?.(t.reason ?? currentStrategy(plan).label);
       landmarker.close();
       landmarker = null;
@@ -187,8 +182,6 @@ export async function startFaceLoop(
           plan.strategyIndex = targetIndex - 1;
           handlers.onTransition?.(`${modelError} → repli vers « ${currentStrategy(plan).label} »`);
         } else {
-          // À l'initialisation, GPU→CPU est déjà tenté ci-dessus. Ici, index 0
-          // signifie qu'une stratégie auparavant vivante n'est plus recréable.
           handlers.onError?.(modelError);
         }
       })
