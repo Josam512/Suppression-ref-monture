@@ -1,26 +1,5 @@
 /**
- * core/cameraProfile.ts — la focale est une propriété de l'APPAREIL, pas de la photo.
- *
- * ## Le trou que ce fichier ferme
- *
- * Le balayage mesurait déjà la focale (`core/cardSweep.ts`), s'en servait une
- * fois pour convertir une distance… puis la jetait. À la calibration suivante,
- * ou si le client passait la rotation, la chaîne retombait sur le champ de
- * vision SUPPOSÉ de `core/cardOptics.ts` — celui qui, sur le premier sujet réel,
- * s'est révélé faux de 46 % (78 cm supposés pour 42 mesurés).
- *
- * Or une focale ne change pas entre deux séances : c'est l'objectif du client.
- * Mesurée une fois, elle vaut pour toutes les vues suivantes — et une vue
- * frontale unique, qui ne peut PAS porter la focale, redonne alors une distance
- * juste par simple division (`cardDistanceWithFocal`).
- *
- * ## Ce qui est stocké, et pourquoi sous cette forme
- *
- * 🔴 On ne stocke JAMAIS une focale en pixels. Elle dépend de la résolution de
- * capture, qui change d'une session à l'autre (webcam qui négocie 1280×720 puis
- * 640×480, téléphone qui bascule de caméra). On stocke le RAPPORT
- * `focale / largeur d'image`, qui est une propriété géométrique de l'objectif —
- * invariante par redimensionnement.
+ * core/cameraProfile.ts — profil de focale d'un objectif/caméra.
  */
 
 import { CalibrationError } from './geom.js';
@@ -29,29 +8,21 @@ import { FOCAL_MAX_REL, FOCAL_MIN_REL } from './cardPose.js';
 export interface CameraProfile {
   /** Focale ÷ largeur d'image. Invariante par changement de résolution. */
   focalPerWidth: number;
-  /** Incertitude relative, jamais sous le plancher systématique ci-dessous. */
   relError: number;
-  /** Nombre de vues cumulées qui l'ont produite, toutes séances confondues. */
   views: number;
   measuredAt: number;
+  /**
+   * Identité du périphérique getUserMedia ayant produit la focale, quand elle
+   * est disponible après autorisation caméra. Sans ce lien, un profil mesuré
+   * sur une caméra frontale peut être réutilisé sur un autre objectif/crop et
+   * contaminer distance + correction de plan pendant six mois.
+   */
+  deviceId?: string;
 }
 
-/**
- * Plancher d'incertitude sur la focale, non réductible par moyennage.
- *
- * ⚠️ Même discipline que `IRIS_REL_ERROR` (§4). Empiler des séances fait
- * baisser le BRUIT de pointage, pas les biais systématiques de la méthode :
- * distorsion de l'objectif, point principal supposé au centre de l'image,
- * pixels supposés carrés. Aucun de ces trois-là ne se moyenne. Annoncer mieux
- * que ce plancher serait annoncer une précision qu'on n'a pas vérifiée.
- */
 export const FOCAL_SYSTEMATIC_FLOOR = 0.02;
-
-/** Au-delà, le profil ne vaut pas mieux que l'a priori : on ne s'en sert pas. */
 export const MAX_USABLE_FOCAL_REL_ERROR = 0.15;
-
-/** Un profil trop vieux n'est pas invalide — mais l'appareil a pu changer. */
-export const PROFILE_MAX_AGE_MS = 180 * 24 * 3600 * 1000; // ~6 mois
+export const PROFILE_MAX_AGE_MS = 180 * 24 * 3600 * 1000;
 
 export interface SweepLike {
   focalPx: number;
@@ -59,13 +30,6 @@ export interface SweepLike {
   views: number;
 }
 
-/**
- * Profil issu d'un balayage, normalisé par la largeur d'image.
- *
- * @throws si la focale mesurée sort des bornes de plausibilité : un profil
- *         absurde persisté contaminerait toutes les séances suivantes, ce qui
- *         est bien pire qu'une séance ratée.
- */
 export function profileFromSweep(
   sweep: SweepLike,
   imageWidthPx: number,
@@ -88,16 +52,17 @@ export function profileFromSweep(
   };
 }
 
-/**
- * Combine un profil déjà connu avec une nouvelle mesure.
- *
- * Pondération par l'inverse de la variance : la mesure la plus sûre pèse le
- * plus. C'est le seul estimateur qui ne privilégie ni le passé ni le présent.
- *
- * ⚠️ Le résultat ne descend jamais sous `FOCAL_SYSTEMATIC_FLOOR`, quel que soit
- * le nombre de séances accumulées.
- */
 export function mergeProfile(stored: CameraProfile | null, fresh: CameraProfile): CameraProfile {
+  // Deux deviceId explicitement différents = deux objectifs. Ne jamais les
+  // moyenner comme s'il s'agissait de mesures répétées du même instrument.
+  if (
+    stored !== null &&
+    stored.deviceId !== undefined &&
+    fresh.deviceId !== undefined &&
+    stored.deviceId !== fresh.deviceId
+  ) {
+    return fresh;
+  }
   if (stored === null) return fresh;
 
   const wa = 1 / stored.relError ** 2;
@@ -110,10 +75,10 @@ export function mergeProfile(stored: CameraProfile | null, fresh: CameraProfile)
     relError: Math.max(combined, FOCAL_SYSTEMATIC_FLOOR),
     views: stored.views + fresh.views,
     measuredAt: fresh.measuredAt,
+    deviceId: fresh.deviceId ?? stored.deviceId,
   };
 }
 
-/** Vrai si ce profil peut remplacer l'a priori de champ de vision. */
 export function isProfileUsable(profile: CameraProfile | null, now: number): boolean {
   if (profile === null) return false;
   if (!Number.isFinite(profile.focalPerWidth) || !Number.isFinite(profile.relError)) return false;
@@ -122,12 +87,19 @@ export function isProfileUsable(profile: CameraProfile | null, now: number): boo
   return now - profile.measuredAt <= PROFILE_MAX_AGE_MS;
 }
 
-/** Focale en pixels pour CETTE résolution. C'est ici que la normalisation se défait. */
+/** Profil compatible avec la caméra effectivement ouverte dans cette session. */
+export function isProfileForDevice(profile: CameraProfile | null, deviceId: string | undefined): boolean {
+  if (profile === null) return false;
+  // Si le navigateur ne fournit pas d'identité, on ne prétend pas pouvoir
+  // vérifier : l'appelant décidera s'il accepte le profil ou revient au prior.
+  if (deviceId === undefined || deviceId.length === 0) return profile.deviceId === undefined;
+  return profile.deviceId === deviceId;
+}
+
 export function focalPxFor(profile: CameraProfile, imageWidthPx: number): number {
   return profile.focalPerWidth * imageWidthPx;
 }
 
-/** Relit un profil venant du stockage, sans jamais faire confiance à sa forme. */
 export function parseCameraProfile(raw: unknown): CameraProfile | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const o = raw as Record<string, unknown>;
@@ -135,10 +107,12 @@ export function parseCameraProfile(raw: unknown): CameraProfile | null {
   for (const k of nums) {
     if (typeof o[k] !== 'number' || !Number.isFinite(o[k] as number)) return null;
   }
+  if (o['deviceId'] !== undefined && typeof o['deviceId'] !== 'string') return null;
   return {
     focalPerWidth: o['focalPerWidth'] as number,
     relError: o['relError'] as number,
     views: o['views'] as number,
     measuredAt: o['measuredAt'] as number,
+    ...(typeof o['deviceId'] === 'string' ? { deviceId: o['deviceId'] } : {}),
   };
 }
