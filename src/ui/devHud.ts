@@ -13,7 +13,7 @@
  * observable même si le rendu est cassé, et le rendu même sans calibration.
  */
 
-import { modelSha } from '../tracking/landmarker.js';
+import { modelSha, preloadErrorsOf } from '../tracking/landmarker.js';
 import { APP_BUILD_TAG, AUTO_METROLOGY_VERSION, GIT_SHA } from '../core/versions.js';
 import { irisQualityOf } from '../core/irisQuality.js';
 import { IRIS_DISCREPANCY_MAX } from '../core/autoTuning.js';
@@ -56,6 +56,16 @@ export function hudLines(live: Live, nowMs: number): string[] {
         `♥ ${fmt((nowMs - s.lastLandmarkAt) / 1000, 1)} s`,
     );
     if (s.lastInferenceError !== null) lines.push(`dernière erreur inf : ${s.lastInferenceError}`);
+  }
+
+  // ⭐ Ré-audit A5 — un préchargement mort n'est plus invisible : il s'affiche.
+  const pre = preloadErrorsOf();
+  if (pre.model !== null || pre.fileset !== null) {
+    const parts = [
+      ...(pre.model !== null ? [`modèle : ${pre.model}`] : []),
+      ...(pre.fileset !== null ? [`fileset : ${pre.fileset}`] : []),
+    ];
+    lines.push(`préchargement KO — ${parts.join(' · ')}`);
   }
 
   lines.push(

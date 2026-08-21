@@ -54,11 +54,37 @@ let modelBytesPromise: Promise<Uint8Array> | null = null;
 let filesetPromise: Promise<{ wasmLoaderPath: string; wasmBinaryPath: string }> | null = null;
 let modelSha256: string | null = null;
 
+/**
+ * ⭐ Ré-audit A5 — un chargement qui échoue est ENREGISTRÉ, jamais avalé : le
+ * HUD l'affiche (`preloadErrorsOf`). Le cache vidé fait RÉESSAYER la création
+ * normale ; un succès ultérieur efface l'erreur (elle décrit l'état courant,
+ * pas l'histoire).
+ */
+export interface PreloadErrors {
+  fileset: string | null;
+  model: string | null;
+}
+const preloadErrors: PreloadErrors = { fileset: null, model: null };
+
+export function preloadErrorsOf(): Readonly<PreloadErrors> {
+  return preloadErrors;
+}
+
+const loadErrText = (err: unknown): string =>
+  (err instanceof Error ? err.message : String(err)).slice(0, 140);
+
 function cachedFileset(): Promise<{ wasmLoaderPath: string; wasmBinaryPath: string }> {
-  filesetPromise ??= visionFileset().catch((err: unknown) => {
-    filesetPromise = null;
-    throw err;
-  });
+  filesetPromise ??= visionFileset().then(
+    (fileset) => {
+      preloadErrors.fileset = null;
+      return fileset;
+    },
+    (err: unknown) => {
+      filesetPromise = null;
+      preloadErrors.fileset = loadErrText(err);
+      throw err;
+    },
+  );
   return filesetPromise;
 }
 
@@ -69,6 +95,7 @@ function cachedModelBytes(onProgress: (ratio: number) => void): Promise<Uint8Arr
   }
   modelBytesPromise = fetchModel(onProgress)
     .then((bytes) => {
+      preloadErrors.model = null;
       void sha256Of(bytes).then((sha) => {
         modelSha256 = sha;
       });
@@ -76,6 +103,7 @@ function cachedModelBytes(onProgress: (ratio: number) => void): Promise<Uint8Arr
     })
     .catch((err: unknown) => {
       modelBytesPromise = null;
+      preloadErrors.model = loadErrText(err);
       throw err;
     });
   return modelBytesPromise;
@@ -98,12 +126,17 @@ async function sha256Of(bytes: Uint8Array): Promise<string> {
 /**
  * ⭐ Guide point 7 — précharge fileset + octets du modèle, EN PARALLÈLE de
  * l'ouverture de la caméra. À appeler dès le montage ; `createLandmarker`
- * retrouve alors tout en cache. Les échecs ne sont pas avalés : ils
- * ressortiront, nommés, à la création — ici on ne fait qu'amorcer.
+ * retrouve alors tout en cache. Un échec est ENREGISTRÉ par le cache
+ * (`preloadErrorsOf`, affiché au HUD — ré-audit A5) et le cache vidé : la
+ * création normale réessaie et nommera l'erreur si elle persiste.
  */
 export function preloadLandmarkerAssets(onProgress: (ratio: number) => void = () => {}): void {
-  void cachedFileset().catch(() => {});
-  void cachedModelBytes(onProgress).catch(() => {});
+  const alreadyRecorded = (): void => {
+    // Rejet déjà consigné dans `preloadErrors` par le cache lui-même : ce
+    // handler n'existe que pour éviter un « unhandled rejection » doublon.
+  };
+  void cachedFileset().catch(alreadyRecorded);
+  void cachedModelBytes(onProgress).catch(alreadyRecorded);
 }
 
 /**

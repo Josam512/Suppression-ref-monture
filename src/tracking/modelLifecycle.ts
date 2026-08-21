@@ -1,19 +1,31 @@
 /**
  * tracking/modelLifecycle.ts — le CYCLE DE VIE de l'instance FaceLandmarker.
  *
- * Scindé de `faceLoop.ts` (règle des 300 lignes, §3). Porte les points 8–10 du
- * guide de fiabilisation :
+ * Scindé de `faceLoop.ts` (règle des 300 lignes, §3). Porte les points 6 et
+ * 8–10 du guide de fiabilisation, resserrés par le ré-audit A1/A3 :
  *
  *   - toute création est sous WATCHDOG : `createFromOptions` peut réussir,
  *     rejeter… ou rester pendu — un `.catch()` ne couvre pas le troisième cas.
  *     Une résolution TARDIVE est fermée, jamais laissée fuir ;
- *   - le remplacement est TRANSACTIONNEL : la nouvelle instance est créée
- *     AVANT que l'ancienne soit fermée. Un échec laisse l'ancienne en service
- *     et se dit comme une dégradation RÉCUPÉRABLE ; l'erreur ne devient fatale
- *     que quand AUCUNE stratégie ne peut plus se créer ;
+ *   - 🔴 UNE SEULE Task MediaPipe vivante, à tout instant (point 6). Le
+ *     remplacement ferme donc l'instance courante AVANT de créer la cible.
+ *     L'ordre inverse (créer puis fermer) laissait DEUX FaceLandmarker vivants
+ *     pendant toute la création — des secondes entières de WASM/GPU doublés.
+ *     Pendant la fenêtre de création, les frames sont `model-pending`, et
+ *     l'écran le DIT (paintLost) : une attente expliquée vaut mieux qu'un
+ *     doublon de Task ;
+ *   - si la cible échoue, la stratégie qui MARCHAIT est recréée sous le même
+ *     watchdog ; si elle échoue aussi, l'échelle continue ; l'erreur ne
+ *     devient fatale que quand AUCUNE stratégie ne peut plus se créer ;
  *   - une TEMPÊTE d'erreurs d'inférence (GPU perdu après avoir suivi un
- *     visage) recrée d'abord la même stratégie, puis descend l'échelle — le
- *     seul cas où une stratégie déjà victorieuse est quittée.
+ *     visage) recrée d'abord la même stratégie, puis descend l'échelle ;
+ *   - `whenReady()` dit quand une instance est RÉELLEMENT vivante : l'IHM ne
+ *     déclare « prêt » qu'à ce moment-là (ré-audit A3), jamais pendant la
+ *     compilation WASM.
+ *
+ * La FABRIQUE d'instance est injectable : le banc (tests/lifecycle.test.ts)
+ * compte les Tasks vivantes et prouve `maxAliveTasks === 1` sur les séquences
+ * réelles — création, swap, échec, tempête, résolution tardive.
  */
 
 import type { FaceLandmarker } from '@mediapipe/tasks-vision';
@@ -26,6 +38,15 @@ export const MODEL_CREATE_TIMEOUT_MS = 15_000;
 export const INFERENCE_ERROR_SWAP_AFTER = 10;
 
 export type ModelState = 'creating' | 'ready' | 'failed';
+
+/** Fabrique une instance pour UNE stratégie. Injectable (banc du ré-audit A1). */
+export type LandmarkerFactory = (
+  onProgress: (ratio: number) => void,
+  strategy: DetectionStrategy,
+) => Promise<FaceLandmarker>;
+
+const defaultFactory: LandmarkerFactory = (onProgress, strategy) =>
+  createLandmarker(onProgress, strategy.delegate, strategy.minConfidence);
 
 export interface ModelHostCallbacks {
   onProgress(ratio: number): void;
@@ -47,11 +68,24 @@ export interface ModelHost {
   noteInferenceSuccess(): void;
   /** Nouvelle instance depuis le dernier appel ? (l'appelant remet ses timestamps à zéro) */
   takeGenerationBump(): boolean;
+  /**
+   * ⭐ Ré-audit A3 — résout `true` à la PREMIÈRE instance vivante, `false` si
+   * plus aucune stratégie ne peut se créer (fatal, déjà signalé par onError)
+   * ou si l'hôte est démonté avant. Ne rejette jamais.
+   */
+  whenReady(): Promise<boolean>;
   dispose(): void;
 }
 
+const describeError = (err: unknown): string =>
+  (err instanceof Error ? err.message : String(err)).slice(0, 90);
+
 /** Course entre une création et son délai. Une résolution TARDIVE est fermée. */
-function createWithWatchdog(strategy: DetectionStrategy, onProgress: (r: number) => void): Promise<FaceLandmarker> {
+function createWithWatchdog(
+  factory: LandmarkerFactory,
+  strategy: DetectionStrategy,
+  onProgress: (r: number) => void,
+): Promise<FaceLandmarker> {
   let settled = false;
   return new Promise<FaceLandmarker>((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -59,7 +93,7 @@ function createWithWatchdog(strategy: DetectionStrategy, onProgress: (r: number)
       settled = true;
       reject(new Error(`création « ${strategy.label} » sans réponse après ${MODEL_CREATE_TIMEOUT_MS / 1000} s`));
     }, MODEL_CREATE_TIMEOUT_MS);
-    createLandmarker(onProgress, strategy.delegate, strategy.minConfidence).then(
+    factory(onProgress, strategy).then(
       (fresh) => {
         if (settled) {
           fresh.close(); // arrivée après le délai : ne pas laisser fuir une Task
@@ -79,7 +113,11 @@ function createWithWatchdog(strategy: DetectionStrategy, onProgress: (r: number)
   });
 }
 
-export function createModelHost(plan: DetectionPlan, cb: ModelHostCallbacks): ModelHost {
+export function createModelHost(
+  plan: DetectionPlan,
+  cb: ModelHostCallbacks,
+  factory: LandmarkerFactory = defaultFactory,
+): ModelHost {
   let landmarker: FaceLandmarker | null = null;
   let runningIndex = -1;
   let creating = false;
@@ -90,44 +128,82 @@ export function createModelHost(plan: DetectionPlan, cb: ModelHostCallbacks): Mo
   let consecutiveErrors = 0;
   let recreateTried = false;
 
+  let readyOutcome: boolean | null = null;
+  let readyResolvers: Array<(ok: boolean) => void> = [];
+  function settleReady(ok: boolean): void {
+    if (readyOutcome !== null) return; // seule la PREMIÈRE conclusion compte
+    readyOutcome = ok;
+    for (const r of readyResolvers) r(ok);
+    readyResolvers = [];
+  }
+
+  /** L'instance fraîche devient LA Task — l'unique, l'ancienne étant déjà fermée. */
+  function adopt(fresh: FaceLandmarker, index: number): void {
+    landmarker = fresh;
+    runningIndex = index;
+    generationBump = true; // nouvelle instance → nouveau domaine de timestamps
+    state = 'ready';
+    modelError = null;
+    settleReady(true);
+  }
+
   function ensure(force = false): void {
     if (disposed || creating) return;
+    if (state === 'failed' && !force) return; // fatal déjà dit : le bouton Réessayer remonte tout
     if (!force && landmarker !== null && runningIndex === plan.strategyIndex) return;
     creating = true;
     state = 'creating';
     const targetIndex = plan.strategyIndex;
     const target = DETECTION_STRATEGIES[targetIndex] ?? DETECTION_STRATEGIES[0]!;
 
-    void createWithWatchdog(target, cb.onProgress)
+    // 🔴 Ré-audit A1 — le contrat « une seule Task » prime : l'instance
+    // courante est FERMÉE avant toute création. La stratégie qui marchait est
+    // mémorisée pour être recréée si la cible échoue.
+    const fallbackIndex = landmarker !== null && runningIndex !== targetIndex ? runningIndex : -1;
+    if (landmarker !== null) {
+      landmarker.close();
+      landmarker = null;
+      runningIndex = -1;
+    }
+
+    void createWithWatchdog(factory, target, cb.onProgress)
       .then((fresh) => {
         if (disposed) {
           fresh.close();
           return;
         }
-        const old = landmarker;
-        landmarker = fresh;
-        runningIndex = targetIndex;
-        generationBump = true; // nouvelle instance → nouveau domaine de timestamps
-        state = 'ready';
-        modelError = null;
-        old?.close(); // l'ancienne ne meurt qu'ICI, la neuve étant en service
+        adopt(fresh, targetIndex);
       })
-      .catch((err: unknown) => {
-        const detail = err instanceof Error ? err.message.slice(0, 90) : String(err).slice(0, 90);
-        modelError = `modèle « ${target.label} » indisponible : ${detail}`;
-        if (landmarker !== null) {
-          // L'ancienne stratégie vit toujours : on la garde, on le DIT (point 10).
-          plan.strategyIndex = runningIndex;
-          state = 'ready';
-          cb.onWarning(`${modelError} — je continue avec « ${currentStrategy(plan).label} ».`);
-        } else if (targetIndex < DETECTION_STRATEGIES.length - 1) {
+      .catch(async (err: unknown) => {
+        modelError = `modèle « ${target.label} » indisponible : ${describeError(err)}`;
+        // 1er repli — recréer la stratégie qui MARCHAIT, sous le même watchdog.
+        const fallback = fallbackIndex >= 0 ? DETECTION_STRATEGIES[fallbackIndex] : undefined;
+        if (fallback !== undefined && !disposed) {
+          cb.onWarning(`${modelError} — je recrée « ${fallback.label} ».`);
+          try {
+            const back = await createWithWatchdog(factory, fallback, cb.onProgress);
+            if (disposed) {
+              back.close();
+              return;
+            }
+            plan.strategyIndex = fallbackIndex;
+            adopt(back, fallbackIndex);
+            return;
+          } catch (err2: unknown) {
+            modelError = `recréation « ${fallback.label} » impossible : ${describeError(err2)}`;
+          }
+        }
+        if (disposed) return;
+        // 2e repli — la marche suivante de l'échelle, même contrat.
+        if (targetIndex < DETECTION_STRATEGIES.length - 1) {
           plan.strategyIndex = targetIndex + 1;
           state = 'creating';
           cb.onWarning(`${modelError} — j'essaie « ${currentStrategy(plan).label} ».`);
         } else {
           state = 'failed';
+          settleReady(false);
           cb.onError(
-            `Aucune stratégie de détection n'a pu se créer (dernier échec : ${detail}). ` +
+            `Aucune stratégie de détection n'a pu se créer (dernier échec : ${describeError(err)}). ` +
               `Rechargez la page ; si cela persiste, essayez un autre navigateur.`,
           );
         }
@@ -177,8 +253,13 @@ export function createModelHost(plan: DetectionPlan, cb: ModelHostCallbacks): Mo
       generationBump = false;
       return b;
     },
+    whenReady(): Promise<boolean> {
+      if (readyOutcome !== null) return Promise.resolve(readyOutcome);
+      return new Promise<boolean>((res) => readyResolvers.push(res));
+    },
     dispose(): void {
       disposed = true;
+      settleReady(false);
       landmarker?.close();
       landmarker = null;
     },

@@ -4,9 +4,11 @@
  * Durci par le guide de fiabilisation (2026-08-21) :
  *
  *   - le délai d'initialisation couvre TOUTE la chaîne caméra — getUserMedia,
- *     `play()`, l'arrivée de vraies dimensions — et plus seulement l'attente de
- *     métadonnées (complément 25). L'init du MODÈLE a son propre délai, dans
- *     `tracking/faceLoop.ts` ;
+ *     `play()`, l'arrivée de vraies dimensions — CHAQUE étape courant contre la
+ *     MÊME échéance via `withDeadline` (complément 25, ré-audit A4 : un budget
+ *     calculé mais appliqué à la seule attente de dimensions ne protégeait
+ *     rien). L'init du MODÈLE a son propre délai, dans `tracking/faceLoop.ts`,
+ *     et `onReady` n'est déclaré qu'avec un modèle RÉELLEMENT vivant (A3) ;
  *   - la vidéo est attendue par CONDITION (`videoWidth > 0 && readyState ≥ 2`),
  *     jamais par un événement qui a pu être émis avant qu'on l'écoute : à
  *     `readyState === 1`, `loadedmetadata` est déjà passé et ne reviendra pas —
@@ -25,6 +27,7 @@ import type { CoordinateSpace } from '../tracking/detectionPlan.js';
 import { preloadLandmarkerAssets } from '../tracking/landmarker.js';
 import type { CameraIdentity } from '../core/cameraProfile.js';
 import type { NormalizedLandmark } from '../core/geom.js';
+import { withDeadline } from './deadline.js';
 
 export interface CameraHandlers {
   onFrame(
@@ -42,7 +45,11 @@ export interface CameraHandlers {
    */
   onLost(ctx: CanvasRenderingContext2D, n: number, cause: LostCause, reason: string | null): void;
   onProgress(ratio: number): void;
-  /** Appelé une fois, quand la caméra et le modèle sont prêts. */
+  /**
+   * Appelé UNE fois, quand la caméra ET une instance de détection VIVANTE sont
+   * prêtes (ré-audit A3) — jamais pendant la compilation WASM : aucun écran de
+   * mesure ni chrono métrique ne démarre avant que le modèle puisse répondre.
+   */
   onReady(stats: () => Readonly<FaceLoopStats>): void;
   /** L'identité de l'objectif RÉELLEMENT ouvert (points 39–40) — avant onReady. */
   onCameraIdentity?(identity: CameraIdentity): void;
@@ -138,10 +145,20 @@ export function useCameraLoop(
           if (!disposed) held.current.onProgress(r);
         });
 
+        // ⭐ Ré-audit A4 — une seule échéance pour TOUTE la chaîne caméra ;
+        // chaque étape court contre elle, et une résolution tardive est
+        // nettoyée (jamais un stream fantôme, point 66).
         const deadline = performance.now() + CAMERA_INIT_TIMEOUT_MS;
-        const fresh = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
-        });
+        const budget = `${CAMERA_INIT_TIMEOUT_MS / 1000} s`;
+        const fresh = await withDeadline(
+          navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+          }),
+          deadline,
+          `L'accès à la caméra (getUserMedia) n'a pas répondu en ${budget}. ` +
+            `Fermez les autres applications qui utilisent la caméra, puis réessayez.`,
+          (late) => stopStream(late),
+        );
         const video = videoRef.current;
         const canvas = canvasRef.current;
         if (video === null || canvas === null || disposed) {
@@ -151,7 +168,12 @@ export function useCameraLoop(
         stream = fresh;
 
         video.srcObject = stream;
-        await video.play();
+        await withDeadline(
+          video.play(),
+          deadline,
+          `Le démarrage de la vidéo (play) n'a pas répondu en ${budget}. ` +
+            `Rechargez la page ; si cela persiste, essayez un autre navigateur.`,
+        );
         if (disposed) {
           stopStream(stream);
           return;
@@ -211,7 +233,15 @@ export function useCameraLoop(
           stopStream(stream);
           return;
         }
-        loop = control;
+        loop = control; // dès maintenant : le cleanup peut le stopper pendant l'attente
+
+        // ⭐ Ré-audit A3 — « prêt » n'est déclaré qu'avec une instance de
+        // détection VIVANTE. Le délai du modèle est porté par son échelle de
+        // stratégies (watchdog par création), pas par l'échéance caméra.
+        const modelAlive = await control.modelReady();
+        if (disposed) return; // le cleanup a déjà stoppé boucle et stream
+        if (!modelAlive) return; // fatal déjà signalé par onError ; « Réessayer » remonte tout
+
         held.current.onReady(() => control.stats());
       } catch (err) {
         stopStream(stream);

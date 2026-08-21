@@ -3,7 +3,8 @@
  *
  *   Couche 1-2  frameFeed.ts       → une frame caméra VALIDE, pixels normalisés
  *   Couche 4    landmarker.ts      → les 478 landmarks
- *   Vie du modèle modelLifecycle.ts → watchdog de création, swap transactionnel
+ *   Vie du modèle modelLifecycle.ts → watchdog de création, UNE seule Task
+ *                                     (fermer avant créer, ré-audit A1)
  *   Décision    detectionPlan.ts   → échelle de stratégies, montées temporelles
  *
  * Durci par le guide de fiabilisation (2026-08-21) :
@@ -88,6 +89,13 @@ export interface FaceLoopControl {
   stop(): void;
   plan(): Readonly<DetectionPlan>;
   stats(): Readonly<FaceLoopStats>;
+  /**
+   * ⭐ Ré-audit A3 — résout `true` quand une instance de détection est
+   * RÉELLEMENT vivante (fin de la compilation WASM comprise), `false` si plus
+   * aucune stratégie ne peut se créer (fatal déjà signalé par onError) ou si
+   * la boucle est stoppée avant. L'IHM ne déclare « prêt » qu'après.
+   */
+  modelReady(): Promise<boolean>;
 }
 
 /** Ajoute la marge (letterbox) de la stratégie autour de la frame : le crop
@@ -240,7 +248,9 @@ export async function startFaceLoop(
     handlers.onLost(lostStreak, 'no-face', strategy.label);
     if (t.advanceTo !== null) {
       handlers.onTransition?.(t.reason ?? currentStrategy(plan).label);
-      host.ensure(); // transactionnel : l'ancienne reste en service pendant la création
+      // Une seule Task (A1) : l'ancienne est fermée, la création court sous
+      // watchdog — les frames de la fenêtre sont `model-pending`, et c'est dit.
+      host.ensure();
     }
   };
 
@@ -260,6 +270,9 @@ export async function startFaceLoop(
     },
     stats(): Readonly<FaceLoopStats> {
       return stats;
+    },
+    modelReady(): Promise<boolean> {
+      return host.whenReady();
     },
   };
 }
