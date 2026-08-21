@@ -1,37 +1,68 @@
 /**
- * ui/calibrationStorage.ts — la mesure du client survit à la fermeture d'onglet.
+ * ui/calibrationStorage.ts — persistance de la calibration client.
  *
- * 🔴 C'est la contrepartie de tout ce que la séance filmée demande. Le client
- * tient sa carte, pointe deux repères et tourne la tête **une seule fois** ; à
- * partir de là son visage est connu en millimètres et devient sa propre règle
- * graduée (§4). Sans cette persistance, on lui redemanderait sa carte à chaque
- * monture, et la friction dépasserait de loin le bénéfice.
- *
- * ⚠️ Rien n'est vérifié ici au-delà de la forme : une calibration relue est
- * traitée comme n'importe quelle autre. C'est voulu — le contrôle de
- * plausibilité (§4, B5) a déjà eu lieu au moment de la mesure, et le refaire
- * ici sur des données qui l'ont passé n'ajouterait rien.
+ * Une calibration automatique dépend de l'algorithme qui l'a produite. Les
+ * anciennes calibrations AUTO sont donc invalidées après une refonte du calcul,
+ * tandis que les vérités terrain externes (carte / monture portée) restent
+ * réutilisables.
  */
 
 import type { UserCalibration } from '../core/calibration.js';
 
 const STORAGE_KEY = 'essayage.calibration.v1';
+const AUTO_ALGO_VERSION = 2;
+const VERSION_FIELD = '__autoAlgoVersion';
 
-/** La calibration mémorisée, ou `null`. Un stockage illisible n'est pas une panne. */
+type StoredCalibration = UserCalibration & { __autoAlgoVersion?: number };
+
+function structurallyValid(x: unknown): x is StoredCalibration {
+  if (typeof x !== 'object' || x === null) return false;
+  const o = x as Record<string, unknown>;
+  return (
+    typeof o['faceWidthMm'] === 'number' && Number.isFinite(o['faceWidthMm']) &&
+    typeof o['relError'] === 'number' && Number.isFinite(o['relError']) &&
+    typeof o['measuredAt'] === 'number' && Number.isFinite(o['measuredAt']) &&
+    (o['source'] === 'iris' || o['source'] === 'card' || o['source'] === 'worn-frame' || o['source'] === 'auto')
+  );
+}
+
 export function loadCalibration(): UserCalibration | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw === null ? null : (JSON.parse(raw) as UserCalibration);
+    if (raw === null) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (!structurallyValid(parsed)) return null;
+    if (parsed.source === 'auto' && parsed.__autoAlgoVersion !== AUTO_ALGO_VERSION) return null;
+
+    const { __autoAlgoVersion: _ignored, ...cal } = parsed;
+    return cal;
   } catch {
     return null;
   }
 }
 
 export function saveCalibration(cal: UserCalibration): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(cal));
+  const stored: StoredCalibration =
+    cal.source === 'auto'
+      ? { ...cal, [VERSION_FIELD]: AUTO_ALGO_VERSION }
+      : { ...cal };
+
+  // Audit prédictif : localStorage peut lever (navigation privée, politique
+  // d'entreprise, quota, WebView). L'ancienne version laissait l'exception
+  // remonter jusque dans `finishAuto()`, qui la prenait alors pour un ÉCHEC DE
+  // MÉTROLOGIE, recréait le moteur et recommençait la calibration. Une panne de
+  // stockage pouvait donc provoquer une boucle de mesures parfaitement valides.
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+  } catch {
+    // La séance en mémoire reste valide. La prochaine session recalibrera.
+  }
 }
 
-/** « Refaire la calibration » : on jette, et la séance recommence à zéro. */
 export function clearCalibration(): void {
-  localStorage.removeItem(STORAGE_KEY);
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Idem : l'absence de stockage persistant ne doit jamais bloquer le live.
+  }
 }
