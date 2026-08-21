@@ -1,10 +1,5 @@
 /**
- * ui/useAutoCalibration.ts — la calibration automatique, côté IHM.
- *
- * Extrait de `TryOn.tsx` pour tenir la règle des 300 lignes (§3), et parce que
- * c'est ici que vit la réponse au symptôme n°1 de l'audit : le moteur conclut,
- * la collecte S'ARRÊTE (`live.auto = null`), et le succès est ANNONCÉ en clair.
- * La caméra, elle, ne change pas d'état : l'essayage continue dessus.
+ * ui/useAutoCalibration.ts — calibration automatique côté IHM.
  */
 
 import { useCallback, useRef, type MutableRefObject, type RefObject } from 'react';
@@ -19,18 +14,9 @@ import type { Phase } from './CalibrationPanel.js';
 import { stepAutoCalibration } from './liveSteps.js';
 import type { Live } from './liveState.js';
 
-/**
- * ⭐ Fenêtres de capture pour l'écart temporal (§14.2, sans carte) :
- * une image FRONTALE figée (yaw quasi nul, mêmes pixels que ses repères), et
- * une vue tournée de chaque côté pour le masque de mouvement — la seule chose
- * qui distingue un bord de tête d'un montant de porte. Une capture par fenêtre,
- * pas par frame : trois `getImageData` au TOTAL pour toute la séance.
- */
 export const AUTO_FRONTAL_MAX_YAW_RAD = 0.06;
 export const AUTO_SIDE_MIN_YAW_RAD = 0.17;
 export const AUTO_SIDE_MAX_YAW_RAD = 0.61;
-
-/** Refus d'ASSEMBLAGE tolérés avant d'arrêter de ré-armer (audit, point 1). */
 export const MAX_ASSEMBLY_RETRIES = 3;
 
 export interface AutoCalibrationDeps {
@@ -43,22 +29,22 @@ export interface AutoCalibrationDeps {
 }
 
 export interface AutoCalibration {
-  /** (Re)lance la mesure : nouveau moteur, compteurs à zéro. */
   startAuto(): void;
-  /**
-   * À appeler à CHAQUE frame de la boucle (`lm` null si détection perdue).
-   * Publie l'état quand il change, assemble et annonce quand le moteur conclut.
-   */
   pump(lm: readonly NormalizedLandmark[] | null, yawRad: number, w: number, h: number): void;
 }
 
 export function useAutoCalibration(deps: AutoCalibrationDeps): AutoCalibration {
   const { live, videoRef, canvasRef, cameraProfile, onCalibrated, setPhase } = deps;
 
-  /** Canvas de lecture réutilisé — même règle mémoire que `useV1Calibration`. */
   const off = useRef<HTMLCanvasElement | null>(null);
   const frontal = useRef<{ buf: ImageBuffer; lm: NormalizedLandmark[]; w: number; h: number } | null>(null);
   const sides = useRef<{ neg: ImageBuffer | null; pos: ImageBuffer | null }>({ neg: null, pos: null });
+  const lastEngineAttempt = useRef(0);
+
+  const resetTemporalCaptures = useCallback((): void => {
+    frontal.current = null;
+    sides.current = { neg: null, pos: null };
+  }, []);
 
   const grab = useCallback((): ImageBuffer | null => {
     const video = videoRef.current;
@@ -75,31 +61,19 @@ export function useAutoCalibration(deps: AutoCalibrationDeps): AutoCalibration {
     return ctx.getImageData(0, 0, canvas.width, canvas.height);
   }, [videoRef]);
 
-  /** Combien de fois l'ASSEMBLAGE a refusé. Borne le ré-armement (audit 1). */
   const assemblyFailures = useRef(0);
 
   const startAuto = useCallback((): void => {
     assemblyFailures.current = 0;
+    lastEngineAttempt.current = 0;
     live.current.probe = null;
     live.current.pendingCard = null;
     live.current.auto = new AutoCalibrationEngine();
     live.current.lastAutoKey = '';
-    frontal.current = null;
-    sides.current = { neg: null, pos: null };
+    resetTemporalCaptures();
     setPhase({ kind: 'mesure-auto', status: live.current.auto.status() });
-  }, [live, setPhase]);
+  }, [live, resetTemporalCaptures, setPhase]);
 
-  /**
-   * Le moteur a conclu : on assemble UNE fois.
-   *
-   * 🔴 Audit humain du 2026-08-21, point 1 : `auto = null` était posé AVANT
-   * `calibrateAuto()`. Quand l'assemblage levait (grandeur hors plage
-   * anatomique), l'IHM affichait un statut « collecting » alors qu'il
-   * n'existait plus AUCUN moteur — la collecte ne repartait jamais. Le verrou
-   * ne se pose donc plus qu'au succès ; à l'échec on remonte explicitement un
-   * moteur neuf, parce que garder l'ancien reviendrait au même : il est déjà
-   * `calibrated`, donc `offer()` en sort immédiatement.
-   */
   const finishAuto = useCallback((): void => {
     const m = live.current.auto?.measures() ?? null;
     if (m === null) {
@@ -107,8 +81,6 @@ export function useAutoCalibration(deps: AutoCalibrationDeps): AutoCalibration {
       return;
     }
 
-    // ⚠️ Silhouette tentée SEULEMENT avec frontale + au moins une vue tournée :
-    // sans mouvement, un montant de porte passerait pour un bord de tête.
     const f = frontal.current;
     const buffers = [sides.current.neg, sides.current.pos].filter((b): b is ImageBuffer => b !== null);
     const scene: AutoTemporalScene | null =
@@ -124,7 +96,7 @@ export function useAutoCalibration(deps: AutoCalibrationDeps): AutoCalibration {
         Date.now(),
         scene,
       );
-      live.current.auto = null; // ⭐ le verrou, au SUCCÈS seulement.
+      live.current.auto = null;
       assemblyFailures.current = 0;
       onCalibrated(out.cal, [
         `✅ Calibration acquise — c'est terminé (${m.usableFrames} images utiles). ` +
@@ -132,17 +104,12 @@ export function useAutoCalibration(deps: AutoCalibrationDeps): AutoCalibration {
         ...out.notes,
       ]);
     } catch (err) {
-      // Grandeur hors plage anatomique. Recommencer est la seule réparation —
-      // encore faut-il qu'il reste quelque chose pour recommencer.
       assemblyFailures.current++;
       if (assemblyFailures.current <= MAX_ASSEMBLY_RETRIES) {
         live.current.auto = new AutoCalibrationEngine();
-        frontal.current = null;
-        sides.current = { neg: null, pos: null };
+        lastEngineAttempt.current = 0;
+        resetTemporalCaptures();
       } else {
-        // Retry CONTRÔLÉ : après trois refus d'affilée, ce n'est plus du bruit.
-        // On cesse de boucler, l'écran dit pourquoi et propose ses deux sorties
-        // — et l'essayage, lui, continue de s'afficher en aperçu.
         live.current.auto = null;
       }
       setPhase({
@@ -150,13 +117,10 @@ export function useAutoCalibration(deps: AutoCalibrationDeps): AutoCalibration {
         status: failedStatusOf(err, assemblyFailures.current),
       });
     }
-  }, [live, canvasRef, cameraProfile, onCalibrated, setPhase]);
+  }, [live, canvasRef, cameraProfile, onCalibrated, resetTemporalCaptures, setPhase]);
 
   const pump = useCallback(
     (lm: readonly NormalizedLandmark[] | null, yawRad: number, w: number, h: number): void => {
-      // — Capture opportuniste pour l'écart temporal, AVANT que le moteur ne
-      //   conclue. Les repères sont COPIÉS avec l'image : mêmes pixels, mêmes
-      //   landmarks (la leçon de `ui/freezeFrame.ts`).
       if (live.current.auto !== null && lm !== null) {
         const ay = Math.abs(yawRad);
         if (ay <= AUTO_FRONTAL_MAX_YAW_RAD && frontal.current === null) {
@@ -170,21 +134,27 @@ export function useAutoCalibration(deps: AutoCalibrationDeps): AutoCalibration {
 
       const status = stepAutoCalibration(live.current, lm, yawRad, w, h, Date.now());
       if (status === null) return;
+
+      // Audit prédictif 2026-08-21 : quand le moteur réarme une tentative, ses
+      // mesures métriques repartent désormais sur une fenêtre fraîche. Les
+      // captures de silhouette DOIVENT suivre la même frontière. Sinon une
+      // frontale prise 20 s plus tôt à 40 cm pouvait être combinée à une échelle
+      // fraîche prise à 60 cm, et produire un écart temporal faux tout en ayant
+      // une calibration d'échelle correcte.
+      if (status.attempts !== lastEngineAttempt.current) {
+        lastEngineAttempt.current = status.attempts;
+        resetTemporalCaptures();
+      }
+
       if (status.state === 'calibrated') finishAuto();
       else setPhase({ kind: 'mesure-auto', status });
     },
-    [live, grab, finishAuto, setPhase],
+    [live, grab, finishAuto, resetTemporalCaptures, setPhase],
   );
 
   return { startAuto, pump };
 }
 
-/**
- * L'ASSEMBLAGE a refusé (grandeur hors plage anatomique). C'est le SEUL refus
- * qui subsiste, et il se répare en recommençant. On le publie comme une
- * tentative ratée — pas comme un état terminal : depuis l'audit du 2026-08-21,
- * il n'existe plus d'état qui condamne la séance.
- */
 function failedStatusOf(
   err: unknown,
   attempts: number,
