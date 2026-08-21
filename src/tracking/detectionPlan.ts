@@ -1,31 +1,45 @@
 /**
  * tracking/detectionPlan.ts — la MACHINE D'ÉTAT de la détection (calcul pur).
  *
- * Remplace le « retry aveugle » : une ÉCHELLE de stratégies, gravie marche par
- * marche, chaque montée portée par une PREUVE et une raison nommée. Constat qui
- * a imposé l'échelle (Samsung réel, Chrome 151, 2026-08-20) : sur la même
- * frame figée, FaceDetector trouve le visage à 0,91 et FaceLandmarker rend 0 —
- * les pixels sont innocents, c'est le landmarker qu'il faut reconfigurer.
+ * Refonte du guide de fiabilisation (2026-08-21, points 6, 11, 12) :
+ *
+ *   - la sonde FaceDetector est SORTIE du chemin produit : une seule Task
+ *     MediaPipe lourde vit à la fois (mémoire, WASM, contention GPU — le
+ *     second modèle pouvait même échouer à se créer sur l'appareil réel).
+ *     Elle reste disponible pour les pages d'atelier (`tracking/faceProbe.ts`),
+ *     qui ne sont pas le produit. Toutes les montées se font donc PAR
+ *     ÉLIMINATION — et une élimination ne dépend d'aucun témoin ;
+ *   - les seuils sont des DURÉES, plus des comptes de frames : 120 frames
+ *     valaient 8 s à 15 fps et 2 s à 60 fps — le même code changeait de
+ *     comportement avec la cadence (point 12). L'acquisition initiale monte
+ *     vite (SWAP_MS) ; une stratégie qui a DÉJÀ suivi un visage n'est jamais
+ *     quittée : sortir du champ n'est pas une panne (les deux machines du
+ *     point 11 — acquisition initiale rapide, reprise de perte prudente).
  *
  *   WAITING_VALID_FRAME ──frame valide──▶ SEARCHING (stratégie 0)
  *   SEARCHING ──landmarks──▶ TRACKING (stratégie verrouillée)
  *   TRACKING ──perte──▶ SEARCHING, même stratégie (sortir du champ ≠ panne)
- *   SEARCHING ──sonde OUI, landmarker muet──▶ stratégie suivante  [preuve]
- *   SEARCHING ──tous muets, longtemps──▶ stratégie suivante       [élimination]
+ *   SEARCHING ──muet SWAP_MS + assez de frames──▶ stratégie suivante
  *   dernière stratégie muette ──▶ on continue de chercher, honnêtement.
  *
- * Les frames INVALIDES (noires, 0×0) n'avancent aucun compteur. Une stratégie
- * qui a DÉJÀ produit des landmarks n'est jamais quittée pour une perte.
+ * Les frames INVALIDES (noires, 0×0) n'avancent aucune horloge.
  */
 
 import type { Delegate } from './landmarker.js';
 
-/** La sonde tourne toutes les N frames valides muettes — assez pour prouver. */
-export const PROBE_EVERY = 10;
-/** Sonde OUI + landmarker muet pendant N frames valides → montée PROUVÉE. */
-export const SWAP_WITH_EVIDENCE_AFTER = 30;
-/** Tous muets pendant N frames valides → montée par élimination. */
-export const SWAP_BLIND_AFTER = 120;
+/**
+ * Silence toléré sur une marche avant de monter, en millisecondes.
+ * L'ancienne règle (120 frames) coûtait ~8 s par marche à 15 fps ; trois
+ * marches ≈ 24 s avant la stratégie qui marche. À 2 500 ms, l'échelle entière
+ * est parcourue en moins de 8 s, quelle que soit la cadence.
+ */
+export const SWAP_SILENT_MS = 2500;
+/**
+ * Nombre MINIMAL de frames valides muettes en plus de la durée : deux frames
+ * espacées de 3 s ne prouvent pas qu'une stratégie est muette, elles prouvent
+ * que la caméra est lente.
+ */
+export const SWAP_MIN_SILENT_FRAMES = 10;
 
 /** Une marche de l'échelle : comment configurer le landmarker. */
 export interface DetectionStrategy {
@@ -38,8 +52,12 @@ export interface DetectionStrategy {
    * ×1,5 et mis au carré — sur un visage occupant 60-80 % du cadre il déborde
    * massivement hors image, le score de présence s'effondre sous 0,5 et le
    * visage est SUPPRIMÉ du résultat, sans erreur. La marge redonne au crop de
-   * la matière ; les landmarks sont ensuite DÉ-MAPPÉS exactement
+   * la matière ; les landmarks X/Y sont ensuite DÉ-MAPPÉS exactement
    * (`unpadPoint`) : zéro effet sur les mesures.
+   *
+   * ⚠️ Le Z, lui, n'est PAS remappé (complément 9) : la sortie d'une stratégie
+   * paddée est étiquetée `coordinateSpace: 'padded-remapped'` et aucun chemin
+   * de production ne doit consommer son Z.
    */
   padFraction: number | null;
   /** Seuils detection/presence/tracking abaissés (null = défauts 0,5). */
@@ -66,6 +84,13 @@ export const DETECTION_STRATEGIES: readonly DetectionStrategy[] = [
   },
 ];
 
+/** Comment les coordonnées de la frame ont été produites (complément 9). */
+export type CoordinateSpace = 'direct' | 'padded-remapped';
+
+export function coordinateSpaceOf(strategy: DetectionStrategy): CoordinateSpace {
+  return strategy.padFraction === null ? 'direct' : 'padded-remapped';
+}
+
 /**
  * Dé-mappe une coordonnée normalisée depuis le cadre AVEC marge vers le cadre
  * d'origine. Un point du centre revient exactement au centre : la marge est
@@ -84,8 +109,8 @@ export interface DetectionPlan {
   /** Frames VALIDES consécutives sans landmarks (les invalides ne comptent pas). */
   silentValidFrames: number;
   invalidFrames: number;
-  probeTried: number;
-  probeHits: number;
+  /** Début du silence courant (1re frame valide muette de la marche), en ms. */
+  silentSinceMs: number | null;
   /** La stratégie courante a-t-elle déjà produit des landmarks ? */
   strategyEverTracked: boolean;
 }
@@ -93,8 +118,8 @@ export interface DetectionPlan {
 export interface DetectionObservation {
   frameValid: boolean;
   landmarksFound: boolean;
-  /** Résultat de la sonde sur CETTE frame, si elle a tourné. */
-  probeFound: boolean | null;
+  /** Horloge de la frame — les décisions sont des durées, pas des comptes. */
+  nowMs: number;
 }
 
 export interface DetectionTransition {
@@ -110,8 +135,7 @@ export function initialPlan(): DetectionPlan {
     strategyIndex: 0,
     silentValidFrames: 0,
     invalidFrames: 0,
-    probeTried: 0,
-    probeHits: 0,
+    silentSinceMs: null,
     strategyEverTracked: false,
   };
 }
@@ -120,21 +144,11 @@ export function currentStrategy(plan: DetectionPlan): DetectionStrategy {
   return DETECTION_STRATEGIES[plan.strategyIndex] ?? DETECTION_STRATEGIES[0]!;
 }
 
-/** La sonde doit-elle tourner sur la prochaine frame valide muette ? */
-export function shouldProbe(plan: DetectionPlan): boolean {
-  return (
-    plan.phase === 'searching' &&
-    !plan.strategyEverTracked &&
-    plan.silentValidFrames > 0 &&
-    plan.silentValidFrames % PROBE_EVERY === 0
-  );
-}
-
 /** Avance la machine d'une frame. Mute `plan` et rend la transition éventuelle. */
 export function planStep(plan: DetectionPlan, obs: DetectionObservation): DetectionTransition {
   if (!obs.frameValid) {
     plan.invalidFrames++;
-    // Une entrée cassée ne dit RIEN sur les détecteurs : aucun compteur n'avance.
+    // Une entrée cassée ne dit RIEN sur les détecteurs : aucune horloge n'avance.
     return { advanceTo: null, reason: null };
   }
   plan.invalidFrames = 0;
@@ -142,59 +156,33 @@ export function planStep(plan: DetectionPlan, obs: DetectionObservation): Detect
   if (obs.landmarksFound) {
     plan.phase = 'tracking';
     plan.silentValidFrames = 0;
+    plan.silentSinceMs = null;
     plan.strategyEverTracked = true;
     return { advanceTo: null, reason: null };
   }
 
   plan.phase = 'searching';
   plan.silentValidFrames++;
-  if (obs.probeFound !== null) {
-    plan.probeTried++;
-    if (obs.probeFound) plan.probeHits++;
-  }
+  plan.silentSinceMs ??= obs.nowMs;
 
   // Une stratégie qui a déjà suivi un visage n'est pas en panne : on cherche.
   const last = plan.strategyIndex >= DETECTION_STRATEGIES.length - 1;
   if (plan.strategyEverTracked || last) return { advanceTo: null, reason: null };
 
+  const silentMs = obs.nowMs - plan.silentSinceMs;
+  if (silentMs < SWAP_SILENT_MS || plan.silentValidFrames < SWAP_MIN_SILENT_FRAMES) {
+    return { advanceTo: null, reason: null };
+  }
+
   const from = currentStrategy(plan).label;
   const next = DETECTION_STRATEGIES[plan.strategyIndex + 1]!;
-
-  if (plan.probeHits > 0 && plan.silentValidFrames >= SWAP_WITH_EVIDENCE_AFTER) {
-    advance(plan);
-    return {
-      advanceTo: plan.strategyIndex,
-      reason:
-        `FaceDetector voit un visage (${plan.probeHits}×) mais le landmarker est muet ` +
-        `(« ${from} ») → « ${next.label} »`,
-    };
-  }
-  // 🔴 CORRECTIF 2026-08-21 — cette montée était conditionnée à `probeTried > 0`.
-  // Quand la sonde ne se charge PAS (modèle indisponible, contexte navigateur
-  // restreint), `probeTried` reste à zéro pour toujours : l'échelle ne montait
-  // alors JAMAIS, et la détection restait bloquée sur sa première marche
-  // indéfiniment. Constaté sur l'appareil réel : 1199 frames perdues, toujours
-  // en « délégué GPU ». Le commentaire de `faceLoop.ts` promettait pourtant
-  // l'inverse — « sonde indisponible : la machine montera par élimination ».
-  // Une montée par ÉLIMINATION ne peut pas dépendre de la disponibilité d'un
-  // témoin : c'est la définition même de l'élimination.
-  if (plan.silentValidFrames >= SWAP_BLIND_AFTER) {
-    advance(plan);
-    return {
-      advanceTo: plan.strategyIndex,
-      reason:
-        (plan.probeTried > 0
-          ? `aucun des deux détecteurs ne voit de visage sur ${SWAP_BLIND_AFTER} frames valides `
-          : `sonde indisponible, et rien détecté sur ${SWAP_BLIND_AFTER} frames valides `) +
-        `(« ${from} ») → « ${next.label} » par élimination`,
-    };
-  }
-  return { advanceTo: null, reason: null };
-}
-
-function advance(plan: DetectionPlan): void {
   plan.strategyIndex++;
   plan.silentValidFrames = 0;
-  plan.probeHits = 0;
-  plan.probeTried = 0;
+  plan.silentSinceMs = null;
+  return {
+    advanceTo: plan.strategyIndex,
+    reason:
+      `rien détecté pendant ${(silentMs / 1000).toFixed(1)} s de frames valides ` +
+      `(« ${from} ») → « ${next.label} » par élimination`,
+  };
 }

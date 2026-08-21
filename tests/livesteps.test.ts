@@ -31,7 +31,12 @@ const cam = (over: Partial<CameraOptions> = {}): CameraOptions => ({
 });
 
 function liveOf(): Live {
-  return createLive({ status: 'loading' }, null, null, 0);
+  return createLive(
+    { spec: null, front: { status: 'loading' }, profile: { status: 'loading' } },
+    null,
+    null,
+    0,
+  );
 }
 
 describe('stepRotation ne publie que sur CHANGEMENT (bug A1)', () => {

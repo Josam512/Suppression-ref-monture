@@ -1,25 +1,41 @@
 /**
  * ui/renderScene.ts — ce qui est peint sur le canvas, à chaque image.
  *
- * Deux rendus possibles, et le choix ne se fait PAS sur un mode (§11.4) : il se
- * fait sur la présence d'une donnée. Si l'on sait quelle monture la personne
- * porte réellement — donc uniquement en magasin, mais le code ne le sait pas —
- * on repeint cette monture au coloris voulu. Sinon, on pose le sprite.
+ * Refonte du guide de fiabilisation (2026-08-21) :
  *
- * ⚠️ Ordre de repli explicite : si le recoloriage ne retrouve pas la monture
- * dans l'image, on retombe sur le sprite posé. On ne laisse jamais l'écran vide
- * (§0.0.2), et la raison du repli remonte à l'IHM au lieu de disparaître.
+ *   - la monture apparaît dès que le FRONT est prêt et qu'une échelle de pose
+ *     a été vue UNE fois — plus aucune validation anatomique dans le chemin de
+ *     rendu (`core/renderPose.ts`, point 3). Un iris douteux sur une frame ne
+ *     retire pas la monture : l'échelle TENUE par le filtre fait la frame
+ *     (point 30) ;
+ *   - la pose passe par un One-Euro (`ui/poseFilter.ts`), le VERDICT lit les
+ *     landmarks BRUTS (complément 32 : le filtre visuel n'entre jamais dans la
+ *     métrologie) ;
+ *   - AUCUN NaN/Infinity n'atteint le canvas : garde explicite, frame sautée
+ *     et comptée, jamais d'exception qui remonte au scheduler (point 56) ;
+ *   - la transition aperçu → calibré est INSTRUMENTÉE (`live.scaleJump`),
+ *     jamais masquée par un lissage (complément 6) ;
+ *   - le profil manquant ne prive que des branches (point 4).
  */
 
 import { IRIS_DISCREPANCY_MAX } from '../core/autoCalibration.js';
-import { frameMetrics } from '../core/faceMetrics.js';
-import { provisionalScale } from '../core/provisionalScale.js';
-import type { NormalizedLandmark } from '../core/geom.js';
+import {
+  EAR_L,
+  EAR_R,
+  frameMetrics,
+  MAX_YAW_FOR_SCALE_RAD,
+  poseAnchorOf,
+  rollRadOf,
+  type FrameMetrics,
+} from '../core/faceMetrics.js';
+import { at, px, type NormalizedLandmark } from '../core/geom.js';
+import { renderPoseScale } from '../core/renderPose.js';
 import { verdict } from '../core/verdict.js';
 import { drawFrame } from '../render/composite.js';
 import { drawOverlay } from '../render/overlay.js';
 import { drawRecolored } from '../render/recolorLive.js';
 import { faceOutlinePath } from '../tracking/landmarker.js';
+import type { LostCause } from '../tracking/faceLoop.js';
 import type { Live } from './liveState.js';
 
 export function paintScene(
@@ -35,33 +51,90 @@ export function paintScene(
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, w, h);
 
-  if (live.sprites.status !== 'ready') {
+  // ⭐ Point 4 — seul le FRONT conditionne la pose ; le profil ne prive que
+  // des branches, et son état est affiché ailleurs.
+  const front = live.sprites.front;
+  if (front.status !== 'ready') {
     live.verdict = null;
     return;
   }
 
-  // ⭐ Audit humain du 2026-08-21, point 4 — TRACKING ≠ MÉTROLOGIE.
-  // Tant que la mesure absolue n'a pas convergé, on ne rend plus le produit
-  // inutilisable : on pose la monture à l'échelle de la frame courante (même
-  // étalon iris, non médianisé) et on GÈLE la légende chiffrée. L'appelant
-  // annonce le caractère provisoire ; aucun millimètre n'est affirmé.
-  const provisional = live.cal === null ? provisionalScale(lm, w, h, IRIS_DISCREPANCY_MAX, Date.now()) : null;
+  // ── Pose de la frame (toujours depuis les landmarks bruts).
+  const roll = rollRadOf(lm, w, h);
+  const anchor = poseAnchorOf(lm, w, h, roll);
+
+  // ── Échelle de la frame : calibrée si elle existe, sinon échelle de pose.
   live.provisional = live.cal === null;
-  const cal = live.cal ?? provisional?.cal ?? null;
-  if (cal === null) {
+  let freshScale: number | null = null;
+  if (live.cal !== null) {
+    freshScale = frameMetrics(lm, w, h, live.cal, yawRad).livePxPerMm;
+  } else {
+    const rp = renderPoseScale(lm, w, h, IRIS_DISCREPANCY_MAX, live.cameraProfile, Date.now());
+    if (rp !== null) {
+      freshScale = rp.templePlanePxPerMm;
+      live.lastProvisionalPxPerMm = rp.templePlanePxPerMm;
+    }
+  }
+
+  // ⭐ Complément 35 — au-delà du yaw exploitable, l'échelle n'est plus
+  // réestimée : le filtre TIENT la dernière valeur sûre, 234/454 ne font pas
+  // « respirer » la monture.
+  const scaleInput = Math.abs(yawRad) <= MAX_YAW_FOR_SCALE_RAD ? freshScale : null;
+
+  const filtered = live.poseFilter.apply(
+    { x: anchor.x, y: anchor.y, rollRad: roll, yawRad, scalePxPerMm: scaleInput },
+    performance.now(),
+  );
+  if (filtered === null) {
+    // Jamais eu d'échelle depuis le reset : rien d'honnête à poser encore.
     live.verdict = null;
     return;
   }
 
-  const m = frameMetrics(lm, w, h, cal, yawRad);
-  const target = { img: live.sprites.sprites.front.img, spec: live.sprites.spec };
+  // ⭐ Complément 6 — la PREMIÈRE frame calibrée consigne le saut d'échelle
+  // aperçu → final. On le mesure et on l'affiche (HUD) ; on ne le lisse pas.
+  if (live.cal !== null && live.scaleJump === null && live.lastProvisionalPxPerMm !== null && freshScale !== null) {
+    const ratio = freshScale / live.lastProvisionalPxPerMm;
+    live.scaleJump = {
+      provisionalPxPerMm: live.lastProvisionalPxPerMm,
+      finalPxPerMm: freshScale,
+      ratio,
+      atMs: performance.now(),
+    };
+    console.info(
+      `aperçu→calibré : ${live.lastProvisionalPxPerMm.toFixed(3)} → ${freshScale.toFixed(3)} px/mm ` +
+        `(×${ratio.toFixed(3)})`,
+    );
+  }
+
+  // 🔴 Point 56 — aucun NaN/Infinity n'atteint le canvas. Frame sautée, dite.
+  const finite =
+    Number.isFinite(filtered.x) &&
+    Number.isFinite(filtered.y) &&
+    Number.isFinite(filtered.rollRad) &&
+    Number.isFinite(filtered.yawRad) &&
+    Number.isFinite(filtered.scalePxPerMm) &&
+    filtered.scalePxPerMm > 0;
+  if (!finite) {
+    live.skippedRenderFrames++;
+    live.verdict = null;
+    return;
+  }
+
+  const m: FrameMetrics = {
+    livePxPerMm: filtered.scalePxPerMm,
+    rollRad: filtered.rollRad,
+    yawRad: filtered.yawRad,
+    poseAnchor: { x: filtered.x, y: filtered.y },
+    ear: { left: px(at(lm, EAR_L), w, h), right: px(at(lm, EAR_R), w, h) },
+  };
 
   // ⭐ V2 « 2,5 D » : la géométrie, la lumière et la perspective viennent du
   // réel ; seule la matière est substituée.
   const worn = live.wornSprite;
   let recolored = false;
-  if (worn !== null && video !== null && worn.spec.slug !== target.spec.slug) {
-    const report = drawRecolored(ctx, video, worn, target, m);
+  if (worn !== null && video !== null && worn.spec.slug !== front.sprite.spec.slug) {
+    const report = drawRecolored(ctx, video, worn, front.sprite, m);
     live.recolorReason = report.reason;
     recolored = report.reason === null && report.painted > 0;
   } else {
@@ -69,14 +142,21 @@ export function paintScene(
   }
 
   if (!recolored) {
-    drawFrame(ctx, live.sprites.sprites, m, faceOutlinePath(lm, w, h), {
-      overlayPaddingMm: live.overlayPaddingMm,
-    });
+    const profile = live.sprites.profile;
+    drawFrame(
+      ctx,
+      { front: front.sprite, profile: profile.status === 'ready' ? profile.sprite : null },
+      m,
+      faceOutlinePath(lm, w, h),
+      { overlayPaddingMm: live.overlayPaddingMm },
+    );
   }
+  live.renderedFrames++;
+  live.lastRenderedAtMs = performance.now();
 
-  // La légende chiffrée n'existe QUE sur une mesure convergée : une échelle
-  // d'une seule frame pose l'image, elle n'affirme aucun millimètre.
-  live.verdict = live.cal === null ? null : verdict(lm, live.cal, live.sprites.spec, w, h, yawRad);
+  // La légende chiffrée n'existe QUE sur une mesure convergée, et elle lit les
+  // landmarks BRUTS — jamais la pose filtrée (complément 32).
+  live.verdict = live.cal === null ? null : verdict(lm, live.cal, front.sprite.spec, w, h, yawRad);
 }
 
 /**
@@ -85,7 +165,7 @@ export function paintScene(
  * pas encore (audit humain du 2026-08-21, point 4).
  */
 export function sceneHint(live: Live): string | null {
-  return live.provisional ? 'aperçu — taille pas encore mesurée' : live.recolorReason;
+  return live.provisional ? 'aperçu — taille en cours de mesure' : live.recolorReason;
 }
 
 /**
@@ -95,31 +175,35 @@ export function sceneHint(live: Live): string | null {
  * peindre : détection perdue = canvas figé sur la dernière image, et l'alarme
  * exigée n'apparaissait jamais. La panne était strictement indiscernable d'un
  * fonctionnement normal. Le banc navigateur le vérifie à chaque exécution.
- *
- * §11 (mission détection) : deux états SÉPARÉS, plus jamais confondus —
- * une entrée caméra cassée n'est pas « mettez-vous de face », et un visage
- * non trouvé non plus : la contrainte de pose appartient aux MESURES.
  */
 export function paintLost(
   ctx: CanvasRenderingContext2D,
   consecutiveFailures: number,
-  cause: 'invalid-input' | 'no-face',
+  cause: LostCause,
   reason: string | null,
 ): void {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  // ⭐ Guide point 71 — chaque étage fautif a SA phrase. Plus jamais tout
+  // résumer sous « visage non détecté ».
+  const hint =
+    cause === 'invalid-input'
+      ? `Problème d'entrée caméra : ${reason ?? 'frame invalide'}.`
+      : cause === 'model-pending'
+        ? `Détection en préparation : ${reason ?? 'modèle en cours de création'}.`
+        : cause === 'inference-error'
+          ? `Erreur d'inférence (la boucle continue) : ${reason ?? '—'}.`
+          : cause === 'invalid-landmarks'
+            ? `Sortie du modèle inutilisable sur cette frame : ${reason ?? '—'}.`
+            : consecutiveFailures > 5
+              ? 'Recherche du visage…'
+              : null;
   drawOverlay(ctx, {
     verdict: null,
     consecutiveFailures,
-    hint:
-      cause === 'invalid-input'
-        ? `Problème d'entrée caméra : ${reason ?? 'frame invalide'}.`
-        : consecutiveFailures > 5
-          ? 'Recherche du visage…'
-          : null,
+    hint,
     // ⭐ 2026-08-21 : sans ces deux informations, une capture d'écran ne permet
     // PAS de savoir où en est la machine ni dans quel navigateur elle tourne.
-    // Un aller-retour entier a été perdu faute de les afficher.
     detail: consecutiveFailures > 5 && cause === 'no-face' ? `${reason ?? '—'} · ${browserNote()}` : null,
   });
 }

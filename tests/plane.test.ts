@@ -31,8 +31,8 @@ import {
   calibrateAuto,
 } from '../src/core/autoCalibrate.js';
 import { ENDPIECE_AHEAD_MM } from '../src/core/framePlane.js';
-import { frameMetrics } from '../src/core/faceMetrics.js';
-import { provisionalScale } from '../src/core/provisionalScale.js';
+import { faceWidthPx, frameMetrics } from '../src/core/faceMetrics.js';
+import { renderPoseScale } from '../src/core/renderPose.js';
 import { renderedFrameWidthPx } from '../src/core/transform.js';
 import { HVID_MEAN_MM } from '../src/core/ocularScale.js';
 import { specForTotalWidthMm, W, H } from './fixtures/builders.js';
@@ -65,18 +65,19 @@ describe('plan d’échelle — l’aperçu et la mesure peignent la MÊME large
   for (const d of DISTANCES) {
     it(`🔴 à ${d} mm : aucun saut de taille au passage aperçu → calibré`, () => {
       const lm = face(d);
-      const prov = provisionalScale(lm, W, H, IRIS_DISCREPANCY_MAX, 0);
-      expect(prov).not.toBeNull();
+      // ⭐ Guide point 3 + complément 5 : l'aperçu est une ÉCHELLE DE POSE
+      // (`renderPose`), sans validation anatomique — mais dans la MÊME optique
+      // et le MÊME plan que l'assemblage définitif. C'est cette identité de
+      // chemin qui interdit le saut, pas un facteur correctif.
+      const rp = renderPoseScale(lm, W, H, IRIS_DISCREPANCY_MAX, null, 0);
+      expect(rp).not.toBeNull();
       const cal = calibrated(lm);
-
-      const mP = frameMetrics(lm, W, H, prov!.cal, 0);
       const mC = frameMetrics(lm, W, H, cal, 0);
 
-      // 1. la largeur de visage retenue
-      expect(prov!.cal.faceWidthMm).toBeCloseTo(cal.faceWidthMm, 6);
-      // 2. l'échelle live
-      expect(mP.livePxPerMm).toBeCloseTo(mC.livePxPerMm, 6);
-      // 3. les pixels RÉELLEMENT peints — la seule grandeur que l'œil juge
+      // 1. l'échelle live (aperçu vs calibrée)
+      expect(rp!.templePlanePxPerMm).toBeCloseTo(mC.livePxPerMm, 6);
+      // 2. les pixels RÉELLEMENT peints — la seule grandeur que l'œil juge
+      const mP = { ...mC, livePxPerMm: rp!.templePlanePxPerMm };
       const wP = renderedFrameWidthPx(spec, mP);
       const wC = renderedFrameWidthPx(spec, mC);
       expect(Math.abs(wC / wP - 1)).toBeLessThan(0.005); // < 0,5 %
@@ -86,9 +87,12 @@ describe('plan d’échelle — l’aperçu et la mesure peignent la MÊME large
   it('🔴 l’aperçu retrouve la VRAIE largeur, pas celle du plan des yeux', () => {
     // Le test qui rougirait si quelqu'un remettait la conversion au plan des
     // yeux : elle rendait 124–130 mm là où la vérité terrain vaut 138.
+    // (renderPose ne PUBLIE pas de largeur — point 3 : aucune grandeur
+    // anatomique dans le chemin de rendu — mais son échelle l'implique.)
     for (const d of DISTANCES) {
-      const prov = provisionalScale(face(d), W, H, IRIS_DISCREPANCY_MAX, 0)!;
-      expect(prov.cal.faceWidthMm).toBeCloseTo(TRUE_FACE_MM, 0);
+      const lm = face(d);
+      const rp = renderPoseScale(lm, W, H, IRIS_DISCREPANCY_MAX, null, 0)!;
+      expect(faceWidthPx(lm, W, H) / rp.templePlanePxPerMm).toBeCloseTo(TRUE_FACE_MM, 0);
     }
   });
 

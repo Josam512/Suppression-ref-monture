@@ -43,6 +43,70 @@ export async function visionFileset(): Promise<{ wasmLoaderPath: string; wasmBin
 }
 
 /**
+ * ⭐ Guide point 7 — le modèle et le fileset sont mis en CACHE MÉMOIRE.
+ *
+ * Un passage GPU→CPU recrée l'instance MediaPipe avec un autre delegate : il ne
+ * doit surtout pas re-télécharger ni re-décompresser 3–4 Mo de modèle. Le cache
+ * vit ici, à côté du seul code qui s'en sert ; il est vidé sur échec pour
+ * qu'une tentative suivante reparte proprement.
+ */
+let modelBytesPromise: Promise<Uint8Array> | null = null;
+let filesetPromise: Promise<{ wasmLoaderPath: string; wasmBinaryPath: string }> | null = null;
+let modelSha256: string | null = null;
+
+function cachedFileset(): Promise<{ wasmLoaderPath: string; wasmBinaryPath: string }> {
+  filesetPromise ??= visionFileset().catch((err: unknown) => {
+    filesetPromise = null;
+    throw err;
+  });
+  return filesetPromise;
+}
+
+function cachedModelBytes(onProgress: (ratio: number) => void): Promise<Uint8Array> {
+  if (modelBytesPromise !== null) {
+    onProgress(1);
+    return modelBytesPromise;
+  }
+  modelBytesPromise = fetchModel(onProgress)
+    .then((bytes) => {
+      void sha256Of(bytes).then((sha) => {
+        modelSha256 = sha;
+      });
+      return bytes;
+    })
+    .catch((err: unknown) => {
+      modelBytesPromise = null;
+      throw err;
+    });
+  return modelBytesPromise;
+}
+
+/** Empreinte du modèle réellement chargé — affichée au HUD (complément 41). */
+export function modelSha(): string | null {
+  return modelSha256;
+}
+
+async function sha256Of(bytes: Uint8Array): Promise<string> {
+  try {
+    const buf = await crypto.subtle.digest('SHA-256', bytes.slice().buffer);
+    return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return 'indisponible'; // contexte non sécurisé : l'empreinte est un diagnostic, pas un prérequis
+  }
+}
+
+/**
+ * ⭐ Guide point 7 — précharge fileset + octets du modèle, EN PARALLÈLE de
+ * l'ouverture de la caméra. À appeler dès le montage ; `createLandmarker`
+ * retrouve alors tout en cache. Les échecs ne sont pas avalés : ils
+ * ressortiront, nommés, à la création — ici on ne fait qu'amorcer.
+ */
+export function preloadLandmarkerAssets(onProgress: (ratio: number) => void = () => {}): void {
+  void cachedFileset().catch(() => {});
+  void cachedModelBytes(onProgress).catch(() => {});
+}
+
+/**
  * Télécharge le modèle en signalant l'avancement RÉEL.
  *
  * Le bug #4 était un CDN sans barre de progression : impossible de distinguer
@@ -111,8 +175,8 @@ export async function createLandmarker(
 ): Promise<FaceLandmarker> {
   const t0 = performance.now();
   const [fileset, modelAssetBuffer] = await Promise.all([
-    visionFileset(),
-    fetchModel(onProgress),
+    cachedFileset(),
+    cachedModelBytes(onProgress),
   ]);
   const t1 = performance.now();
 

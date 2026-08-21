@@ -1,24 +1,24 @@
 /**
- * tests/detection.test.ts — la couche détection (mission 2026-08-20), en calcul
- * pur : validité des frames AVANT inférence, et échelle de stratégies gravie
- * par PREUVES (plus de retry aveugle). L'échelle vient du cas mesuré sur
- * l'appareil réel : FaceDetector 0,91 / FaceLandmarker 0 sur la même frame.
+ * tests/detection.test.ts — la couche détection, en calcul pur : validité des
+ * frames AVANT inférence, échelle de stratégies TEMPORELLE (guide 2026-08-21,
+ * points 6/11/12 : une seule Task en production, montées par élimination en
+ * millisecondes — jamais en nombre de frames), et validation de la sortie du
+ * modèle À LA FRONTIÈRE (point 16).
  */
 
 import { describe, expect, it } from 'vitest';
 
 import { frameValidity, MIN_MEAN_LUMA } from '../src/tracking/frameFeed.js';
+import { landmarksInvalidReason, MIN_LANDMARKS } from '../src/tracking/faceLoop.js';
 import {
+  coordinateSpaceOf,
   currentStrategy,
   DETECTION_STRATEGIES,
   initialPlan,
   planStep,
-  shouldProbe,
   unpadPoint,
-  PROBE_EVERY,
-  SWAP_BLIND_AFTER,
-  SWAP_WITH_EVIDENCE_AFTER,
-  type DetectionObservation,
+  SWAP_MIN_SILENT_FRAMES,
+  SWAP_SILENT_MS,
   type DetectionPlan,
 } from '../src/tracking/detectionPlan.js';
 
@@ -58,77 +58,54 @@ describe('couche 2 — une frame invalide est NOMMÉE, jamais « 0 visage »', (
   });
 });
 
-const silent = (probeFound: boolean | null = null): DetectionObservation => ({
-  frameValid: true,
-  landmarksFound: false,
-  probeFound,
-});
-
-/** Nourrit des frames muettes jusqu'à la prochaine montée ; rend sa raison. */
-function feedUntilAdvance(plan: DetectionPlan, probeSees: boolean, cap: number): string | null {
-  for (let i = 0; i < cap; i++) {
-    const t = planStep(plan, silent(shouldProbe(plan) ? probeSees : null));
-    if (t.advanceTo !== null) return t.reason;
+/** Simule une cadence : n frames muettes valides espacées de `gapMs`. */
+function feedSilent(plan: DetectionPlan, n: number, gapMs: number, startMs: number): number {
+  let advanced = 0;
+  for (let i = 0; i < n; i++) {
+    const t = planStep(plan, { frameValid: true, landmarksFound: false, nowMs: startMs + i * gapMs });
+    if (t.advanceTo !== null) advanced++;
   }
-  return null;
+  return advanced;
 }
 
-describe('échelle de stratégies — chaque montée exige une PREUVE', () => {
-  it('sonde OUI + landmarker muet → montée, raison nommée, dans l’ordre de l’échelle', () => {
+describe('échelle de stratégies — montées TEMPORELLES, sans sonde (points 6/11/12)', () => {
+  it('sans visage, l’échelle entière est gravie par élimination, en DURÉE', () => {
     const plan = initialPlan();
     expect(currentStrategy(plan).id).toBe('gpu');
-    const r1 = feedUntilAdvance(plan, true, SWAP_WITH_EVIDENCE_AFTER + 1);
-    expect(r1).toMatch(/FaceDetector voit un visage/);
-    expect(currentStrategy(plan).id).toBe('cpu');
-    const r2 = feedUntilAdvance(plan, true, SWAP_WITH_EVIDENCE_AFTER + 1);
-    expect(r2).toMatch(/marge/);
-    expect(currentStrategy(plan).id).toBe('cpu-marge');
-    const r3 = feedUntilAdvance(plan, true, SWAP_WITH_EVIDENCE_AFTER + 1);
-    expect(r3).toMatch(/seuils/);
+    // 15 fps pendant 12 s : trois montées attendues (2,5 s de silence chacune).
+    const advanced = feedSilent(plan, 180, 66, 0);
+    expect(advanced).toBe(DETECTION_STRATEGIES.length - 1);
     expect(currentStrategy(plan).id).toBe('cpu-seuils');
   });
 
-  it('les DEUX muets → montée par élimination, seulement après une longue attente', () => {
-    const plan = initialPlan();
-    let swappedAt = -1;
-    let reason = '';
-    for (let i = 1; i <= SWAP_BLIND_AFTER + 1 && swappedAt === -1; i++) {
-      const t = planStep(plan, silent(shouldProbe(plan) ? false : null));
-      if (t.advanceTo !== null) {
-        swappedAt = i;
-        reason = t.reason ?? '';
-      }
+  it('le même code à 60 fps monte au même MOMENT, pas au même nombre de frames', () => {
+    const lent = initialPlan();
+    const rapide = initialPlan();
+    // 15 fps vs 60 fps : première montée dans les deux cas vers ~2,5 s.
+    let lentAt = -1;
+    for (let i = 0; i < 300 && lentAt === -1; i++) {
+      if (planStep(lent, { frameValid: true, landmarksFound: false, nowMs: i * 66 }).advanceTo !== null) lentAt = i * 66;
     }
-    expect(swappedAt).toBe(SWAP_BLIND_AFTER);
-    expect(reason).toMatch(/élimination/);
+    let rapideAt = -1;
+    for (let i = 0; i < 1200 && rapideAt === -1; i++) {
+      if (planStep(rapide, { frameValid: true, landmarksFound: false, nowMs: i * 16 }).advanceTo !== null) rapideAt = i * 16;
+    }
+    expect(lentAt).toBeGreaterThanOrEqual(SWAP_SILENT_MS);
+    expect(rapideAt).toBeGreaterThanOrEqual(SWAP_SILENT_MS);
+    expect(Math.abs(lentAt - rapideAt)).toBeLessThan(200); // même horloge, pas même compte
   });
 
-  it('🔴 SONDE INDISPONIBLE : l’échelle monte QUAND MÊME (jamais de blocage)', () => {
-    // Le bug mesuré sur l'appareil réel le 2026-08-21 : la montée par
-    // élimination exigeait `probeTried > 0`. Sonde non chargée ⇒ compteur à
-    // zéro ⇒ échelle figée sur la première marche À VIE. 1199 frames perdues,
-    // toujours en « délégué GPU ». Une élimination qui dépend d'un témoin
-    // n'est pas une élimination.
+  it('deux frames espacées de 3 s ne suffisent PAS : il faut aussi de la matière', () => {
     const plan = initialPlan();
-    let advanced = 0;
-    let lastReason = '';
-    // `probeFound` reste TOUJOURS null : la sonde n'a jamais tourné.
-    for (let i = 0; i < SWAP_BLIND_AFTER * (DETECTION_STRATEGIES.length + 1); i++) {
-      const t = planStep(plan, { frameValid: true, landmarksFound: false, probeFound: null });
-      if (t.advanceTo !== null) {
-        advanced++;
-        lastReason = t.reason ?? '';
-      }
-    }
-    expect(advanced).toBe(DETECTION_STRATEGIES.length - 1); // toute l'échelle gravie
-    expect(currentStrategy(plan).id).toBe('cpu-seuils');
-    expect(lastReason).toMatch(/sonde indisponible/);
+    // Une caméra qui livre 2 frames en 4 s ne prouve pas une stratégie muette.
+    expect(feedSilent(plan, SWAP_MIN_SILENT_FRAMES - 2, 500, 0)).toBe(0);
+    expect(currentStrategy(plan).id).toBe('gpu');
   });
 
   it('🔴 les frames INVALIDES ne font JAMAIS monter l’échelle', () => {
     const plan = initialPlan();
-    for (let i = 0; i < SWAP_BLIND_AFTER * 3; i++) {
-      const t = planStep(plan, { frameValid: false, landmarksFound: false, probeFound: null });
+    for (let i = 0; i < 500; i++) {
+      const t = planStep(plan, { frameValid: false, landmarksFound: false, nowMs: i * 66 });
       expect(t.advanceTo).toBeNull();
     }
     expect(currentStrategy(plan).id).toBe('gpu');
@@ -137,34 +114,17 @@ describe('échelle de stratégies — chaque montée exige une PREUVE', () => {
 
   it('🔴 une stratégie qui a DÉJÀ suivi un visage n’est jamais quittée (sortie du champ ≠ panne)', () => {
     const plan = initialPlan();
-    planStep(plan, { frameValid: true, landmarksFound: true, probeFound: null });
+    planStep(plan, { frameValid: true, landmarksFound: true, nowMs: 0 });
     expect(plan.phase).toBe('tracking');
-    for (let i = 0; i < SWAP_BLIND_AFTER * 2; i++) {
-      expect(planStep(plan, silent(shouldProbe(plan) ? true : null)).advanceTo).toBeNull();
-    }
+    expect(feedSilent(plan, 600, 66, 100)).toBe(0); // ~40 s sans visage
     expect(currentStrategy(plan).id).toBe('gpu');
-  });
-
-  it('la sonde tourne par échantillonnage, pas à chaque frame', () => {
-    const plan = initialPlan();
-    let probes = 0;
-    for (let i = 0; i < PROBE_EVERY * 3; i++) {
-      if (shouldProbe(plan)) probes++;
-      planStep(plan, silent(null));
-    }
-    expect(probes).toBeGreaterThanOrEqual(2);
-    expect(probes).toBeLessThanOrEqual(3);
   });
 
   it('en haut de l’échelle : on continue de chercher, honnêtement — pas de ping-pong', () => {
     const plan = initialPlan();
-    for (let i = 0; i < DETECTION_STRATEGIES.length - 1; i++) {
-      expect(feedUntilAdvance(plan, true, SWAP_WITH_EVIDENCE_AFTER + 1)).not.toBeNull();
-    }
+    feedSilent(plan, 180, 66, 0); // gravit tout
     expect(currentStrategy(plan).id).toBe('cpu-seuils');
-    for (let i = 0; i < SWAP_BLIND_AFTER * 2; i++) {
-      expect(planStep(plan, silent(true)).advanceTo).toBeNull();
-    }
+    expect(feedSilent(plan, 600, 66, 60_000)).toBe(0);
     expect(currentStrategy(plan).id).toBe('cpu-seuils');
     expect(plan.phase).toBe('searching');
   });
@@ -184,5 +144,41 @@ describe('échelle de stratégies — chaque montée exige une PREUVE', () => {
         expect(unpadPoint(padded(xn, p), p)).toBeCloseTo(xn, 12);
       }
     }
+  });
+
+  it('complément 9 — une stratégie paddée étiquette son repère : le Z y est inexploitable', () => {
+    expect(coordinateSpaceOf(DETECTION_STRATEGIES[0]!)).toBe('direct');
+    expect(coordinateSpaceOf(DETECTION_STRATEGIES[2]!)).toBe('padded-remapped');
+    expect(coordinateSpaceOf(DETECTION_STRATEGIES[3]!)).toBe('padded-remapped');
+  });
+});
+
+describe('frontière du tracking — la sortie du modèle est VALIDÉE (point 16)', () => {
+  const full = (): Array<{ x: number; y: number }> =>
+    Array.from({ length: MIN_LANDMARKS }, (_, i) => ({ x: (i % 100) / 100, y: (i % 90) / 90 }));
+
+  it('478 landmarks finis → exploitable', () => {
+    expect(landmarksInvalidReason(full())).toBeNull();
+  });
+
+  it('« aucun visage » (liste vide ou absente) n’est PAS « sortie invalide »', () => {
+    expect(landmarksInvalidReason(undefined)).toBeNull();
+    expect(landmarksInvalidReason([])).toBeNull();
+  });
+
+  it('sortie partielle (400 points) → rejetée localement, cause nommée', () => {
+    expect(landmarksInvalidReason(full().slice(0, 400))).toMatch(/partielle.*400/);
+  });
+
+  it('landmark critique non fini (NaN sur l’iris 473) → rejetée, cause nommée', () => {
+    const lm = full();
+    lm[473] = { x: Number.NaN, y: 0.5 };
+    expect(landmarksInvalidReason(lm)).toMatch(/473/);
+  });
+
+  it('landmark critique non fini (Infinity sur le sellion 168) → rejetée', () => {
+    const lm = full();
+    lm[168] = { x: 0.5, y: Number.POSITIVE_INFINITY };
+    expect(landmarksInvalidReason(lm)).toMatch(/168/);
   });
 });

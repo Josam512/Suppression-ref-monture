@@ -1,21 +1,25 @@
 /**
  * tracking/frameFeed.ts — Couches 1 et 2 : acquisition caméra + normalisation.
  *
- * Reprise de fond (mission détection 2026-08-20). Constats à l'origine :
- *   - « détection perdue : 528 frames » sur un visage plein cadre, sans que
- *     RIEN ne dise si les pixels analysés étaient noirs, couchés ou valides ;
- *   - une frame noire/vide devenait « 0 visage » au lieu de « ENTRÉE INVALIDE » ;
- *   - requestAnimationFrame était supposé coïncider avec une nouvelle frame
- *     caméra, ce qui est faux (écran 60/120 Hz, caméra 15–30 im/s).
+ * Reprise de fond (mission détection 2026-08-20), durcie par le guide de
+ * fiabilisation (2026-08-21, points 13–15) :
+ *
+ *   - le PROCHAIN tick est TOUJOURS programmé, même si le traitement d'une
+ *     frame lève : `try { emit } finally { schedule }`. Avant cette reprise,
+ *     une exception dans `onSnapshot` (rendu, métrologie…) tuait la boucle
+ *     rVFC définitivement — vidéo vivante, application morte, rien à l'écran
+ *     pour le dire ;
+ *   - un WATCHDOG surveille le flux : caméra vivante + vidéo prête mais aucune
+ *     frame traitée depuis STALL_MS → diagnostic `rvfc-stalled` et bascule sur
+ *     le repli requestAnimationFrame. Ne jamais supposer qu'une API mobile
+ *     continuera éternellement parce qu'elle a fonctionné au début ;
+ *   - le GRAND canvas (entrée MediaPipe) n'est PLUS forcé en chemin CPU : le
+ *     contrôle de luminosité lit la vidéo dans son propre canvas 16×16, seul à
+ *     porter `willReadFrequently`.
  *
  * Ce module produit des SNAPSHOTS : la frame recopiée dans un canvas 2D — les
- * pixels réellement analysés, exactement ceux affichés (la rotation capteur des
- * WebViews Android n'est appliquée qu'à l'affichage : lire l'élément <video>
- * directement peut livrer une image couchée au wasm) — plus un verdict de
- * validité PRONONCÉ AVANT toute inférence. Cadence : requestVideoFrameCallback
- * quand il existe (une vraie frame caméra = un snapshot), sinon
- * requestAnimationFrame gardé par currentTime (S5 : une frame répétée n'est ni
- * redétectée ni comptée comme un échec).
+ * pixels réellement analysés — plus un verdict de validité prononcé AVANT
+ * toute inférence. Une frame répétée n'est ni redétectée ni comptée en échec.
  */
 
 /** Verdict de validité d'une frame, AVANT inférence. */
@@ -30,6 +34,11 @@ export interface FrameValidity {
 /** Sous ces bornes, l'image est noire ou uniforme : rien à détecter dedans. */
 export const MIN_MEAN_LUMA = 4;
 export const MIN_LUMA_SPREAD = 6;
+
+/** Flux muet toléré avant le diagnostic `rvfc-stalled` (durée, pas frames). */
+export const FEED_STALL_MS = 1000;
+/** Cadence de la sentinelle du flux. */
+export const FEED_WATCHDOG_INTERVAL_MS = 500;
 
 /**
  * Validité depuis un échantillon RGBA (calcul pur, testé sans navigateur).
@@ -73,8 +82,23 @@ export interface FrameSnapshot {
   method: 'rvfc' | 'raf';
 }
 
+/** Compteurs du flux — le HUD lit ici « où la chaîne s'est arrêtée ». */
+export interface FrameFeedStats {
+  /** Frames caméra livrées à `onSnapshot` (tentées, erreurs comprises). */
+  cameraFrames: number;
+  /** Exceptions levées PAR le traitement d'une frame — comptées, jamais fatales. */
+  snapshotErrors: number;
+  lastSnapshotError: string | null;
+  /** Bascules rVFC → RAF décidées par le watchdog. */
+  stalls: number;
+  method: 'rvfc' | 'raf';
+  /** Horodatage `performance.now()` du dernier tick — le heartbeat du flux. */
+  lastFrameAt: number;
+}
+
 export interface FrameFeedControl {
   stop(): void;
+  stats(): Readonly<FrameFeedStats>;
 }
 
 const SAMPLE_SIZE = 16; // réduction pour le test de validité
@@ -83,18 +107,34 @@ const SAMPLE_SIZE = 16; // réduction pour le test de validité
  * Attache le flux : `onSnapshot` est appelé pour CHAQUE nouvelle frame caméra
  * (jamais pour une frame répétée), avec les pixels déjà recopiés et vérifiés.
  * Le canvas est réutilisé — ne pas le conserver au-delà du rappel.
+ *
+ * @param onDiagnostic événements du flux lui-même (`rvfc-stalled`,
+ *        `snapshot-error`) — informatif, jamais dans le chemin de décision.
  */
 export function attachFrameFeed(
   video: HTMLVideoElement,
   onSnapshot: (s: FrameSnapshot) => void,
+  onDiagnostic?: (code: 'rvfc-stalled' | 'snapshot-error', detail: string) => void,
 ): FrameFeedControl {
   let running = true;
   const feed = document.createElement('canvas');
-  const feedCtx = feed.getContext('2d', { willReadFrequently: true });
+  // ⚠️ PAS de `willReadFrequently` ici : ce canvas est l'ENTRÉE de MediaPipe,
+  // le forcer en chemin CPU pour un échantillon 16×16 coûtait des copies
+  // GPU→CPU à chaque frame (guide, point 15).
+  const feedCtx = feed.getContext('2d');
   const sampler = document.createElement('canvas');
   sampler.width = SAMPLE_SIZE;
   sampler.height = SAMPLE_SIZE;
   const samplerCtx = sampler.getContext('2d', { willReadFrequently: true });
+
+  const stats: FrameFeedStats = {
+    cameraFrames: 0,
+    snapshotErrors: 0,
+    lastSnapshotError: null,
+    stalls: 0,
+    method: 'rvfc',
+    lastFrameAt: 0,
+  };
 
   // Lié explicitement (pas de narrowing `in` : lib.dom déclare déjà l'API,
   // ce qui rendrait la branche de repli « impossible » pour TypeScript alors
@@ -132,34 +172,88 @@ export function attachFrameFeed(
       return;
     }
     feedCtx.drawImage(video, 0, 0);
-    samplerCtx.drawImage(feed, 0, 0, SAMPLE_SIZE, SAMPLE_SIZE);
+    // Le contrôle lit la VIDÉO, pas le grand canvas : c'est lui qui porte le
+    // chemin CPU, et lui seul.
+    samplerCtx.drawImage(video, 0, 0, SAMPLE_SIZE, SAMPLE_SIZE);
     const validity = frameValidity(samplerCtx.getImageData(0, 0, SAMPLE_SIZE, SAMPLE_SIZE).data);
     onSnapshot({ source: feed, w: feed.width, h: feed.height, videoTimeS: video.currentTime, validity, method });
   };
 
-  if (rvfc !== undefined) {
-    const tick = (): void => {
-      if (!running) return;
-      emit('rvfc');
-      rvfc(tick);
-    };
-    rvfc(tick);
-  } else {
-    const tick = (): void => {
-      if (!running) return;
+  /**
+   * ⭐ Guide point 13 — le tick ne meurt JAMAIS : l'exception est comptée et
+   * signalée, la programmation de la frame suivante est dans le `finally` de
+   * l'appelant. Une frame ratée est une frame ratée, pas une séance morte.
+   */
+  const safeEmit = (method: 'rvfc' | 'raf'): void => {
+    stats.cameraFrames++;
+    stats.lastFrameAt = performance.now();
+    try {
+      emit(method);
+    } catch (err) {
+      stats.snapshotErrors++;
+      stats.lastSnapshotError = err instanceof Error ? err.message : String(err);
+      onDiagnostic?.('snapshot-error', stats.lastSnapshotError);
+    }
+  };
+
+  const rafTick = (): void => {
+    if (!running) return;
+    try {
       // Garde S5 : une frame répétée n'est pas resoumise.
       if (video.readyState >= 2 && video.currentTime !== lastVideoTime) {
         lastVideoTime = video.currentTime;
-        emit('raf');
+        safeEmit('raf');
       }
-      requestAnimationFrame(tick);
+    } finally {
+      requestAnimationFrame(rafTick);
+    }
+  };
+
+  let rvfcAlive = rvfc !== undefined;
+  if (rvfc !== undefined) {
+    const tick = (): void => {
+      if (!running || !rvfcAlive) return;
+      try {
+        safeEmit('rvfc');
+      } finally {
+        rvfc(tick);
+      }
     };
-    requestAnimationFrame(tick);
+    rvfc(tick);
+  } else {
+    stats.method = 'raf';
+    requestAnimationFrame(rafTick);
   }
+
+  // ⭐ Guide point 14 — la sentinelle du flux. Onglet caché exclu : rVFC et RAF
+  // y sont légitimement suspendus, ce n'est pas une panne.
+  stats.lastFrameAt = performance.now();
+  const watchdog = setInterval(() => {
+    if (!running || !rvfcAlive) return;
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+      stats.lastFrameAt = performance.now(); // ne pas accuser un onglet en veille
+      return;
+    }
+    if (video.readyState < 2) return;
+    if (performance.now() - stats.lastFrameAt <= FEED_STALL_MS) return;
+
+    stats.stalls++;
+    stats.method = 'raf';
+    rvfcAlive = false; // l'ancien enchaînement rVFC s'éteint de lui-même
+    onDiagnostic?.(
+      'rvfc-stalled',
+      `aucune frame depuis ${Math.round(performance.now() - stats.lastFrameAt)} ms — repli requestAnimationFrame`,
+    );
+    requestAnimationFrame(rafTick);
+  }, FEED_WATCHDOG_INTERVAL_MS);
 
   return {
     stop(): void {
       running = false;
+      clearInterval(watchdog);
+    },
+    stats(): Readonly<FrameFeedStats> {
+      return stats;
     },
   };
 }

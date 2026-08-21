@@ -19,7 +19,12 @@ export interface FrontSprite {
 
 export interface Sprites {
   front: FrontSprite;
-  profile: ProfileSprite;
+  /**
+   * ⭐ Guide point 4 — le profil est INDÉPENDANT du frontal : `null` tant
+   * qu'il n'est pas chargé (ou s'il a échoué). La face se dessine sans lui ;
+   * seules les branches attendent.
+   */
+  profile: ProfileSprite | null;
 }
 
 /** Seuils de révélation de la branche, en radians de |yaw|. */
@@ -78,9 +83,14 @@ export function drawFrame(
   //
   // Dessiner la branche en premier est aussi le bon ordre physique : la branche
   // passe derriere la tete, la face est devant.
+  //
+  // ⚠️ Complément 29 — le profil doit porter la MÊME identité de modèle que la
+  // face : un front du modèle B avec un profil du modèle A (course de
+  // chargement) ne se compose pas, la branche attend le bon sprite.
+  const profile = sprites.profile;
   const templeAlpha = smoothstep(TEMPLE_FADE_IN, TEMPLE_FADE_FULL, Math.abs(m.yawRad));
-  if (templeAlpha > 0.01) {
-    drawTemple(ctx, sprites.profile, m, templeAlpha, faceOutline);
+  if (templeAlpha > 0.01 && profile !== null && profile.spec.slug === sprites.front.spec.slug) {
+    drawTemple(ctx, profile, m, templeAlpha, faceOutline);
   }
 
   // ⚠️ yawRad se lit sur `m` (T2). Ne PAS le repasser en paramètre : deux

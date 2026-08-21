@@ -2,7 +2,9 @@
  * ui/TryOn.tsx — l'essayage live, commun aux deux versions.
  *
  * ⚠️ AUCUN slider de taille (§4) ; aucun tri ni recommandation (§0.0.1). La
- * boucle se monte UNE fois et lit un `live` mutable (compteurs, garde S5).
+ * boucle se monte UNE fois et lit un `live` mutable (compteurs, garde S5) —
+ * son branchement vit dans `ui/useTryOnLoop.ts` (enveloppes séparées, §17 du
+ * guide de fiabilisation).
  *
  * Parcours : caméra → quelques secondes de regard → « calibration acquise » →
  * essayage (`core/autoCalibration.ts`, WHY_NOT_DONE à tout instant). La carte
@@ -13,16 +15,12 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 
 import type { UserCalibration } from '../core/calibration.js';
 import type { FrameSpec } from '../core/frameSpec.js';
-import { type NormalizedLandmark } from '../core/geom.js';
 import { OVERLAY_PADDING_MM } from '../render/composite.js';
 import { CalibrationPanel, type Phase } from './CalibrationPanel.js';
 import { wornFrameHandlerOf } from './wornFrameStep.js';
-import { stepCrossCheck, stepRotation } from './liveSteps.js';
 import { useAutoCalibration } from './useAutoCalibration.js';
 import { FramePicker } from './FramePicker.js';
 import { createLive, type Live } from './liveState.js';
-import { paintLost, paintScene, sceneHint } from './renderScene.js';
-import { drawOverlay } from '../render/overlay.js';
 import { useCatalogue } from './catalogue.js';
 import { useV1Calibration } from './useV1Calibration.js';
 import type { CameraProfile } from '../core/cameraProfile.js';
@@ -30,13 +28,10 @@ import { loadCameraProfile, saveCameraProfile } from './cameraStorage.js';
 import { clearCalibration, loadCalibration, saveCalibration } from './calibrationStorage.js';
 import { freezeFrame } from './freezeFrame.js';
 import { TryOnHeader } from './TryOnHeader.js';
-import { useCameraLoop } from './useCameraLoop.js';
+import { useTryOnLoop } from './useTryOnLoop.js';
 import { useSprites } from './useSprites.js';
 
 export type Mode = 'online' | 'store';
-
-/** Micro-perte repeinte (rendu SEUL) — alignée sur la règle 3 (> 5 = perdu). */
-export const RENDER_HOLD_FRAMES = 5;
 
 export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -53,6 +48,10 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
     saveCameraProfile(next);
   }, []);
   const [notices, setNotices] = useState<string[]>([]);
+  const pushNotice = useCallback(
+    (message: string) => setNotices((prev) => (prev.includes(message) ? prev : [...prev, message])),
+    [],
+  );
 
   const entries = catalogue.status === 'ready' ? catalogue.entries : [];
   const essayables = useMemo<FrameSpec[]>(
@@ -80,7 +79,8 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
   live.current.spec = selected;
   live.current.sprites = sprites;
   live.current.overlayPaddingMm = overlayPaddingMm;
-  live.current.wornSprite = wornSprites.status === 'ready' ? wornSprites.sprites.front : null;
+  live.current.cameraProfile = cameraProfile.current;
+  live.current.wornSprite = wornSprites.front.status === 'ready' ? wornSprites.front.sprite : null;
 
   const persist = useCallback((next: UserCalibration) => {
     live.current.cal = next;
@@ -152,79 +152,21 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
   });
   const finishCalibration = v1.finish;
 
-  const renderFrame = useCallback(
-    (ctx: CanvasRenderingContext2D, lm: readonly NormalizedLandmark[], yawRad: number): void => {
-      const w = ctx.canvas.width;
-      const h = ctx.canvas.height;
-      const s = live.current;
-      s.lastLandmarks = lm;
-      s.lastYawRad = yawRad;
-
-      // ⭐ V2 — la mesure automatique. Publiée seulement quand son état change ;
-      // le moteur décide seul de sa fin, et sa fin est annoncée.
-      pump(lm, yawRad, w, h);
-
-      // Étape carte (diagnostic) : rien ne mesure, la vidéo passe sous un
-      // canvas vide — le client lit la consigne et appuie quand il veut.
-      if (phaseRef.current === 'mesure-carte') {
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.clearRect(0, 0, w, h);
-        return;
-      }
-
-      // 🔴 Compte rendu de la séance filmée : seul « J'ai fini » déclenche le calcul.
-      const rot = stepRotation(s, lm, yawRad, w, h);
-      if (rot !== null) {
-        setPhase({ kind: 'mesure-rotation', degrees: rot.degrees, cardViews: rot.cardViews });
-      }
-
-      const warn = stepCrossCheck(s, lm, w, h);
-      if (warn !== null) setNotices((prev) => [...prev, warn]);
-
-      paintScene(ctx, s, lm, yawRad, videoRef.current);
-
-      drawOverlay(ctx, { verdict: s.verdict, consecutiveFailures: 0, hint: sceneHint(s) });
-    },
-    [finishCalibration, pump, v1],
-  );
-
-  const renderLost = useCallback(
-    (ctx: CanvasRenderingContext2D, n: number, cause: 'invalid-input' | 'no-face', reason: string | null): void => {
-      // La perte nourrit le moteur automatique (« je ne vous vois pas »),
-      // JAMAIS le maintien de rendu ci-dessous, qui ne mesure rien : une
-      // micro-perte (≤ 5 frames) repeint la dernière pose connue au lieu de
-      // faire clignoter la monture ; au-delà, l'alarme brute (§1 bug #3).
-      pump(null, 0, ctx.canvas.width, ctx.canvas.height);
-      const s = live.current;
-      if (cause === 'no-face' && n <= RENDER_HOLD_FRAMES && s.lastLandmarks !== null && phaseRef.current === 'essayage') {
-        paintScene(ctx, s, s.lastLandmarks, s.lastYawRad, videoRef.current);
-        return;
-      }
-      s.verdict = null;
-      paintLost(ctx, n, cause, reason);
-    },
-    [pump],
-  );
-
-  /** Après une erreur caméra/modèle, tout se remonte : plus de cul-de-sac (audit E1). */
-  const [attempt, setAttempt] = useState(0);
-
-  useCameraLoop(
+  const { retryCamera } = useTryOnLoop({
+    live,
     videoRef,
     canvasRef,
-    {
-      onFrame: renderFrame,
-      onLost: renderLost,
-      onProgress: (ratio) => setPhase({ kind: 'loading', ratio }),
-      onReady: () => {
-        if (live.current.cal !== null) setPhase({ kind: 'essayage' });
-        else if (props.mode === 'store') freeze('mesure-monture');
-        else startAuto();
-      },
-      onError: (message) => setPhase({ kind: 'error', message }),
+    phaseRef,
+    pump,
+    setPhase,
+    pushNotice,
+    onReadyAction: () => {
+      if (live.current.cal !== null) setPhase({ kind: 'essayage' });
+      else if (props.mode === 'store') freeze('mesure-monture');
+      else startAuto();
     },
-    attempt,
-  );
+    onFatalError: (message) => setPhase({ kind: 'error', message }),
+  });
 
   /** V2 — la monture physiquement portée sert d'étalon (§11.3). */
   const onWornFrameValidated = useMemo(
@@ -263,10 +205,7 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
         onWornFrameValidated={onWornFrameValidated}
         onRetryAuto={startAuto}
         onUseCard={enterCard}
-        onRetryCamera={() => {
-          setPhase({ kind: 'loading', ratio: 0 });
-          setAttempt((a) => a + 1);
-        }}
+        onRetryCamera={retryCamera}
       />
 
       {notices.map((n) => (
@@ -274,7 +213,19 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
       ))}
 
       {catalogue.status === 'error' && <p style={{ color: '#ff6b6b' }}>{catalogue.message}</p>}
-      {sprites.status === 'error' && <p style={{ color: '#ff6b6b' }}>{sprites.message}</p>}
+      {catalogue.status === 'ready' &&
+        catalogue.failures.map((f) => (
+          <p key={f} style={{ color: '#e0b34c' }}>
+            {f}
+          </p>
+        ))}
+      {sprites.front.status === 'error' && <p style={{ color: '#ff6b6b' }}>{sprites.front.message}</p>}
+      {sprites.profile.status === 'error' && (
+        <p style={{ color: '#e0b34c' }}>
+          Sprite de profil indisponible ({sprites.profile.message}) — la face reste affichée, les
+          branches attendront.
+        </p>
+      )}
 
       <FramePicker
         frames={essayables}

@@ -10,16 +10,19 @@
 
 import type { AutoCalibrationEngine } from '../core/autoCalibration.js';
 import type { UserCalibration } from '../core/calibration.js';
+import type { CameraProfile } from '../core/cameraProfile.js';
 import type { FrameSpec } from '../core/frameSpec.js';
 import type { CardQuad } from '../core/cardPose.js';
 import type { NormalizedLandmark } from '../core/geom.js';
 import type { ImageBuffer } from '../core/silhouette.js';
 import type { SizeVerdict } from '../core/verdict.js';
 import type { FrontSprite } from '../render/composite.js';
+import type { FaceLoopStats } from '../tracking/faceLoop.js';
+import { PoseFilter } from './poseFilter.js';
 import type { RotationProbe } from './rotationProbe.js';
-import type { useSprites } from './useSprites.js';
+import type { SpritesState } from './useSprites.js';
 
-export type SpritesState = ReturnType<typeof useSprites>;
+export type { SpritesState } from './useSprites.js';
 
 /** Ce que la carte a laissé derrière elle, en attendant la rotation. */
 export interface PendingCard {
@@ -36,22 +39,46 @@ export interface PendingCard {
   h: number;
 }
 
+/** Saut d'échelle aperçu → calibré, mesuré à la transition (complément 6). */
+export interface ScaleJump {
+  provisionalPxPerMm: number;
+  finalPxPerMm: number;
+  ratio: number;
+  atMs: number;
+}
+
 export interface Live {
   cal: UserCalibration | null;
   spec: FrameSpec | null;
   sprites: SpritesState;
   overlayPaddingMm: number;
+  /** Profil d'objectif courant — la MÊME optique pour l'aperçu et le final (c5). */
+  cameraProfile: CameraProfile | null;
   lastLandmarks: readonly NormalizedLandmark[] | null;
-  /** Yaw de la dernière frame détectée — pour le maintien de rendu (≤ 5 frames). */
+  /** Yaw de la dernière frame détectée — pour le maintien de rendu (par durée). */
   lastYawRad: number;
+  /** Horodatage de la dernière frame avec landmarks — le hold est en ms (pt 49). */
+  lastLandmarksAtMs: number;
+  /** Repère de la dernière frame : `padded-remapped` → Z inexploitable (c9). */
+  coordinateSpace: 'direct' | 'padded-remapped';
+
   /** ⭐ Audit 2026-08-21 point 4 : la monture est posée, mais l'échelle n'a
    *  PAS convergé — aucun millimètre n'est affirmé. Annoncé en clair. */
   provisional: boolean;
+  /** Filtre One-Euro de la POSE (rendu seul, jamais la métrologie — c32). */
+  poseFilter: PoseFilter;
+  /** Dernière échelle d'aperçu vue — pour instrumenter la transition (c6). */
+  lastProvisionalPxPerMm: number | null;
+  scaleJump: ScaleJump | null;
+  /** Compteurs de rendu — HUD : « le rendu est observable » (point 73). */
+  renderedFrames: number;
+  skippedRenderFrames: number;
+  lastRenderedAtMs: number;
+
   verdict: SizeVerdict | null;
   /** Non nul pendant la collecte des deux vues tournées (§4, parade B4 n°2). */
   probe: RotationProbe | null;
   lastProbeRatio: number;
-  /** Dernière jauge de cadrage carte publiée à React — évite un rendu par image. */
   /** Non nul pendant le contrôle de cohérence par l'iris. */
   irisSamples: number[] | null;
   /** La carte validée, en attente de la rotation. */
@@ -59,14 +86,17 @@ export interface Live {
 
   /**
    * ⭐ V2 sans carte — le moteur de calibration automatique, non nul PENDANT la
-   * collecte seulement. `calibrationCollecting` du §6 de la mission, incarné :
-   * la caméra tourne toujours, la collecte a un début et une fin.
+   * collecte seulement. La caméra tourne toujours, la collecte a un début et
+   * une fin.
    */
   auto: AutoCalibrationEngine | null;
   /** Dernier état publié à React — la boucle ne publie que sur changement. */
   lastAutoKey: string;
   /** Dernier compte de vues de carte publié — même règle (bug A1 de l'audit). */
   lastReportedCardViews: number;
+
+  /** Compteurs de la boucle de détection — HUD seulement, aucune décision. */
+  loopStats: (() => Readonly<FaceLoopStats>) | null;
 
   /**
    * Sprite du modèle PHYSIQUEMENT PORTÉ, quand on le connaît (V2).
@@ -79,15 +109,29 @@ export interface Live {
   recolorReason: string | null;
 }
 
-export function createLive(sprites: SpritesState, spec: FrameSpec | null, cal: UserCalibration | null, overlayPaddingMm: number): Live {
+export function createLive(
+  sprites: SpritesState,
+  spec: FrameSpec | null,
+  cal: UserCalibration | null,
+  overlayPaddingMm: number,
+): Live {
   return {
     cal,
     spec,
     sprites,
     overlayPaddingMm,
+    cameraProfile: null,
     lastLandmarks: null,
     lastYawRad: 0,
+    lastLandmarksAtMs: 0,
+    coordinateSpace: 'direct',
     provisional: false,
+    poseFilter: new PoseFilter(),
+    lastProvisionalPxPerMm: null,
+    scaleJump: null,
+    renderedFrames: 0,
+    skippedRenderFrames: 0,
+    lastRenderedAtMs: 0,
     verdict: null,
     probe: null,
     lastProbeRatio: -1,
@@ -96,6 +140,7 @@ export function createLive(sprites: SpritesState, spec: FrameSpec | null, cal: U
     auto: null,
     lastAutoKey: '',
     lastReportedCardViews: -1,
+    loopStats: null,
     wornSprite: null,
     recolorReason: null,
   };

@@ -27,7 +27,8 @@ import {
   irisDiscrepancyMax,
   irisQualityOf,
 } from '../src/core/irisQuality.js';
-import { provisionalScale } from '../src/core/provisionalScale.js';
+import { renderPoseScale } from '../src/core/renderPose.js';
+import { faceWidthPx } from '../src/core/faceMetrics.js';
 import { HVID_MEAN_MM } from '../src/core/ocularScale.js';
 import { AUTO_ASSUMED_HFOV_DEG, EYEPLANE_TO_TEMPLE_DEPTH_MM } from '../src/core/autoCalibrate.js';
 import { H, W, makeFace } from './fixtures/landmarks.js';
@@ -179,21 +180,24 @@ describe('audit 3 bis — le gate iris juge la QUALITÉ, plus la taille', () => 
 });
 
 describe('audit 4 — le produit ne reste plus vide : TRACKING ≠ MÉTROLOGIE', () => {
-  it('🔴 une seule frame suffit à POSER l’image, et c’est une vraie mesure', () => {
-    // La vérité terrain de la scène est 138 mm. L'échelle provisoire vient du
-    // MÊME étalon iris que la calibration définitive : elle doit retrouver la
-    // largeur, en gros — sinon c'est une taille inventée, ce qui est interdit.
-    const p = provisionalScale(validFace(500), W, H, IRIS_DISCREPANCY_MAX, 0);
+  it('🔴 une seule frame suffit à POSER l’image, et son échelle est vraie', () => {
+    // La vérité terrain de la scène est 138 mm. L'échelle de pose vient du
+    // MÊME étalon iris que la calibration définitive : la largeur qu'elle
+    // IMPLIQUE doit retrouver la vérité terrain — sinon c'est une taille
+    // inventée, ce qui est interdit. (Elle ne PUBLIE aucune largeur : aucune
+    // grandeur anatomique ne vit dans le chemin de rendu — guide, point 3.)
+    const lm = validFace(500);
+    const p = renderPoseScale(lm, W, H, IRIS_DISCREPANCY_MAX, null, 0);
     expect(p).not.toBeNull();
-    expect(p!.cal.faceWidthMm).toBeGreaterThan(120);
-    expect(p!.cal.faceWidthMm).toBeLessThan(155);
-    expect(p!.cal.relError).toBeGreaterThan(0); // une mesure SANS incertitude serait fausse
+    const implied = faceWidthPx(lm, W, H) / p!.templePlanePxPerMm;
+    expect(implied).toBeGreaterThan(120);
+    expect(implied).toBeLessThan(155);
   });
 
-  it('elle refuse quand les iris ne sont pas exploitables — pas de taille inventée', () => {
+  it('iris inexploitables → PAS de nouvelle échelle (le rendu TIENT la dernière, point 30)', () => {
     const focalPx = W / (2 * Math.tan(((AUTO_ASSUMED_HFOV_DEG / 2) * Math.PI) / 180));
     const aberrant = makeFace({ faceWidthPx: 400, pdPx: 120, hvidPx: 1 }); // sous le plancher
-    expect(provisionalScale(aberrant, W, H, IRIS_DISCREPANCY_MAX, 0)).toBeNull();
+    expect(renderPoseScale(aberrant, W, H, IRIS_DISCREPANCY_MAX, null, 0)).toBeNull();
     expect(focalPx).toBeGreaterThan(0);
   });
 
@@ -203,14 +207,15 @@ describe('audit 4 — le produit ne reste plus vide : TRACKING ≠ MÉTROLOGIE',
     // largeur du plan des TEMPES avec un mm/px du plan des YEUX. L'audit a
     // demandé de traiter ce saut comme un bug — il l'était : la monture était
     // peinte 6 à 10 % trop large, puis rétrécissait à la calibration. L'aperçu
-    // emprunte désormais la MÊME chaîne d'assemblage, donc le biais a disparu.
+    // emprunte désormais la MÊME formule de plan, donc le biais a disparu.
     // Le détail chiffré, avant/après, vit dans `tests/plane.test.ts`.
-    const near = provisionalScale(validFace(400), W, H, IRIS_DISCREPANCY_MAX, 0)!;
-    const far = provisionalScale(validFace(700), W, H, IRIS_DISCREPANCY_MAX, 0)!;
-    const drift = Math.abs(far.cal.faceWidthMm - near.cal.faceWidthMm) / far.cal.faceWidthMm;
-    expect(drift).toBeLessThan(0.005);
+    const lmNear = validFace(400);
+    const lmFar = validFace(700);
+    const near = faceWidthPx(lmNear, W, H) / renderPoseScale(lmNear, W, H, IRIS_DISCREPANCY_MAX, null, 0)!.templePlanePxPerMm;
+    const far = faceWidthPx(lmFar, W, H) / renderPoseScale(lmFar, W, H, IRIS_DISCREPANCY_MAX, null, 0)!.templePlanePxPerMm;
+    expect(Math.abs(far - near) / far).toBeLessThan(0.005);
     // …et les deux retrouvent la vérité terrain, au lieu de la sous-estimer.
-    expect(near.cal.faceWidthMm).toBeCloseTo(138, 0);
-    expect(far.cal.faceWidthMm).toBeCloseTo(138, 0);
+    expect(near).toBeCloseTo(138, 0);
+    expect(far).toBeCloseTo(138, 0);
   });
 });

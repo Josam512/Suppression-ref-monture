@@ -28,10 +28,22 @@ export function loadCalibration(): UserCalibration | null {
 }
 
 export function saveCalibration(cal: UserCalibration): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(cal));
+  // 🔴 Guide point 60 — cette écriture est appelée depuis la boucle de rendu
+  // (la calibration conclut PENDANT une frame) : un stockage plein ou interdit
+  // (navigation privée, quota) levait DANS la boucle et tuait la séance. La
+  // session mémoire continue ; seule la persistance est perdue.
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(cal));
+  } catch {
+    // Stockage indisponible : la prochaine session remesurera. Rien ne bloque.
+  }
 }
 
 /** « Refaire la calibration » : on jette, et la séance recommence à zéro. */
 export function clearCalibration(): void {
-  localStorage.removeItem(STORAGE_KEY);
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Même règle : l'absence de stockage n'est jamais une panne de session.
+  }
 }

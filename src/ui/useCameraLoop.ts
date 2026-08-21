@@ -1,38 +1,58 @@
 /**
  * ui/useCameraLoop.ts — webcam + boucle de détection (couches 1-4). Monté UNE fois.
  *
- * Reprise de fond (mission détection 2026-08-20) : la boucle elle-même vit dans
- * `tracking/faceLoop.ts` — acquisition, normalisation et validité des frames
- * (frameFeed), second avis FaceDetector (faceProbe), landmarks (landmarker),
- * décisions PROUVÉES (detectionPlan). Ici, il ne reste que ce qui est propre à
- * l'IHM : getUserMedia, le dimensionnement du canvas, le cycle de vie React.
+ * Durci par le guide de fiabilisation (2026-08-21) :
  *
- * ⚠️ Les gestionnaires sont lus dans une `ref` à chaque frame : recréer la
- * boucle à chaque rendu React lui ferait perdre ses compteurs (§1 bug #3).
+ *   - le délai d'initialisation couvre TOUTE la chaîne caméra — getUserMedia,
+ *     `play()`, l'arrivée de vraies dimensions — et plus seulement l'attente de
+ *     métadonnées (complément 25). L'init du MODÈLE a son propre délai, dans
+ *     `tracking/faceLoop.ts` ;
+ *   - la vidéo est attendue par CONDITION (`videoWidth > 0 && readyState ≥ 2`),
+ *     jamais par un événement qui a pu être émis avant qu'on l'écoute : à
+ *     `readyState === 1`, `loadedmetadata` est déjà passé et ne reviendra pas —
+ *     l'ancienne attente bloquait 15 s pour rien (point 65) ;
+ *   - un `getUserMedia` qui résout APRÈS le démontage stoppe ses pistes au lieu
+ *     de laisser un stream fantôme tenir la caméra allumée (point 66) — c'est
+ *     aussi ce qui rend le montage StrictMode (mount→unmount→mount) propre ;
+ *   - le modèle MediaPipe est PRÉCHARGÉ en parallèle de la caméra (point 7) ;
+ *   - deux canaux de sortie : `onWarning` (récupérable — la séance continue) et
+ *     `onError` (fatal — plus aucune stratégie ne peut continuer) (point 10).
  */
 
 import { useEffect, useRef, type RefObject } from 'react';
-import { startFaceLoop, type FaceLoopControl, type LostCause } from '../tracking/faceLoop.js';
+import { startFaceLoop, type FaceLoopControl, type FaceLoopStats, type LostCause } from '../tracking/faceLoop.js';
+import type { CoordinateSpace } from '../tracking/detectionPlan.js';
+import { preloadLandmarkerAssets } from '../tracking/landmarker.js';
 import type { NormalizedLandmark } from '../core/geom.js';
 
 export interface CameraHandlers {
-  onFrame(ctx: CanvasRenderingContext2D, lm: readonly NormalizedLandmark[], yawRad: number): void;
+  onFrame(
+    ctx: CanvasRenderingContext2D,
+    lm: readonly NormalizedLandmark[],
+    yawRad: number,
+    space: CoordinateSpace,
+  ): void;
   /**
-   * Pas de landmarks sur cette frame. `cause` sépare (§11) :
-   *  - 'invalid-input' : problème d'ENTRÉE caméra (frame noire, 0×0…), nommé ;
-   *  - 'no-face'       : frame valide, visage non trouvé — « recherche… ».
-   * La pose (« mettez-vous de face ») n'est PAS un état de détection : elle
-   * appartient aux gates de mesure.
+   * Pas de landmarks sur cette frame. `cause` sépare (§11) l'entrée cassée
+   * (`invalid-input`), la sortie du modèle inutilisable (`invalid-landmarks`),
+   * l'exception d'inférence (`inference-error`) et le vrai « visage non
+   * trouvé » (`no-face`). La pose (« mettez-vous de face ») n'est PAS un état
+   * de détection : elle appartient aux gates de mesure.
    */
   onLost(ctx: CanvasRenderingContext2D, n: number, cause: LostCause, reason: string | null): void;
   onProgress(ratio: number): void;
   /** Appelé une fois, quand la caméra et le modèle sont prêts. */
-  onReady(): void;
+  onReady(stats: () => Readonly<FaceLoopStats>): void;
+  /** Dégradation RÉCUPÉRABLE (ex. GPU KO → CPU vivant). La séance continue. */
+  onWarning(message: string): void;
+  /** Fatal : aucune stratégie ne peut continuer. */
   onError(message: string): void;
 }
 
-/** Au-delà, l'init est déclarée en échec au lieu de rester `loading` à vie (audit A3). */
+/** Budget TOTAL de la chaîne caméra : getUserMedia + play + dimensions. */
 export const CAMERA_INIT_TIMEOUT_MS = 15_000;
+/** Cadence du sondage de l'état vidéo pendant l'init. */
+const VIDEO_POLL_MS = 100;
 
 /**
  * Un échec d'init peut remonter un `Event` (chargement WASM, piste vidéo) dont
@@ -45,6 +65,46 @@ function describeInitError(err: unknown): string {
     `Le chargement de la caméra ou du modèle a échoué (réseau coupé, fichier ` +
     `manquant, ou caméra indisponible). Vérifiez votre connexion et réessayez.`
   );
+}
+
+/**
+ * Attend que la vidéo soit RÉELLEMENT exploitable. Par condition ET par
+ * événements : les événements accélèrent, le sondage garantit — aucun des deux
+ * ne peut manquer un état déjà atteint (point 65).
+ */
+function waitForVideoReady(video: HTMLVideoElement, deadlineMs: number): Promise<void> {
+  if (video.videoWidth > 0 && video.videoHeight > 0 && video.readyState >= 2) {
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve, reject) => {
+    const events = ['loadedmetadata', 'loadeddata', 'canplay', 'resize'] as const;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const cleanup = (): void => {
+      if (timer !== null) clearTimeout(timer);
+      for (const e of events) video.removeEventListener(e, check);
+    };
+    const check = (): void => {
+      if (video.videoWidth > 0 && video.videoHeight > 0 && video.readyState >= 2) {
+        cleanup();
+        resolve();
+        return;
+      }
+      const left = deadlineMs - performance.now();
+      if (left <= 0) {
+        cleanup();
+        reject(
+          new Error(
+            `La caméra n'a pas fourni d'image exploitable en ${CAMERA_INIT_TIMEOUT_MS / 1000} s ` +
+              `(readyState ${video.readyState}, ${video.videoWidth}×${video.videoHeight}).`,
+          ),
+        );
+        return;
+      }
+      timer = setTimeout(check, Math.min(VIDEO_POLL_MS, left));
+    };
+    for (const e of events) video.addEventListener(e, check);
+    check();
+  });
 }
 
 export function useCameraLoop(
@@ -61,50 +121,72 @@ export function useCameraLoop(
     let loop: FaceLoopControl | null = null;
     let stream: MediaStream | null = null;
     let disposed = false;
+    let detachResize: (() => void) | null = null;
+
+    // ⚠️ À vérifier après CHAQUE await (complément 26) : stopper ce qui vient
+    // d'arriver trop tard, ne jamais le laisser vivant en fantôme.
+    const stopStream = (s: MediaStream | null): void => s?.getTracks().forEach((t) => t.stop());
 
     void (async () => {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({
+        // ⭐ Point 7 — le modèle part en téléchargement PENDANT que la caméra
+        // s'ouvre, pas après.
+        preloadLandmarkerAssets((r) => {
+          if (!disposed) held.current.onProgress(r);
+        });
+
+        const deadline = performance.now() + CAMERA_INIT_TIMEOUT_MS;
+        const fresh = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
         });
         const video = videoRef.current;
         const canvas = canvasRef.current;
-        if (video === null || canvas === null || disposed) return;
+        if (video === null || canvas === null || disposed) {
+          stopStream(fresh); // 🔴 point 66 — jamais de stream fantôme
+          return;
+        }
+        stream = fresh;
 
         video.srcObject = stream;
         await video.play();
+        if (disposed) {
+          stopStream(stream);
+          return;
+        }
 
         // Dimensionner le canvas PUIS seulement démarrer la boucle (§2).
-        // ⚠️ Avec délai : une promesse qui n'arrive jamais laissait la page en
-        // `loading` pour toujours, sans raison affichée (audit A3).
-        if (video.readyState < 2) {
-          await new Promise<void>((resolve, reject) => {
-            const t = setTimeout(
-              () => reject(new Error(`La caméra n'a pas fourni d'image en ${CAMERA_INIT_TIMEOUT_MS / 1000} s.`)),
-              CAMERA_INIT_TIMEOUT_MS,
-            );
-            video.addEventListener(
-              'loadedmetadata',
-              () => {
-                clearTimeout(t);
-                resolve();
-              },
-              { once: true },
-            );
-          });
+        await waitForVideoReady(video, deadline);
+        if (disposed) {
+          stopStream(stream);
+          return;
         }
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
+
+        // ⭐ Point 41 — si la piste change de dimensions en cours de session
+        // (rotation d'écran, renégociation), le canvas suit : landmarks,
+        // canvas d'inférence et canvas de rendu restent dans le même repère.
+        const onResize = (): void => {
+          if (video.videoWidth > 0 && (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight)) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+          }
+        };
+        video.addEventListener('resize', onResize);
+        detachResize = () => video.removeEventListener('resize', onResize);
 
         const ctx = canvas.getContext('2d');
         if (ctx === null) throw new Error('Contexte 2D indisponible.');
 
         const control = await startFaceLoop(video, {
-          onLandmarks: (lm, yawRad) => held.current.onFrame(ctx, lm, yawRad),
+          onLandmarks: (lm, yawRad, space) => held.current.onFrame(ctx, lm, yawRad, space),
           onLost: (n, cause, reason) => held.current.onLost(ctx, n, cause, reason),
           onTransition: (reason) => console.warn(`Détection — ${reason}`),
           onProgress: (r) => {
             if (!disposed) held.current.onProgress(r);
+          },
+          onWarning: (message) => {
+            if (!disposed) held.current.onWarning(message);
           },
           onError: (message) => {
             if (!disposed) held.current.onError(message);
@@ -112,19 +194,22 @@ export function useCameraLoop(
         });
         if (disposed) {
           control.stop();
+          stopStream(stream);
           return;
         }
         loop = control;
-        held.current.onReady();
+        held.current.onReady(() => control.stats());
       } catch (err) {
+        stopStream(stream);
         if (!disposed) held.current.onError(describeInitError(err));
       }
     })();
 
     return () => {
       disposed = true;
+      detachResize?.();
       loop?.stop();
-      stream?.getTracks().forEach((t) => t.stop());
+      stopStream(stream);
     };
   }, [videoRef, canvasRef, attempt]);
 }
