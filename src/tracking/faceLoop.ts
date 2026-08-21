@@ -250,7 +250,8 @@ export async function startFaceLoop(
       handlers.onTransition?.(t.reason ?? currentStrategy(plan).label);
       // Une seule Task (A1) : l'ancienne est fermée, la création court sous
       // watchdog — les frames de la fenêtre sont `model-pending`, et c'est dit.
-      host.ensure();
+      // `recreate` (A2) force la recréation de la MÊME stratégie.
+      host.ensure(t.recreate === true);
     }
   };
 

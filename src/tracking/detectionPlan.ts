@@ -12,14 +12,23 @@
  *   - les seuils sont des DURÉES, plus des comptes de frames : 120 frames
  *     valaient 8 s à 15 fps et 2 s à 60 fps — le même code changeait de
  *     comportement avec la cadence (point 12). L'acquisition initiale monte
- *     vite (SWAP_MS) ; une stratégie qui a DÉJÀ suivi un visage n'est jamais
- *     quittée : sortir du champ n'est pas une panne (les deux machines du
- *     point 11 — acquisition initiale rapide, reprise de perte prudente).
+ *     vite (SWAP_MS) ; une stratégie qui a DÉJÀ suivi un visage est traitée
+ *     avec PRUDENCE : sortir du champ n'est pas une panne (les deux machines
+ *     du point 11 — acquisition initiale rapide, reprise de perte prudente) ;
+ *   - 🔴 ré-audit A2 — la prudence n'est plus un verrou À VIE : un moteur
+ *     devenu muet SANS lever (GPU perdu en silence) était une panne définitive
+ *     avec caméra vivante. Après un silence anormalement LONG de frames
+ *     valides (SILENT_RECREATE_MS), la MÊME stratégie est d'abord RECRÉÉE ;
+ *     toujours muette sur une nouvelle fenêtre complète, l'échelle descend.
+ *     Les fenêtres sont longues exprès : l'absence de l'utilisateur ne
+ *     déclenche rien, et jamais de ping-pong.
  *
  *   WAITING_VALID_FRAME ──frame valide──▶ SEARCHING (stratégie 0)
  *   SEARCHING ──landmarks──▶ TRACKING (stratégie verrouillée)
  *   TRACKING ──perte──▶ SEARCHING, même stratégie (sortir du champ ≠ panne)
- *   SEARCHING ──muet SWAP_MS + assez de frames──▶ stratégie suivante
+ *   SEARCHING (jamais suivi) ──muet SWAP_MS + frames──▶ stratégie suivante
+ *   SEARCHING (a suivi) ──muet SILENT_RECREATE_MS──▶ RECRÉER la même
+ *                       ──encore muet une fenêtre──▶ stratégie suivante
  *   dernière stratégie muette ──▶ on continue de chercher, honnêtement.
  *
  * Les frames INVALIDES (noires, 0×0) n'avancent aucune horloge.
@@ -40,6 +49,20 @@ export const SWAP_SILENT_MS = 2500;
  * que la caméra est lente.
  */
 export const SWAP_MIN_SILENT_FRAMES = 10;
+
+/**
+ * ⭐ Ré-audit A2 — silence PRUDENT avant de soupçonner une stratégie qui a
+ * déjà suivi un visage. Volontairement long (8× l'acquisition initiale) :
+ * quelqu'un qui sort du champ chercher ses lunettes ne déclenche RIEN. Et la
+ * première action est une recréation À L'IDENTIQUE — invisible si la personne
+ * est simplement absente, salvatrice si le moteur est mort en silence.
+ */
+export const SILENT_RECREATE_MS = 20_000;
+/**
+ * Matière minimale de la fenêtre prudente : en dessous de ~3 frames/s sur
+ * 20 s, c'est la caméra qui est en cause, pas le détecteur.
+ */
+export const SILENT_RECREATE_MIN_FRAMES = 60;
 
 /** Une marche de l'échelle : comment configurer le landmarker. */
 export interface DetectionStrategy {
@@ -113,6 +136,8 @@ export interface DetectionPlan {
   silentSinceMs: number | null;
   /** La stratégie courante a-t-elle déjà produit des landmarks ? */
   strategyEverTracked: boolean;
+  /** Recréations déjà tentées dans l'ÉPISODE de silence courant (A2). */
+  recoveryAttempts: number;
 }
 
 export interface DetectionObservation {
@@ -127,6 +152,8 @@ export interface DetectionTransition {
   advanceTo: number | null;
   /** Raison nommée, affichable telle quelle (§17 : savoir POURQUOI). */
   reason: string | null;
+  /** Vrai : recréer la MÊME stratégie (A2) — l'hôte doit forcer la création. */
+  recreate?: boolean;
 }
 
 export function initialPlan(): DetectionPlan {
@@ -137,6 +164,7 @@ export function initialPlan(): DetectionPlan {
     invalidFrames: 0,
     silentSinceMs: null,
     strategyEverTracked: false,
+    recoveryAttempts: 0,
   };
 }
 
@@ -158,6 +186,7 @@ export function planStep(plan: DetectionPlan, obs: DetectionObservation): Detect
     plan.silentValidFrames = 0;
     plan.silentSinceMs = null;
     plan.strategyEverTracked = true;
+    plan.recoveryAttempts = 0; // épisode clos : la machine de reprise repart de zéro
     return { advanceTo: null, reason: null };
   }
 
@@ -165,9 +194,11 @@ export function planStep(plan: DetectionPlan, obs: DetectionObservation): Detect
   plan.silentValidFrames++;
   plan.silentSinceMs ??= obs.nowMs;
 
-  // Une stratégie qui a déjà suivi un visage n'est pas en panne : on cherche.
   const last = plan.strategyIndex >= DETECTION_STRATEGIES.length - 1;
-  if (plan.strategyEverTracked || last) return { advanceTo: null, reason: null };
+  // Une stratégie qui a déjà suivi n'est pas soupçonnée à la légère : la
+  // machine de REPRISE (A2) a ses propres fenêtres, longues et prudentes.
+  if (plan.strategyEverTracked) return recoveryStep(plan, obs, last);
+  if (last) return { advanceTo: null, reason: null };
 
   const silentMs = obs.nowMs - plan.silentSinceMs;
   if (silentMs < SWAP_SILENT_MS || plan.silentValidFrames < SWAP_MIN_SILENT_FRAMES) {
@@ -184,5 +215,55 @@ export function planStep(plan: DetectionPlan, obs: DetectionObservation): Detect
     reason:
       `rien détecté pendant ${(silentMs / 1000).toFixed(1)} s de frames valides ` +
       `(« ${from} ») → « ${next.label} » par élimination`,
+  };
+}
+
+/**
+ * ⭐ Ré-audit A2 — la machine de REPRISE d'une stratégie qui a déjà suivi.
+ *
+ * Un moteur peut mourir SANS lever : plus un landmark, plus une exception,
+ * caméra vivante. L'ancienne règle (« jamais quittée ») en faisait une panne
+ * définitive. La reprise est volontairement lente et en deux temps :
+ *
+ *   1. après SILENT_RECREATE_MS de frames valides muettes : recréer LA MÊME
+ *      stratégie — inoffensif si l'utilisateur est simplement absent (personne
+ *      ne regarde), salvateur si l'instance est morte en silence ;
+ *   2. recréée et TOUJOURS muette une fenêtre complète : descendre l'échelle,
+ *      la nouvelle marche repartant en acquisition rapide (`strategyEverTracked`
+ *      remis à faux).
+ *
+ * Le retour du visage remet `recoveryAttempts` à zéro (planStep) : chaque
+ * épisode d'absence repaie la fenêtre prudente entière — pas de ping-pong.
+ * En haut de l'échelle, une seule recréation par épisode, puis on cherche.
+ */
+function recoveryStep(plan: DetectionPlan, obs: DetectionObservation, last: boolean): DetectionTransition {
+  const silentMs = obs.nowMs - (plan.silentSinceMs ?? obs.nowMs);
+  if (silentMs < SILENT_RECREATE_MS || plan.silentValidFrames < SILENT_RECREATE_MIN_FRAMES) {
+    return { advanceTo: null, reason: null };
+  }
+  if (plan.recoveryAttempts === 0) {
+    plan.recoveryAttempts = 1;
+    plan.silentValidFrames = 0;
+    plan.silentSinceMs = null;
+    return {
+      advanceTo: plan.strategyIndex,
+      recreate: true,
+      reason:
+        `« ${currentStrategy(plan).label} » a suivi un visage puis est restée muette ` +
+        `${(silentMs / 1000).toFixed(0)} s de frames valides — je la recrée à l'identique.`,
+    };
+  }
+  if (last) return { advanceTo: null, reason: null }; // on continue de chercher, honnêtement
+  const from = currentStrategy(plan).label;
+  plan.strategyIndex++;
+  plan.strategyEverTracked = false;
+  plan.recoveryAttempts = 0;
+  plan.silentValidFrames = 0;
+  plan.silentSinceMs = null;
+  return {
+    advanceTo: plan.strategyIndex,
+    reason:
+      `« ${from} » recréée reste muette après une nouvelle fenêtre complète — ` +
+      `j'essaie « ${currentStrategy(plan).label} » par élimination.`,
   };
 }

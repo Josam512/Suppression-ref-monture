@@ -239,6 +239,7 @@ export function createModelHost(
         plan.strategyEverTracked = false;
         plan.silentSinceMs = null;
         plan.silentValidFrames = 0;
+        plan.recoveryAttempts = 0;
         recreateTried = false;
         cb.onWarning(`l'inférence lève toujours — j'essaie « ${currentStrategy(plan).label} ».`);
         ensure();

@@ -112,12 +112,14 @@ describe('échelle de stratégies — montées TEMPORELLES, sans sonde (points 6
     expect(plan.silentValidFrames).toBe(0); // une entrée cassée ne dit rien des détecteurs
   });
 
-  it('🔴 une stratégie qui a DÉJÀ suivi un visage n’est jamais quittée (sortie du champ ≠ panne)', () => {
+  it('🔴 sortie du champ ≠ panne : une stratégie qui a suivi n’est PAS soupçonnée avant la fenêtre prudente', () => {
     const plan = initialPlan();
     planStep(plan, { frameValid: true, landmarksFound: true, nowMs: 0 });
     expect(plan.phase).toBe('tracking');
-    expect(feedSilent(plan, 600, 66, 100)).toBe(0); // ~40 s sans visage
+    // ~18 s d'absence à 15 fps : bien plus qu'une pause, moins que la fenêtre prudente.
+    expect(feedSilent(plan, 270, 66, 100)).toBe(0);
     expect(currentStrategy(plan).id).toBe('gpu');
+    expect(plan.strategyEverTracked).toBe(true);
   });
 
   it('en haut de l’échelle : on continue de chercher, honnêtement — pas de ping-pong', () => {
@@ -127,6 +129,64 @@ describe('échelle de stratégies — montées TEMPORELLES, sans sonde (points 6
     expect(feedSilent(plan, 600, 66, 60_000)).toBe(0);
     expect(currentStrategy(plan).id).toBe('cpu-seuils');
     expect(plan.phase).toBe('searching');
+  });
+
+  it('A2 — silence anormalement LONG post-tracking : la MÊME stratégie est recréée, une fois', () => {
+    const plan = initialPlan();
+    planStep(plan, { frameValid: true, landmarksFound: true, nowMs: 0 });
+    const actions: ReturnType<typeof planStep>[] = [];
+    // ~26 s de frames valides muettes : UNE action attendue, la recréation.
+    for (let i = 0; i < 400; i++) {
+      const t = planStep(plan, { frameValid: true, landmarksFound: false, nowMs: 100 + i * 66 });
+      if (t.advanceTo !== null) actions.push(t);
+    }
+    expect(actions).toHaveLength(1);
+    expect(actions[0]!.recreate).toBe(true);
+    expect(actions[0]!.advanceTo).toBe(0); // la MÊME marche, pas la suivante
+    expect(actions[0]!.reason).toMatch(/recrée/);
+    expect(currentStrategy(plan).id).toBe('gpu');
+  });
+
+  it('A2 — le retour du visage remet la reprise à zéro : chaque absence repaie la fenêtre entière', () => {
+    const plan = initialPlan();
+    planStep(plan, { frameValid: true, landmarksFound: true, nowMs: 0 });
+    feedSilent(plan, 400, 66, 100); // → recréation déclenchée
+    expect(plan.recoveryAttempts).toBe(1);
+    planStep(plan, { frameValid: true, landmarksFound: true, nowMs: 30_000 }); // le client revient
+    expect(plan.recoveryAttempts).toBe(0);
+    expect(feedSilent(plan, 270, 66, 31_000)).toBe(0); // nouvelle absence courte : rien
+    expect(currentStrategy(plan).id).toBe('gpu');
+  });
+
+  it('A2 — recréée et TOUJOURS muette une fenêtre complète : l’échelle descend enfin', () => {
+    const plan = initialPlan();
+    planStep(plan, { frameValid: true, landmarksFound: true, nowMs: 0 });
+    const actions: ReturnType<typeof planStep>[] = [];
+    // ~53 s de frames valides muettes : recréation, puis descente.
+    for (let i = 0; i < 800; i++) {
+      const t = planStep(plan, { frameValid: true, landmarksFound: false, nowMs: 100 + i * 66 });
+      if (t.advanceTo !== null) actions.push(t);
+    }
+    expect(actions.length).toBeGreaterThanOrEqual(2);
+    expect(actions[0]!.recreate).toBe(true); // d'abord la même…
+    expect(actions[1]!.advanceTo).toBe(1); // …puis la marche suivante
+    expect(actions[1]!.recreate).toBeUndefined();
+    expect(plan.strategyEverTracked).toBe(false); // la nouvelle marche repart en acquisition rapide
+  });
+
+  it('A2 — en haut de l’échelle : une seule recréation par épisode, puis on cherche honnêtement', () => {
+    const plan = initialPlan();
+    feedSilent(plan, 180, 66, 0); // gravit tout sans jamais suivre
+    expect(currentStrategy(plan).id).toBe('cpu-seuils');
+    planStep(plan, { frameValid: true, landmarksFound: true, nowMs: 20_000 }); // suit enfin
+    const actions: ReturnType<typeof planStep>[] = [];
+    for (let i = 0; i < 900; i++) {
+      const t = planStep(plan, { frameValid: true, landmarksFound: false, nowMs: 21_000 + i * 66 });
+      if (t.advanceTo !== null) actions.push(t);
+    }
+    expect(actions).toHaveLength(1);
+    expect(actions[0]!.recreate).toBe(true);
+    expect(currentStrategy(plan).id).toBe('cpu-seuils'); // pas de ping-pong au sommet
   });
 
   it('l’échelle finit sur la stratégie la plus permissive : marge + seuils 0,25 en CPU', () => {
