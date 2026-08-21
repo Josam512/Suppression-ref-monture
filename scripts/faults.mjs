@@ -68,7 +68,7 @@ const LAUNCH = (video) => ({
   ],
 });
 
-async function scenario(browser, name, { init, routes, run }) {
+async function scenario(browser, name, { init, routes, run, url }) {
   const ctx = await browser.newContext({ permissions: ['camera'] });
   const pageErrors = [];
   try {
@@ -76,7 +76,7 @@ async function scenario(browser, name, { init, routes, run }) {
     const page = await ctx.newPage();
     page.on('pageerror', (e) => pageErrors.push(e.message));
     if (routes) await routes(page);
-    await page.goto(`${BASE}/?resetSession=1`, { waitUntil: 'load' });
+    await page.goto(url ?? `${BASE}/?resetSession=1`, { waitUntil: 'load' });
     await run(page, name, pageErrors);
   } catch (err) {
     check(`${name} : scénario exécuté`, false, err instanceof Error ? err.message.slice(0, 160) : String(err));
@@ -196,25 +196,28 @@ try {
   });
 
   await scenario(browser, 'S7 calibration d’une ANCIENNE version d’algorithme', {
+    // ⚠️ PAS de ?resetSession ici : il purgerait la graine plantée (contexte
+    // neuf = stockage vierge, la purge n'apporte rien et fausse le scénario).
+    url: `${BASE}/`,
     init: () => {
-      const write = () => {
-        try {
-          localStorage.setItem(
-            'essayage.calibration.v1',
-            JSON.stringify({
-              v: 2, // version précédente : la métrologie doit être invalidée (58/c44)
-              cal: { faceWidthMm: 140, source: 'auto', relError: 0.05, measuredAt: 1, pdMm: 63, pdRelError: 0.04 },
-            }),
-          );
-        } catch {}
-      };
-      write();
-      document.addEventListener('DOMContentLoaded', write);
+      try {
+        localStorage.setItem(
+          'essayage.calibration.v1',
+          JSON.stringify({
+            v: 2, // version précédente : la métrologie doit être invalidée (58/c44)
+            cal: { faceWidthMm: 140, source: 'auto', relError: 0.05, measuredAt: 1, pdMm: 63, pdRelError: 0.04 },
+          }),
+        );
+      } catch {}
     },
     run: async (page, name) => {
-      // Le rendu part tout de suite (la largeur migrée suffit)…
+      // La calibration vient du STOCKAGE migré : essayage immédiat, sans
+      // repasser par « Calibration acquise » — c'est ça, la migration.
       const rendered = await page
-        .waitForFunction(() => (globalThis.__VTO_HEALTH__?.renderedFrames ?? 0) > 0, { timeout: 45_000 })
+        .waitForFunction(
+          () => globalThis.__VTO_HEALTH__?.calibrated === true && (globalThis.__VTO_HEALTH__?.renderedFrames ?? 0) > 0,
+          { timeout: 45_000 },
+        )
         .then(() => true)
         .catch(() => false);
       check(`${name} : l'essayage démarre sur la largeur migrée`, rendered);
@@ -228,30 +231,34 @@ try {
   });
 
   await scenario(browser, 'S10 profil de focale d’un AUTRE appareil', {
+    url: `${BASE}/`, // pas de resetSession : il purgerait la graine plantée
     init: () => {
-      const write = () => {
-        try {
-          localStorage.setItem(
-            'essayage.camera.v1',
-            JSON.stringify({
-              focalPerWidth: 0.9,
-              relError: 0.05,
-              views: 60,
-              measuredAt: Date.now(),
-              deviceId: 'appareil-fantome-du-passe',
-              facingMode: 'environment', // caméra ARRIÈRE : incompatible (c23)
-            }),
-          );
-        } catch {}
-      };
-      write();
-      document.addEventListener('DOMContentLoaded', write);
+      try {
+        localStorage.setItem(
+          'essayage.camera.v1',
+          JSON.stringify({
+            focalPerWidth: 0.9,
+            relError: 0.05,
+            views: 60,
+            measuredAt: Date.now(),
+            deviceId: 'appareil-fantome-du-passe',
+            facingMode: 'environment', // caméra ARRIÈRE : incompatible (c23)
+          }),
+        );
+      } catch {}
     },
     run: async (page, name) => {
+      // L'avis d'éviction est affiché AU MOMENT de l'ouverture caméra, puis le
+      // résumé de calibration prend l'écran (et redit la provenance) : on le
+      // saisit dans sa fenêtre.
+      const evicted = await page
+        .waitForFunction(() => /autre caméra/i.test(document.body.innerText), { timeout: 30_000 })
+        .then(() => true)
+        .catch(() => false);
+      check(`${name} : l'éviction du profil étranger est DITE (c23-c24)`, evicted);
       check(`${name} : la session conclut sans contamination`, await CALIBRATED()(page));
-      const txt = await page.locator('body').innerText();
-      check(`${name} : l'éviction du profil étranger est DITE (c23-c24)`, /autre caméra/i.test(txt));
       // La distance repart du champ SUPPOSÉ — jamais de la focale étrangère.
+      const txt = await page.locator('body').innerText();
       check(`${name} : la distance revient au champ supposé`, /champ de caméra supposé/i.test(txt));
     },
   });
