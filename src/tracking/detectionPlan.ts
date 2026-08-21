@@ -7,15 +7,6 @@ import type { Delegate } from './landmarker.js';
 export const PROBE_EVERY = 10;
 export const SWAP_WITH_EVIDENCE_AFTER = 30;
 export const SWAP_BLIND_AFTER = 120;
-/**
- * Après qu'une stratégie a déjà suivi un visage, une perte ordinaire ne doit
- * pas déclencher des swaps. Mais "jamais" était trop fort : si le runtime GPU
- * meurt réellement après avoir fonctionné, `strategyEverTracked` verrouillait
- * la stratégie à vie. On autorise donc un RESTART de la même marche après une
- * longue perte valide ; un échec de recréation pourra alors provoquer le repli
- * prévu dans faceLoop. Ce n'est pas un swap vers une autre stratégie par simple
- * sortie du champ.
- */
 export const RESTART_TRACKED_AFTER = 240;
 
 export interface DetectionStrategy {
@@ -53,6 +44,8 @@ export interface DetectionPlan {
   probeTried: number;
   probeHits: number;
   strategyEverTracked: boolean;
+  /** Évite de recréer le graph toutes les 8 s si l'utilisateur quitte le champ. */
+  restartedSinceTrack: boolean;
 }
 
 export interface DetectionObservation {
@@ -63,7 +56,6 @@ export interface DetectionObservation {
 
 export interface DetectionTransition {
   advanceTo: number | null;
-  /** Ré-instancier la stratégie COURANTE, sans l'avancer. */
   restartCurrent?: boolean;
   reason: string | null;
 }
@@ -77,6 +69,7 @@ export function initialPlan(): DetectionPlan {
     probeTried: 0,
     probeHits: 0,
     strategyEverTracked: false,
+    restartedSinceTrack: false,
   };
 }
 
@@ -104,6 +97,7 @@ export function planStep(plan: DetectionPlan, obs: DetectionObservation): Detect
     plan.phase = 'tracking';
     plan.silentValidFrames = 0;
     plan.strategyEverTracked = true;
+    plan.restartedSinceTrack = false;
     return { advanceTo: null, reason: null };
   }
 
@@ -114,17 +108,14 @@ export function planStep(plan: DetectionPlan, obs: DetectionObservation): Detect
     if (obs.probeFound) plan.probeHits++;
   }
 
-  // Une stratégie qui a déjà suivi un visage reste normalement verrouillée :
-  // sortir du champ n'est pas une panne. Mais après une perte VALIDEMENT filmée
-  // très longue, on redémarre LA MÊME stratégie une fois. Si le graph GPU s'est
-  // réellement corrompu/perdu, ce restart crée enfin un chemin de récupération.
   if (plan.strategyEverTracked) {
-    if (plan.silentValidFrames >= RESTART_TRACKED_AFTER) {
+    if (!plan.restartedSinceTrack && plan.silentValidFrames >= RESTART_TRACKED_AFTER) {
       plan.silentValidFrames = 0;
+      plan.restartedSinceTrack = true;
       return {
         advanceTo: null,
         restartCurrent: true,
-        reason: `la stratégie « ${currentStrategy(plan).label} » avait déjà suivi un visage mais reste muette depuis ${RESTART_TRACKED_AFTER} frames valides → redémarrage de la même stratégie`,
+        reason: `la stratégie « ${currentStrategy(plan).label} » avait déjà suivi un visage mais reste muette depuis ${RESTART_TRACKED_AFTER} frames valides → redémarrage unique de la même stratégie`,
       };
     }
     return { advanceTo: null, reason: null };
@@ -163,4 +154,5 @@ function advance(plan: DetectionPlan): void {
   plan.silentValidFrames = 0;
   plan.probeHits = 0;
   plan.probeTried = 0;
+  plan.restartedSinceTrack = false;
 }
