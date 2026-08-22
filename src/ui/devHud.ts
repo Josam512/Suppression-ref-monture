@@ -114,6 +114,11 @@ export function hudLines(live: Live, nowMs: number): string[] {
         `yaw ${st.rejected['turn-to-front']} roll ${st.rejected['straighten-head']}) · ` +
         `SE ${fmt(st.scaleStandardError * 100, 2)} % · tentatives ${st.attempts}`,
     );
+    // ⭐ A9/A10 — l'estimateur candidat et la stabilité de SA série, en clair.
+    lines.push(
+      `série [${st.candidateEstimator}] : dispersion ${fmt(st.scaleSpreadRel * 100, 1)} %/frame · ` +
+        `dérive ${fmt(st.scaleDriftRel * 100, 1)} % · hors-série ${fmt(st.scaleOutlierRatio * 100, 0)} %`,
+    );
     if (st.lastFrameViolations.length > 1) {
       lines.push(`frame rejetée pour : ${st.lastFrameViolations.join(' + ')}`);
     }

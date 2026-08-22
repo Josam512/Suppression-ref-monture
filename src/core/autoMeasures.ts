@@ -21,6 +21,8 @@ export interface SeriesStats {
   outlierRatio: number;
   /** (médiane 2e moitié − médiane 1re moitié) / médiane globale. */
   driftRel: number;
+  /** ⭐ A10 — MAD/|médiane| : la dispersion PAR FRAME, insensible à √n. */
+  madRel: number;
 }
 
 /** Les grandeurs MESURÉES, prêtes pour l'assemblage (core/autoCalibrate.ts). */
@@ -89,7 +91,7 @@ export function quantile(xs: readonly number[], q: number): number {
 /** Les statistiques complètes d'une série (point 32). Pur, testé sans DOM. */
 export function seriesStats(xs: readonly number[]): SeriesStats {
   const n = xs.length;
-  if (n === 0) return { n: 0, p10: NaN, p90: NaN, outlierRatio: 0, driftRel: 0 };
+  if (n === 0) return { n: 0, p10: NaN, p90: NaN, outlierRatio: 0, driftRel: 0, madRel: 0 };
   const m = median(xs);
   const mad = median(xs.map((x) => Math.abs(x - m))) * 1.4826;
   const outliers = mad > 0 ? xs.filter((x) => Math.abs(x - m) > 3 * mad).length : 0;
@@ -106,5 +108,6 @@ export function seriesStats(xs: readonly number[]): SeriesStats {
     p90: quantile(xs, 0.9),
     outlierRatio: outliers / n,
     driftRel,
+    madRel: m !== 0 && Number.isFinite(m) ? mad / Math.abs(m) : 0,
   };
 }

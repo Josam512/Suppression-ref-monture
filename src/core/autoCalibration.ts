@@ -1,17 +1,14 @@
 /**
  * core/autoCalibration.ts — la calibration AUTOMATIQUE, sans carte.
- * Refonte du guide de fiabilisation (2026-08-21) :
  *
- *  1. TROIS horloges (pt 18, c19) : `attemptStartedAt` — armée au PREMIER appel
- *     de la tentative — porte le délai. Zéro bonne frame pendant 20 s est une
- *     tentative ÉCHOUÉE nommée, plus jamais une mesure éternelle.
- *  2. FENÊTRE PROPRE par tentative (pt 19, c20–21) : tous les tampons vidés,
- *     `generation` incrémentée. Ce qui survit aux tentatives, ce sont les
- *     mesures PUBLIÉES (le store, pt 20), jamais les échantillons bruts.
+ *  1. TROIS horloges (pt 18, c19) : `attemptStartedAt` porte le délai — zéro
+ *     bonne frame en 20 s est une tentative ÉCHOUÉE nommée, jamais éternelle.
+ *  2. FENÊTRE PROPRE par tentative (pt 19, c20–21) : tampons vidés,
+ *     `generation++`. Seules les mesures PUBLIÉES survivent (store, pt 20).
  *  3. PD total = distance DIRECTE pupille↔pupille (pt 22) ; demi-écarts gardés
- *     par la projection anatomique du sellion (pt 23) ET la face stricte.
- *  4. ESTIMATEUR VERROUILLÉ (pt 29) : deux séries parallèles, un choix unique
- *     à la conclusion — plus de commutation frame par frame.
+ *     par la projection du sellion (pt 23) ET la face stricte.
+ *  4. ESTIMATEUR verrouillé (pt 29) et JUGÉ sur sa série (A8/A9/A10 :
+ *     `core/scaleStability.ts` — dégradé ≠ instable, repli HVID dit).
  *  5. `rejectedFramesAny` (c1) : les frames rejetées comptées UNE fois chacune.
  */
 
@@ -19,9 +16,9 @@ import { median, relStandardError, seriesStats, type AutoMeasures } from './auto
 import { DualSeries, gateFrame } from './autoSeries.js';
 import type { NormalizedLandmark } from './geom.js';
 import {
+  attemptFailureOf,
   dominantReason,
   emptyGateCounts,
-  GATE_LABELS,
   UNSTABLE_SCALE_LABEL,
   type AcquisitionPhase,
   type AutoState,
@@ -31,9 +28,10 @@ import {
   type WhyNotDone,
 } from './autoStatus.js';
 // prettier-ignore
-import { AUTO_TIMEOUT_MS, ESTIMATOR_FULL_MIN_RATIO, IRIS_DISCREPANCY_MAX, MAX_AUTO_ROLL_RAD, MAX_AUTO_YAW_RAD, MAX_SCALE_STANDARD_ERROR, MAX_SPLIT_YAW_RAD, MIN_AUTO_DURATION_MS, MIN_AUTO_FRAMES, MIN_AUTO_FRAMES_DEGRADED } from './autoTuning.js';
+import { AUTO_TIMEOUT_MS, IRIS_DISCREPANCY_MAX, MAX_AUTO_ROLL_RAD, MAX_AUTO_YAW_RAD, MAX_SCALE_SE_DEGRADED, MAX_SCALE_STANDARD_ERROR, MAX_SPLIT_YAW_RAD, MIN_AUTO_DURATION_MS, MIN_AUTO_FRAMES, MIN_AUTO_FRAMES_DEGRADED } from './autoTuning.js';
 import { HVID_MEAN_MM, HVID_ONLY_REL_ERROR, OCULAR_PRIOR_REL_ERROR } from './ocularScale.js';
 import { halfPdUsable } from './pupillary.js';
+import { candidateEstimatorOf, pickStableEstimator, type ScaleEstimator } from './scaleStability.js';
 
 /** Les seuils de la collecte vivent dans `core/autoTuning.ts` (§3). */
 // prettier-ignore
@@ -70,11 +68,8 @@ export class AutoCalibrationEngine {
 
   private measures_: AutoMeasures | null = null;
 
-  /**
-   * Propose une frame. `lm` vaut null quand la détection est perdue.
-   * Sans effet une fois `calibrated` : la collecte est FINIE. Dans tous les
-   * autres cas la frame est comptée — il n'existe plus d'état qui refuse tout.
-   */
+  /** Propose une frame (`lm` null = détection perdue). Sans effet une fois
+   *  `calibrated` ; sinon la frame est TOUJOURS comptée — aucun état ne refuse tout. */
   offer(
     lm: readonly NormalizedLandmark[] | null,
     yawRad: number,
@@ -99,8 +94,7 @@ export class AutoCalibrationEngine {
     }
     this.firstFaceMs ??= nowMs;
 
-    // Les gates sont évalués et comptés SÉPARÉMENT (diagnostic) ; la frame
-    // rejetée compte UNE fois (complément 1).
+    // Gates évalués et comptés SÉPARÉMENT ; la frame rejetée compte UNE fois (c1).
     const g = gateFrame(lm, yawRad, rollRad, w, h, MAX_AUTO_YAW_RAD, MAX_AUTO_ROLL_RAD, IRIS_DISCREPANCY_MAX);
 
     if (g.yawFail) this.rejects['turn-to-front']++;
@@ -135,8 +129,7 @@ export class AutoCalibrationEngine {
       this.pdRight.push(p.rightPx, sHvid, sFull);
       this.pdLeft.push(p.leftPx, sHvid, sFull);
     }
-    // ⭐ Point 31 — la largeur a SON cycle : illisible, elle ne prive ni le PD
-    // ni l'échelle de cette frame.
+    // ⭐ Pt 31 — la largeur a SON cycle : illisible, elle ne prive rien d'autre.
     if (Number.isFinite(g.faceWidthPx)) this.faceEye.push(g.faceWidthPx, sHvid, sFull);
     this.hvid.push((g.iris as NonNullable<typeof g.iris>).widthPx);
 
@@ -148,25 +141,31 @@ export class AutoCalibrationEngine {
     const n = this.scaleHvid.length;
     if (this.firstUsefulMs !== null) {
       const converged = nowMs - this.firstUsefulMs;
-      if (n >= MIN_AUTO_FRAMES && converged >= MIN_AUTO_DURATION_MS && this.scaleSE() <= MAX_SCALE_STANDARD_ERROR) {
-        return this.conclude(false);
+      if (n >= MIN_AUTO_FRAMES && converged >= MIN_AUTO_DURATION_MS) {
+        // ⭐ A9 — le candidat d'abord, la stabilité de SA série ensuite
+        // (repli HVID dit) — jamais juger HVID et publier HVID+PFL.
+        const pick = pickStableEstimator(this.scaleHvid, this.scaleFull, MAX_SCALE_STANDARD_ERROR);
+        if (pick.estimator !== null) return this.conclude(false, pick.estimator);
       }
     }
     // ⭐ Point 18 — le délai se juge sur l'horloge de TENTATIVE : il court
     // même quand aucune frame utile n'est jamais arrivée.
     if (this.attemptStartedMs === null || nowMs - this.attemptStartedMs < AUTO_TIMEOUT_MS) return;
 
-    if (n >= MIN_AUTO_FRAMES_DEGRADED) return this.conclude(true);
+    if (n >= MIN_AUTO_FRAMES_DEGRADED) {
+      // ⭐ A8 — le dégradé ASSUME une précision moindre (SE doublée, portée par
+      // relError) mais REFUSE l'instabilité : bimodal/dérivant = invention.
+      const pick = pickStableEstimator(this.scaleHvid, this.scaleFull, MAX_SCALE_SE_DEGRADED);
+      if (pick.estimator !== null) return this.conclude(true, pick.estimator);
+    }
 
-    // Tentative échouée : on la nomme, on compte, et on REPART SUR UNE FENÊTRE
-    // PROPRE (point 19) — génération suivante, tous tampons vidés.
+    // Tentative échouée : NOMMÉE (attemptFailureOf — A8 : assez d'images mais
+    // instable = `unstable-scale`), comptée, FENÊTRE PROPRE (point 19).
     this.attempts_++;
-    this.lastAttemptFailure_ =
-      this.firstUsefulMs === null || this.rejectedAny_ > n
-        ? this.firstFaceMs === null
-          ? { code: 'no-face', label: GATE_LABELS['no-face'] }
-          : dominantReason(this.rejects)
-        : { code: 'need-more-frames', label: `Trop peu d'images utiles (${n}) dans le délai — je recommence.` };
+    // prettier-ignore
+    this.lastAttemptFailure_ = attemptFailureOf(
+      n, MIN_AUTO_FRAMES_DEGRADED, this.firstUsefulMs !== null, this.firstFaceMs !== null, this.rejectedAny_, this.rejects,
+    );
     this.resetAttempt(nowMs);
   }
 
@@ -187,12 +186,10 @@ export class AutoCalibrationEngine {
     this.rejectedAny_ = 0;
   }
 
-  /** UNE transition, verrouillée : `measures_` n'est écrit qu'ici, une fois. */
-  private conclude(degraded: boolean): void {
+  /** UNE transition, verrouillée : `measures_` n'est écrit qu'ici, une fois.
+   *  L'estimateur arrive DÉJÀ choisi et jugé stable sur SA série (29/A9). */
+  private conclude(degraded: boolean, estimator: ScaleEstimator): void {
     this.state_ = 'calibrated';
-    // ⭐ Point 29 — l'estimateur est choisi ICI, une fois pour toute la tentative.
-    const estimator: 'hvid' | 'hvid+pfl' =
-      this.scaleFull.length >= ESTIMATOR_FULL_MIN_RATIO * this.scaleHvid.length ? 'hvid+pfl' : 'hvid';
     const scaleSeries = estimator === 'hvid' ? this.scaleHvid : this.scaleFull;
     const right = this.pdRight.pick(estimator);
     const left = this.pdLeft.pick(estimator);
@@ -222,8 +219,15 @@ export class AutoCalibrationEngine {
     };
   }
 
+  /** SE de la série de l'estimateur CANDIDAT — celle que la décision juge (A9). */
   private scaleSE(): number {
-    return relStandardError(this.scaleHvid);
+    return relStandardError(this.candidateSeries());
+  }
+
+  private candidateSeries(): number[] {
+    return candidateEstimatorOf(this.scaleHvid.length, this.scaleFull.length) === 'hvid'
+      ? this.scaleHvid
+      : this.scaleFull;
   }
 
   get state(): AutoState {
@@ -257,14 +261,15 @@ export class AutoCalibrationEngine {
         // ⭐ Complément 1 — la décision lit les FRAMES rejetées, pas la somme des gates.
         why = dominantReason(this.rejects);
       } else if (n === 0 && this.attempts_ > 0 && this.lastAttemptFailure_ !== null) {
-        // Fenêtre neuve encore vide : l'obstacle NOMMÉ par la tentative
-        // précédente reste la consigne — pas un neutre « mesure en cours ».
+        // Fenêtre neuve vide : l'obstacle NOMMÉ précédent reste la consigne.
         why = this.lastAttemptFailure_;
       } else {
         why = { code: 'need-more-frames', label: `Mesure en cours : ${n}/${MIN_AUTO_FRAMES} images utiles.` };
       }
     }
 
+    // ⭐ A10 — la stabilité de la série CANDIDATE est publiée (HUD).
+    const candStats = seriesStats(this.candidateSeries());
     return {
       state: this.state_,
       usableFrames: n,
@@ -279,6 +284,10 @@ export class AutoCalibrationEngine {
       primaryRejectReason: this.primary_,
       lastFrameViolations: [...this.lastViolations_],
       scaleStandardError: this.scaleSE(),
+      candidateEstimator: candidateEstimatorOf(this.scaleHvid.length, this.scaleFull.length),
+      scaleSpreadRel: candStats.madRel,
+      scaleDriftRel: candStats.driftRel,
+      scaleOutlierRatio: candStats.outlierRatio,
       attempts: this.attempts_,
       lastAttemptFailure: this.lastAttemptFailure_,
       generation: this.generation_,

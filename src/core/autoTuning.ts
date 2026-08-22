@@ -35,5 +35,34 @@ export const MAX_SCALE_STANDARD_ERROR = 0.005;
 export const AUTO_TIMEOUT_MS = 20_000;
 export const MIN_AUTO_FRAMES_DEGRADED = 12;
 
+/**
+ * ⭐ Ré-audit A8 — le mode DÉGRADÉ (délai atteint) tolère le DOUBLE de
+ * l'erreur-type nominale : la précision moindre est ASSUMÉE et portée par
+ * l'incertitude publiée. Il ne tolère JAMAIS l'instabilité structurelle
+ * (dispersion, dérive, outliers ci-dessous) : conclure sur une série bimodale
+ * n'est pas une dégradation, c'est une invention.
+ */
+export const MAX_SCALE_SE_DEGRADED = 2 * MAX_SCALE_STANDARD_ERROR;
+
+/**
+ * ⭐ Ré-audit A10 — dispersion PAR FRAME maximale (MAD/médiane). Elle ne
+ * s'améliore pas en √n : c'est ELLE qui refuse une série BIMODALE que
+ * l'erreur-type finit par laisser passer à grand n. Dérivation : la
+ * convergence nominale (SE ≤ 0,5 % à 30 frames) implique ~2,7 % de dispersion
+ * par frame — le seuil laisse ×1,85 de marge au bruit honnête. Un aller-retour
+ * entre deux distances donne MAD ≈ 0,74 × l'écart des modes : refusé dès ~7 %
+ * d'écart.
+ */
+export const MAX_SCALE_SPREAD_REL = 0.05;
+/**
+ * ⭐ A10 — dérive 1re → 2e moitié maximale, bornée au plancher biologique de
+ * l'étalon iris (4,3 %, §4) : au-delà, la médiane mélange deux distances et
+ * n'appartient à aucune.
+ */
+export const MAX_SCALE_DRIFT_REL = 0.043;
+/** ⭐ A10 — au-delà de 10 % de points à >3 MAD, la série est CONTAMINÉE : sa
+ *  MAD (donc son erreur-type) ment. Un bruit sain en produit moins de 1 %. */
+export const MAX_SCALE_OUTLIER_RATIO = 0.1;
+
 /** Part minimale de frames où PFL a concordé pour retenir l'estimateur complet. */
 export const ESTIMATOR_FULL_MIN_RATIO = 0.7;

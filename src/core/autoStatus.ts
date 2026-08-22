@@ -72,8 +72,14 @@ export interface AutoStatus {
   primaryRejectReason: WhyCode | null;
   /** TOUS les gates violés par la dernière frame rejetée (complément 2 — HUD). */
   lastFrameViolations: readonly WhyCode[];
-  /** Erreur-type courante de la médiane d'échelle (la vraie décision). */
+  /** Erreur-type courante de la médiane d'échelle de la série CANDIDATE (A9). */
   scaleStandardError: number;
+  /** ⭐ A9 — l'estimateur que la conclusion retiendrait à cet instant. */
+  candidateEstimator: 'hvid' | 'hvid+pfl';
+  /** ⭐ A10 — stabilité de la série candidate : dispersion/frame, dérive, outliers. */
+  scaleSpreadRel: number;
+  scaleDriftRel: number;
+  scaleOutlierRatio: number;
   /** Nombre de fois où le délai est passé sans matière suffisante. */
   attempts: number;
   /** Ce que le dernier délai a nommé. La collecte continue malgré tout. */
@@ -127,4 +133,27 @@ export function dominantReason(counts: GateCounts): WhyNotDone {
 
 export function emptyGateCounts(): GateCounts {
   return { 'no-face': 0, 'eyes-too-small': 0, 'turn-to-front': 0, 'straighten-head': 0 };
+}
+
+/**
+ * L'échec que le DÉLAI vient de nommer (moteur, point 18). ⭐ A8 — la matière
+ * était là (assez de frames pour le mode dégradé) mais l'échelle instable :
+ * c'est `unstable-scale`, jamais un neutre « trop peu d'images ».
+ */
+export function attemptFailureOf(
+  usableFrames: number,
+  degradedMinFrames: number,
+  firstUsefulSeen: boolean,
+  firstFaceSeen: boolean,
+  rejectedFramesAny: number,
+  rejects: GateCounts,
+): WhyNotDone {
+  if (usableFrames >= degradedMinFrames) return { code: 'unstable-scale', label: UNSTABLE_SCALE_LABEL };
+  if (!firstUsefulSeen || rejectedFramesAny > usableFrames) {
+    return firstFaceSeen ? dominantReason(rejects) : { code: 'no-face', label: GATE_LABELS['no-face'] };
+  }
+  return {
+    code: 'need-more-frames',
+    label: `Trop peu d'images utiles (${usableFrames}) dans le délai — je recommence.`,
+  };
 }
