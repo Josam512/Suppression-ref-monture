@@ -233,14 +233,16 @@ export function runProof(): ProofCase[] {
     ),
   );
 
-  // ── 9. ⭐ Guide point 52 / c31 : l'occlusion n'efface JAMAIS la racine de la
-  // branche. Une branche opaque est peinte à 20° de yaw, puis un contour de
-  // visage recouvrant TOUT le tenon lui est appliqué : les pixels dans la zone
-  // protégée (8 mm autour du tenon) doivent SURVIVRE, ceux au cœur du contour,
-  // au-delà de la protection, doivent être occlus — « tenon → trou → branche »
-  // donnait l'impression d'une géométrie fausse alors que c'était le masque.
-  {
-    const yawOcc = Math.PI / 9;
+  // ── 9. ⭐ Guide point 52 / c31, série AH du ré-audit : l'occlusion n'efface
+  // JAMAIS la racine de la branche — et ce, DES DEUX CÔTÉS et à plusieurs
+  // angles (10/20/30°, yaw des deux signes). Une branche opaque est peinte,
+  // puis un contour de visage recouvrant TOUT le tenon lui est appliqué : les
+  // pixels dans la zone protégée (8 mm autour du tenon) doivent SURVIVRE, ceux
+  // au cœur du contour, au-delà de la protection, doivent être occlus —
+  // « tenon → trou → branche » donnait l'impression d'une géométrie fausse
+  // alors que c'était le masque. (À 0°, la branche est fondue : rien à occlure.)
+  for (const deg of [10, 20, 30, -20]) {
+    const yawOcc = (deg * Math.PI) / 180;
     const lmOcc = makeFaceAtYaw(yawOcc);
     const mOcc = frameMetrics(lmOcc, W, H, CAL, yawOcc);
     const spec2: FrameSpec = { ...SPEC, hingeProfile: { x: 0, y: 30 } };
@@ -271,9 +273,10 @@ export function runProof(): ProofCase[] {
       const y = Math.round(anchor.y + uy * mm * mOcc.livePxPerMm);
       return ctx.getImageData(x, y, 1, 1).data[3]!;
     };
+    const label = `${deg}° (côté ${side > 0 ? 'droit' : 'gauche'})`;
     out.push(
       compare(
-        'occlusion : la RACINE de branche survit (zone protégée du tenon)',
+        `occlusion à ${label} : la RACINE de branche survit (zone protégée du tenon)`,
         1,
         alphaAt(TEMPLE_ROOT_PROTECT_MM * 0.5) > 8 ? 1 : 0,
         0,
@@ -282,7 +285,7 @@ export function runProof(): ProofCase[] {
     );
     out.push(
       compare(
-        'occlusion : au-delà de la protection, la branche passe bien DERRIÈRE',
+        `occlusion à ${label} : au-delà de la protection, la branche passe DERRIÈRE`,
         0,
         alphaAt(20) > 8 ? 1 : 0,
         0,
