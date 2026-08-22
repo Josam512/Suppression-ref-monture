@@ -300,9 +300,15 @@ try {
     },
   });
 
-  // AN — S13 : création GPU forcée à l'ÉCHEC (WebGL absent). L'échelle prend
-  // le relais (délégué CPU), la dégradation est DITE, une seule Task vit.
-  await scenario(browser, 'S13 GPU indisponible (WebGL coupé)', {
+  // AN — S13 : WebGL TOTALEMENT absent (pilote cassé, navigateur exotique).
+  // Constat mesuré (sonde 2026-08-22) : MediaPipe ne lève PAS à la création —
+  // l'instance se crée puis `detectForVideo` lève à CHAQUE frame, sur les
+  // DEUX délégués (le CPU utilise aussi WebGL pour l'entrée image). Le
+  // repli « création GPU KO → CPU prend le relais », lui, est prouvé par
+  // lifecycle.test.ts (fabrique injectable). Ce scénario prouve donc LE
+  // contrat de survie sous TEMPÊTE d'erreurs d'inférence : session vivante,
+  // une seule Task malgré les recréations, tempête DITE, sorties offertes.
+  await scenario(browser, 'S13 WebGL absent (tempête d’erreurs d’inférence)', {
     init: () => {
       const noGl = (original) =>
         function getContext(type, ...rest) {
@@ -314,11 +320,21 @@ try {
         OffscreenCanvas.prototype.getContext = noGl(OffscreenCanvas.prototype.getContext);
       }
     },
-    run: async (page, name) => {
-      check(`${name} : la session CONCLUT sur le délégué CPU (échelle vivante)`, await CALIBRATED(90_000)(page));
-      const h = await health(page);
-      check(`${name} : jamais plus d'une Task MediaPipe vivante`, (h?.aliveTasks ?? 99) <= 1, `alive=${h?.aliveTasks}`);
-      check(`${name} : aucun invariant violé`, h?.invariants?.violations === 0);
+    run: async (page, name, pageErrors) => {
+      // La tempête doit avoir traversé la recréation ET l'échelle sans tuer la
+      // session : on laisse le temps aux swaps (10 erreurs → recréer → 10 →
+      // marche suivante), puis on lit l'état.
+      await page.waitForTimeout(25_000);
+      const h1 = await health(page);
+      await page.waitForTimeout(3_000);
+      const h2 = await health(page);
+      check(`${name} : la caméra reste VIVANTE sous la tempête`, (h2?.cameraFrames ?? 0) > (h1?.cameraFrames ?? 0));
+      check(`${name} : les erreurs d'inférence sont COMPTÉES, jamais fatales`, (h2?.inferenceErrors ?? 0) > 50);
+      check(`${name} : jamais plus d'une Task malgré les recréations`, (h2?.aliveTasks ?? 99) <= 1, `alive=${h2?.aliveTasks}`);
+      check(`${name} : aucun invariant violé`, h2?.invariants?.violations === 0);
+      const txt = await page.locator('main').innerText();
+      check(`${name} : l'impasse est DITE et une sortie est offerte (carte)`, /carte/i.test(txt));
+      check(`${name} : aucune exception non rattrapée`, pageErrors.length === 0, pageErrors[0] ?? '');
     },
   });
 
