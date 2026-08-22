@@ -12,6 +12,7 @@
 import type { UserCalibration } from '../core/calibration.js';
 import type { MeasurementSnapshot, MetricPhase } from './measurementStore.js';
 import { MIN_SPLIT_FRAMES } from '../core/autoCalibration.js';
+import { pdDisplayOf } from './pdCarry.js';
 
 function phaseLabel(phase: MetricPhase): string | null {
   switch (phase) {
@@ -39,20 +40,28 @@ export function MeasuresPanel(props: {
     metrics.pd.phase !== 'idle' || metrics.faceScale.phase !== 'idle' || metrics.temporal.phase !== 'idle';
   if (!anyActive && cal === null) return null;
 
+  // ⭐ Ré-audit A12 — le store (plus frais) prime, la calibration PERSISTÉE
+  // est le repli : au rechargement, le PD mémorisé s'affiche immédiatement.
   const pd = metrics.pd;
+  const shown = pdDisplayOf(pd, cal);
+  const pdCollecting = pd.phase === 'collecting' || pd.phase === 'retrying';
   const pdLine =
-    pd.phase === 'ready' && pd.value !== null
-      ? `PD total : ${mm(pd.value.pdMm, pd.value.pdMm * pd.value.pdRelError)}`
+    shown !== null
+      ? `PD total : ${mm(shown.pdMm, shown.uncertaintyMm)}` +
+        (!shown.fromStore && pdCollecting ? ' (séance mémorisée — nouvelle mesure en cours)' : '')
       : `PD total : ${phaseLabel(pd.phase) ?? '—'}${pd.failure !== null ? ` (${pd.failure.label})` : ''}`;
 
   let halvesLine: string;
-  if (pd.phase === 'ready' && pd.value !== null && pd.value.pdRightMm !== undefined) {
-    const v = pd.value;
+  if (shown !== null && shown.right !== null && shown.left !== null) {
     halvesLine =
-      `demi-PD — OD : ${mm(v.pdRightMm!, v.pdHalfUncertaintyMm?.right ?? 0)} · ` +
-      `OG : ${mm(v.pdLeftMm!, v.pdHalfUncertaintyMm?.left ?? 0)} (${v.splitFrames} images strictes)`;
-  } else if (pd.phase === 'ready' && pd.value !== null) {
-    halvesLine = `demi-PD : en attente de face stricte (${pd.value.splitFrames}/${MIN_SPLIT_FRAMES} images) — le total, lui, est acquis`;
+      `demi-PD — OD : ${mm(shown.right.mm, shown.right.u)} · OG : ${mm(shown.left.mm, shown.left.u)}` +
+      (shown.splitFrames !== null ? ` (${shown.splitFrames} images strictes)` : ' (séance mémorisée)');
+  } else if (shown !== null && shown.splitFrames !== null) {
+    halvesLine = `demi-PD : en attente de face stricte (${shown.splitFrames}/${MIN_SPLIT_FRAMES} images) — le total, lui, est acquis`;
+  } else if (shown !== null) {
+    halvesLine = pdCollecting
+      ? `demi-PD : collecte en cours (regardez l’écran bien en face) — le total, lui, est acquis`
+      : `demi-PD : non mesurées — le total, lui, est acquis`;
   } else {
     halvesLine = `demi-PD : ${phaseLabel(pd.phase) ?? '—'}`;
   }

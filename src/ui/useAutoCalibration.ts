@@ -5,14 +5,13 @@
  *
  *   - l'assemblage est SCINDÉ : le PD et l'échelle de visage réussissent ou
  *     échouent CHACUN POUR SOI (codes typés, complément 3). Un PD validé
- *     SURVIT à un échec de largeur — il vit dans le store de mesures, pas dans
- *     la tentative (point 20) ;
- *   - une calibration publiée sans PD ne ferme pas la porte : la collecte
- *     REPART en arrière-plan, l'essayage restant affiché (point 28) ;
+ *     SURVIT à un échec de largeur (point 20, prolongé par pdCarry — A11) ;
+ *   - une calibration publiée sans PD, ou sans demi-PD, ne ferme pas la
+ *     porte : la collecte REPART en arrière-plan, l'essayage affiché (pt 28) ;
  *   - l'écart temporal manquant se raffine aussi en arrière-plan, et ne touche
- *     JAMAIS que ses deux champs (points 35 et 46) ;
- *   - après trop de refus, l'état publié est `unavailable` — plus jamais un
- *     faux `collecting` sans moteur (points 68–69). Le rendu, lui, continue.
+ *     JAMAIS que ses deux champs (points 35 et 46) ; après trop de refus,
+ *     l'état publié est `unavailable` — plus jamais un faux `collecting` sans
+ *     moteur (68–69). Le rendu, lui, continue.
  */
 
 import { useCallback, useRef, type MutableRefObject, type RefObject } from 'react';
@@ -42,6 +41,7 @@ import {
   unavailableStatus,
   type MeasurementSnapshot,
 } from './measurementStore.js';
+import { carriedPdFields, missingPdCapacities } from './pdCarry.js';
 import { TemporalCapture } from './temporalCapture.js';
 
 /** Refus d'ASSEMBLAGE tolérés avant de cesser de ré-armer (point 69). */
@@ -63,11 +63,8 @@ export interface AutoCalibrationDeps {
 export interface AutoCalibration {
   /** (Re)lance la mesure : nouveau moteur, compteurs à zéro, store remis à plat. */
   startAuto(): void;
-  /**
-   * ⭐ Point 28 — tests de CAPACITÉS, pas « une calibration existe » : une
-   * calibration mémorisée sans PD (ancienne version, séance interrompue) rend
-   * l'essayage immédiat ET relance la collecte du manquant en arrière-plan.
-   */
+  /** ⭐ Points 28/A11 — tests de CAPACITÉS : toute pièce manquante (PD total,
+   *  demi-PD, temporal) relance SA collecte en arrière-plan, essayage affiché. */
   startMissing(): void;
   /** À appeler à CHAQUE frame de la boucle (`lm` null si détection perdue). */
   pump(lm: readonly NormalizedLandmark[] | null, yawRad: number, w: number, h: number): void;
@@ -125,7 +122,10 @@ export function useAutoCalibration(deps: AutoCalibrationDeps): AutoCalibration {
       startAuto();
       return;
     }
-    if (cal.pdMm === undefined) {
+    // ⭐ A11 — capacités séparées : total sans demi-PD ⇒ collecte de face
+    // stricte en arrière-plan ; le total persisté survit (pdCarry).
+    const { hasPdTotal, hasHalfPd } = missingPdCapacities(cal);
+    if (!hasPdTotal || !hasHalfPd) {
       metrics.current.pd = { ...metrics.current.pd, phase: 'collecting' };
       rearmEngine(); // l'essayage reste affiché : la collecte est d'arrière-plan
     }
@@ -209,7 +209,9 @@ export function useAutoCalibration(deps: AutoCalibrationDeps): AutoCalibration {
         relError: face.relError,
         measuredAt: Date.now(),
         distanceMm: face.distanceMm,
-        ...pdFieldsOf(pd),
+        // ⭐ A11 — rien de frais ? Le PD PERSISTANT est reporté, jamais jeté
+        // (point 20 par-delà les rechargements). Une mesure fraîche remplace.
+        ...(pd !== null ? pdFieldsOf(pd) : carriedPdFields(s.cal)),
         ...temporalFields,
       };
       s.auto = null;
@@ -258,8 +260,7 @@ export function useAutoCalibration(deps: AutoCalibrationDeps): AutoCalibration {
         captures.current.offer(lm, yawRad, w, h, s.auto.generation, grab, frameScale);
       }
 
-      // ⭐ Point 35 — raffinement d'ARRIÈRE-PLAN : calibré sans écart temporal,
-      // la rotation spontanée suffit. Ne touche QUE temporalWidthMm/RelError.
+      // ⭐ Pt 35 — raffinement d'ARRIÈRE-PLAN : ne touche QUE temporal*.
       if (s.auto === null && s.cal !== null && s.cal.temporalWidthMm === undefined && lm !== null) {
         const frameScale = frameMetrics(lm, w, h, s.cal, yawRad).livePxPerMm;
         captures.current.offer(lm, yawRad, w, h, -1, grab, frameScale);
