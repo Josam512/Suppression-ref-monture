@@ -131,11 +131,9 @@ export function computeSpritePxPerMm(marks: FrontMarks, spec: FrameSpecMm): numb
 }
 
 /**
- * ⭐ Correctif B3 — la largeur vient de la bounding box alpha, jamais du fichier.
- *
- * La largeur du FICHIER inclut les marges transparentes : 20 px
- * de padding sur un sprite à 12 px/mm injectent +1,7 mm dans le livrable du
- * projet, sans le moindre signe extérieur.
+ * ⭐ Correctif B3 — la largeur vient de la bounding box alpha, JAMAIS du
+ * fichier : 20 px de marge transparente à 12 px/mm injecteraient +1,7 mm dans
+ * le livrable du projet, sans le moindre signe extérieur.
  */
 export function totalFrameWidthMm(spec: FrameSpec): number {
   return spec.alphaBBox.w / spec.spritePxPerMm;
@@ -148,22 +146,22 @@ export function totalFrameHeightMm(spec: FrameSpec): number {
 
 const REQUIRED_POINTS = ['bridgeCenter', 'lensCenterL', 'lensCenterR', 'hingeProfile'] as const;
 const REQUIRED_NUMBERS = ['aMm', 'pontMm', 'brancheMm', 'totalWidthMm', 'spritePxPerMm'] as const;
+/** ⭐ A15 — les fichiers d'images sont aussi le CONTRAT : jamais vides. */
+const REQUIRED_STRINGS = ['slug', 'front', 'profile'] as const;
 
 function isPt(v: unknown): v is Pt {
   return (
     typeof v === 'object' &&
     v !== null &&
-    typeof (v as Pt).x === 'number' &&
-    typeof (v as Pt).y === 'number'
+    Number.isFinite((v as Pt).x) && // ⭐ A15 — un NaN n'est pas une coordonnée
+    Number.isFinite((v as Pt).y)
   );
 }
 
 /**
- * ⭐ T4 — validation stricte au chargement d'un spec.json.
- *
- * Un champ manquant lève une erreur qui LE NOMME. Jamais de valeur par défaut :
- * un `bridgeCenter` valant {0,0} décale toute la monture sans rien signaler,
- * ce qui est très exactement le mode d'échec que ce contrat combat.
+ * ⭐ T4/A15 — validation stricte au chargement d'un spec.json. Un champ
+ * manquant lève une erreur qui LE NOMME ; jamais de valeur par défaut — un
+ * `bridgeCenter` à {0,0} décalerait toute la monture sans rien signaler.
  */
 export function parseFrameSpec(raw: unknown): FrameSpec {
   if (typeof raw !== 'object' || raw === null) {
@@ -171,7 +169,12 @@ export function parseFrameSpec(raw: unknown): FrameSpec {
   }
   const o = raw as Record<string, unknown>;
 
-  if (typeof o['slug'] !== 'string') throw new CalibrationError('spec.json : champ "slug" absent.');
+  for (const key of REQUIRED_STRINGS) {
+    const v = o[key];
+    if (typeof v !== 'string' || v.trim() === '') {
+      throw new CalibrationError(`spec.json (${String(o['slug'] ?? '?')}) : champ "${key}" absent ou vide.`);
+    }
+  }
 
   for (const key of REQUIRED_NUMBERS) {
     if (typeof o[key] !== 'number' || !Number.isFinite(o[key])) {
@@ -223,8 +226,9 @@ export function parseFrameSpec(raw: unknown): FrameSpec {
   if (!(bb.w > 0) || !(bb.h > 0) || !Number.isFinite(bb.x) || !Number.isFinite(bb.y) || bb.x < 0 || bb.y < 0) {
     throw new CalibrationError(`spec.json (${spec.slug}) : alphaBBox dégénérée (${bb.x},${bb.y},${bb.w},${bb.h}).`);
   }
-  // Les ancres doivent vivre DANS l'image (bbox + marges) : un bridgeCenter à
-  // (0,0) décalerait toute la monture sans rien signaler.
+  // Les ancres doivent vivre DANS l'image. Ici, borne PROVISOIRE dérivée de la
+  // bbox (l'image n'est pas encore chargée) ; la borne RÉELLE est vérifiée au
+  // chargement du sprite (`core/specAnchors.ts`, branché dans useSprites — A15).
   const maxX = bb.x + bb.w * 1.5;
   const maxY = bb.y + bb.h * 3;
   for (const [name, p] of [
@@ -242,10 +246,20 @@ export function parseFrameSpec(raw: unknown): FrameSpec {
     ['profilePxPerMm', spec.profilePxPerMm],
     ['profileReferenceLengthMm', spec.profileReferenceLengthMm],
     ['templeRectifiedMm', spec.templeRectifiedMm],
+    ['bMm', spec.bMm], // ⭐ A15 — présent, il doit être une vraie cote
   ] as const) {
-    if (v !== undefined && !(v > 0)) {
+    if (v !== undefined && !(Number.isFinite(v) && v > 0)) {
       throw new CalibrationError(`spec.json (${spec.slug}) : "${name}" présent mais non positif (${v}).`);
     }
+  }
+  // ⭐ A15 — un angle de vue de photo 3/4 plausible : ]0°, 90°] (90° = profil pur).
+  const angle = spec.profileViewAngleDeg;
+  if (angle !== undefined && !(Number.isFinite(angle) && angle > 0 && angle <= 90)) {
+    throw new CalibrationError(`spec.json (${spec.slug}) : "profileViewAngleDeg" implausible (${angle}).`);
+  }
+  // ⭐ A15 — la date de calibration fait partie de la traçabilité : lisible ou refusée.
+  if (Number.isNaN(Date.parse(spec.calibratedAt))) {
+    throw new CalibrationError(`spec.json (${spec.slug}) : "calibratedAt" illisible (${spec.calibratedAt}).`);
   }
 
   // Cohérence interne : totalWidthMm DOIT être la bbox convertie, pas une saisie libre.

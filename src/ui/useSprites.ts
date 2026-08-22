@@ -18,6 +18,7 @@
 
 import { useEffect, useState } from 'react';
 import type { FrameSpec } from '../core/frameSpec.js';
+import { frontAnchorsInImageError, profileAnchorsInImageError } from '../core/specAnchors.js';
 import type { FrontSprite } from '../render/composite.js';
 import { assetUrl } from './assetUrl.js';
 
@@ -78,13 +79,23 @@ export function useSprites(spec: FrameSpec | null): SpritesState {
     // auquel on concaténerait un nom : une page autonome sert ses fichiers en
     // `blob:`, et un `blob:…/front.png` ne mène nulle part.
     // ⭐ Point 4 — deux chargements INDÉPENDANTS, chacun son issue.
+    // ⭐ A15 — l'image RÉELLE chargée, ses dimensions valident enfin les
+    // ancres du spec (specAnchors) : hors image = fiche en erreur, nommée.
     void loadImage(assetUrl(`frames/${spec.slug}/${spec.front}`), SPRITE_TIMEOUT_MS).then(
-      (img) => slot('front', { status: 'ready', sprite: { img, spec } }),
+      (img) => {
+        const anchorErr = frontAnchorsInImageError(spec, img.naturalWidth, img.naturalHeight);
+        if (anchorErr !== null) slot('front', { status: 'error', message: `« ${spec.slug} » : ${anchorErr}` });
+        else slot('front', { status: 'ready', sprite: { img, spec } });
+      },
       (err: unknown) =>
         slot('front', { status: 'error', message: err instanceof Error ? err.message : String(err) }),
     );
     void loadImage(assetUrl(`frames/${spec.slug}/${spec.profile}`), SPRITE_TIMEOUT_MS).then(
-      (img) => slot('profile', { status: 'ready', sprite: { img, spec } }),
+      (img) => {
+        const anchorErr = profileAnchorsInImageError(spec, img.naturalWidth, img.naturalHeight);
+        if (anchorErr !== null) slot('profile', { status: 'error', message: `« ${spec.slug} » : ${anchorErr}` });
+        else slot('profile', { status: 'ready', sprite: { img, spec } });
+      },
       (err: unknown) =>
         slot('profile', { status: 'error', message: err instanceof Error ? err.message : String(err) }),
     );
