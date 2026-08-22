@@ -18,7 +18,7 @@ import { describe, expect, it } from 'vitest';
 // STATIQUE et compte les `it(` du source. Une boucle `for` autour d'un `it(`
 // compte pour 1 mais s'exécute N fois : les deux grandeurs ne sont pas
 // comparables. Le plancher était donc inatteignable. Valeur réelle : 301.
-const EXPECTED_MIN_TESTS = 430; // … | refonte détection : 278 | fiabilisation (127 pts) : 351 | reprise ré-audit A1–A18 (lifecycle, deadline, 1re échelle, pdCarry, stabilité, époque temporale, verdict, catalogue/spec, persistance, série yaw) : 430 statiques (445 exécutés)
+const EXPECTED_MIN_TESTS = 431; // … | refonte détection : 278 | fiabilisation (127 pts) : 351 | reprise ré-audit A1–A18 (lifecycle, deadline, 1re échelle, pdCarry, stabilité, époque temporale, verdict, catalogue/spec, persistance, série yaw) : 430 statiques (445 exécutés) | tempête espacée (STORM_RETRY_MS, crash runner S13) : 431
 // fiabilisation 2026-08-21 (guide maître 80+47 pts) : 351
 // écart temporal mesuré + règle des 300 lignes : 94 | recoloriage V2 2,5 D : 101 | lunettes portees refusees : 103 | distance mesuree + borne anatomique : 117
 // carte = mire de calibration (focale + distance mesurées) : 132 | accrochage des coins + balayage : 139

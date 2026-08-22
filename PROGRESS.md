@@ -1323,3 +1323,24 @@ verts (hook pre-commit : typecheck + suite complète + barrages) :
 
 Détail et preuves : `docs/CONFORMITE-FIABILISATION.md`, section « Reprise
 A1–A18 : EXÉCUTÉE ».
+
+### Épilogue CI GitHub (2026-08-22, soir) — deux pannes de runner, deux leçons
+
+Le workflow a exigé deux correctifs que le local ne pouvait PAS révéler :
+
+1. **`public/wasm` absent d'un clone neuf** (runs n°1-2, ENOENT à « artefact
+   autonome ») : seuls les pre-hooks de `npm run dev/build` synchronisaient le
+   wasm, or la chaîne appelle `npx vite build` et `npm run single` directement.
+   En local le dossier préexistait. → `sync-wasm` est une étape de `ci.mjs`.
+2. **S13 tuait l'onglet du runner** (run n°3, « Target crashed ») : sous WebGL
+   absent, `detectForVideo` lève à CHAQUE appel et fuit côté natif ; la boucle
+   l'appelait à la cadence caméra (~60/s pendant 25 s) — absorbé ici, fatal sur
+   la petite VM GitHub. Correctif PRODUIT, pas banc : une fois l'échelle
+   épuisée (`STORM_RETRY_MS = 250 ms`), les tentatives sont espacées, un succès
+   rend le plein régime. Sonde mesurée : cadence 60 → 4 err/s après ~4 s, tas
+   JS stable (~242 Mo), toutes les assertions S13 inchangées et vertes. Un vrai
+   téléphone au pilote cassé y gagne la batterie. Test : lifecycle.test.ts
+   (« tempête INDÉPASSABLE »), compteur méta 431.
+
+Le job `soak` était vert sur le runner dès le run n°1 (3 exécutions vertes
+consécutives).

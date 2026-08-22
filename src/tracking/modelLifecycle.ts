@@ -36,6 +36,10 @@ import { currentStrategy, DETECTION_STRATEGIES, type DetectionPlan, type Detecti
 export const MODEL_CREATE_TIMEOUT_MS = 15_000;
 /** Exceptions d'inférence consécutives avant recréation, puis descente. */
 export const INFERENCE_ERROR_SWAP_AFTER = 10;
+/** Tempête INDÉPASSABLE (échelle épuisée) : tentatives ESPACÉES à cette cadence.
+ *  Marteler à la cadence caméra un moteur qui lève à CHAQUE appel a tué l'onglet
+ *  du runner CI (S13, fuite native par appel). Un succès → plein régime. */
+export const STORM_RETRY_MS = 250;
 
 export type ModelState = 'creating' | 'ready' | 'failed';
 
@@ -88,6 +92,8 @@ export interface ModelHost {
   noteInferenceSuccess(): void;
   /** Nouvelle instance depuis le dernier appel ? (l'appelant remet ses timestamps à zéro) */
   takeGenerationBump(): boolean;
+  /** > 0 quand la tempête a épuisé l'échelle : la boucle ESPACE ses tentatives. */
+  retryDelayMs(): number;
   /**
    * ⭐ Ré-audit A3 — résout `true` à la PREMIÈRE instance vivante, `false` si
    * plus aucune stratégie ne peut se créer (fatal, déjà signalé par onError)
@@ -147,6 +153,7 @@ export function createModelHost(
   let generationBump = false;
   let consecutiveErrors = 0;
   let recreateTried = false;
+  let stormExhausted = false;
 
   let readyOutcome: boolean | null = null;
   let readyResolvers: Array<(ok: boolean) => void> = [];
@@ -263,12 +270,16 @@ export function createModelHost(
         recreateTried = false;
         cb.onWarning(`l'inférence lève toujours — j'essaie « ${currentStrategy(plan).label} ».`);
         ensure();
+      } else {
+        stormExhausted = true; // plus rien à essayer : tentatives espacées (STORM_RETRY_MS)
       }
     },
     noteInferenceSuccess(): void {
       consecutiveErrors = 0;
       recreateTried = false;
+      stormExhausted = false;
     },
+    retryDelayMs: () => (stormExhausted ? STORM_RETRY_MS : 0),
     takeGenerationBump(): boolean {
       const b = generationBump;
       generationBump = false;

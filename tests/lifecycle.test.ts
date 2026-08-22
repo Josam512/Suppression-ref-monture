@@ -18,6 +18,7 @@ import {
   createModelHost,
   INFERENCE_ERROR_SWAP_AFTER,
   MODEL_CREATE_TIMEOUT_MS,
+  STORM_RETRY_MS,
   type LandmarkerFactory,
 } from '../src/tracking/modelLifecycle.js';
 import { DETECTION_STRATEGIES, initialPlan } from '../src/tracking/detectionPlan.js';
@@ -162,6 +163,31 @@ describe('modelLifecycle — une seule Task, fermer avant créer (A1)', () => {
     expect(host.runningStrategy()?.id).toBe('cpu'); // la tempête persiste → échelle
     expect(plan.strategyEverTracked).toBe(false);
     expect(b.maxAlive()).toBe(1);
+    host.dispose();
+  });
+
+  it('tempête INDÉPASSABLE : échelle épuisée → tentatives ESPACÉES, un succès → plein régime', async () => {
+    const b = bench();
+    const plan = initialPlan();
+    const host = createModelHost(plan, silent, b.factory);
+    host.ensure();
+    await flush();
+    // Une première tempête (recréation de la même stratégie) n'espace RIEN :
+    // l'échelle doit garder toute sa réactivité tant qu'elle a des marches.
+    for (let i = 0; i < INFERENCE_ERROR_SWAP_AFTER; i++) host.noteInferenceError();
+    await flush();
+    expect(host.retryDelayMs()).toBe(0);
+    // Descendre TOUTE l'échelle : chaque étage subit recréation puis descente.
+    for (let round = 0; round < 2 * DETECTION_STRATEGIES.length; round++) {
+      for (let i = 0; i < INFERENCE_ERROR_SWAP_AFTER; i++) host.noteInferenceError();
+      await flush();
+    }
+    expect(host.runningStrategy()?.id).toBe('cpu-seuils'); // dernier étage, VIVANT
+    expect(host.state()).toBe('ready');
+    expect(host.retryDelayMs()).toBe(STORM_RETRY_MS); // plus rien à essayer → espacement
+    expect(b.maxAlive()).toBe(1);
+    host.noteInferenceSuccess(); // le pilote revient : plein régime immédiat
+    expect(host.retryDelayMs()).toBe(0);
     host.dispose();
   });
 

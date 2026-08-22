@@ -157,6 +157,7 @@ export async function startFaceLoop(
   let disposed = false;
   let lostStreak = 0;
   let lastTs = -1;
+  let lastAttemptAtMs = 0;
   const scratch = document.createElement('canvas');
   const stats: FaceLoopStats = {
     validFrames: 0,
@@ -201,8 +202,19 @@ export async function startFaceLoop(
     }
     stats.validFrames++;
 
+    // Tempête indépassable (échelle épuisée) : on n'attaque plus le moteur à
+    // la cadence caméra — la frame reste une perte « inference-error » DITE,
+    // sans nouvel appel natif. Une tentative espacée sonde le retour du pilote.
+    const retryDelayMs = host.retryDelayMs();
+    if (retryDelayMs > 0 && performance.now() - lastAttemptAtMs < retryDelayMs) {
+      lostStreak++;
+      handlers.onLost(lostStreak, 'inference-error', stats.lastInferenceError);
+      return;
+    }
+
     const ts = Math.max(performance.now(), lastTs + 1);
     lastTs = ts;
+    lastAttemptAtMs = ts;
 
     let lm: ReadonlyArray<{ x: number; y: number; z?: number }> | undefined;
     let yaw = 0;
