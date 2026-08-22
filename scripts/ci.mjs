@@ -19,6 +19,12 @@ const quick = process.argv.includes('--quick');
 const steps = [
   ['typecheck', 'npm run typecheck'],
   ['tests unitaires', 'npx vitest run'],
+  // ⚠️ AVANT tout build : sur un clone neuf (runner GitHub), public/wasm n'existe
+  // pas — seuls `npm run dev/build` le synchronisent via pre-hooks, or cette
+  // chaîne appelle `npx vite build` et `npm run single` directement. Sans cette
+  // étape, `build-single-file.mjs` meurt en ENOENT et `dist/` part sans runtime
+  // MediaPipe (constaté sur le premier run Actions, 2026-08-22).
+  ['wasm vendorisé (sync-wasm)', 'node scripts/sync-wasm.mjs'],
   ['build Vite', 'npx vite build'],
   ['artefact autonome (npm run single)', 'npm run single'],
   ['banc navigateur (smoke)', 'node scripts/smoke.mjs'],
