@@ -56,6 +56,10 @@ function publishHealth(
       calibrated: live.cal !== null,
       pdReady: live.cal?.pdMm !== undefined,
       provisional: live.provisional,
+      // ⭐ Ré-audit A6 — l'attente de première échelle est OBSERVABLE : les
+      // bancs peuvent affirmer « vivant, expliqué » au lieu de « muet ».
+      waitingFirstScaleMs: live.firstScaleWaitSinceMs === null ? 0 : performance.now() - live.firstScaleWaitSinceMs,
+      firstScaleRefusal: live.firstScaleRefusal,
       invariants: invariantReport(),
     };
   } catch {

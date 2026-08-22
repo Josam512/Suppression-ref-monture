@@ -26,6 +26,13 @@
  * Un iris momentanément douteux rend `scale: null` — et l'appelant GARDE la
  * dernière échelle connue au lieu de retirer la monture (point 30 : l'iris est
  * un critère de MÉTROLOGIE, pas de tracking).
+ *
+ * ⭐ Ré-audit A6 — quand il n'y a JAMAIS eu d'échelle (iris refusés depuis le
+ * début : lunettes portées, reflet permanent), le refus est DIAGNOSTIQUÉ
+ * (`renderPoseScaleDiagnosed`) : l'appelant affiche un état « en attente de
+ * première échelle » borné et expliqué, au lieu d'un canvas muet. Aucune pose
+ * « visuelle » à constante de taille n'est fabriquée : ce serait le présupposé
+ * de taille interdit (§0.0.3) — on explique, on n'invente pas.
  */
 
 import { EYEPLANE_TO_TEMPLE_DEPTH_MM, AUTO_ASSUMED_HFOV_DEG } from './autoCalibrate.js';
@@ -65,6 +72,83 @@ export function renderFocalPx(
     : imageWidthPx / (2 * Math.tan(((AUTO_ASSUMED_HFOV_DEG / 2) * Math.PI) / 180));
 }
 
+/** Pourquoi CETTE frame ne porte pas d'échelle de pose (ré-audit A6). */
+export interface RenderPoseRefusal {
+  code: 'iris-quantification' | 'iris-aberrant' | 'echelle-degeneree' | 'distance-invalide';
+  /** Phrase affichable telle quelle, avec les valeurs de la frame. */
+  detail: string;
+}
+
+export interface DiagnosedPoseScale {
+  scale: RenderPoseScale | null;
+  /** Non nul quand `scale` est nul : la cause, nommée. */
+  refusal: RenderPoseRefusal | null;
+}
+
+/**
+ * L'échelle de pose de CETTE frame, AVEC la cause du refus quand elle manque.
+ * Un refus n'est jamais muet : l'appelant peut tenir la dernière échelle
+ * connue (frame isolée) ou afficher l'attente diagnostiquée (jamais eu
+ * d'échelle — ré-audit A6).
+ */
+export function renderPoseScaleDiagnosed(
+  lm: readonly NormalizedLandmark[],
+  w: number,
+  h: number,
+  discrepancyMax: number,
+  storedProfile: CameraProfile | null,
+  nowMs: number,
+): DiagnosedPoseScale {
+  const eyes = ocularPixelsOf(lm, w, h);
+  const iris = irisQualityOf(eyes.hvidLeftPx, eyes.hvidRightPx, discrepancyMax);
+  if (!iris.ok) {
+    return iris.reason === 'quantification'
+      ? {
+          scale: null,
+          refusal: {
+            code: 'iris-quantification',
+            detail:
+              `iris trop petits pour être mesurés (G ${eyes.hvidLeftPx.toFixed(1)} px · ` +
+              `D ${eyes.hvidRightPx.toFixed(1)} px) — rapprochez-vous de la caméra`,
+          },
+        }
+      : {
+          scale: null,
+          refusal: {
+            code: 'iris-aberrant',
+            detail:
+              `iris incohérents entre les deux yeux (écart ${(iris.discrepancy * 100).toFixed(0)} %, ` +
+              `max ${(discrepancyMax * 100).toFixed(0)} %) — reflet, mèche, ou lunettes portées ? ` +
+              `Retirez vos lunettes si vous en portez`,
+          },
+        };
+  }
+
+  const scale = eyePlaneScale(eyes);
+  if (scale === null || !Number.isFinite(scale.mmPerPx) || scale.mmPerPx <= 0) {
+    return { scale: null, refusal: { code: 'echelle-degeneree', detail: 'échelle oculaire dégénérée sur cette frame' } };
+  }
+
+  const focalPx = renderFocalPx(w, storedProfile, nowMs);
+  const distanceMm = distanceFromIrisMm(iris.widthPx, focalPx, HVID_MEAN_MM);
+  if (!Number.isFinite(distanceMm) || distanceMm <= 0) {
+    return { scale: null, refusal: { code: 'distance-invalide', detail: 'distance caméra incalculable sur cette frame' } };
+  }
+
+  // ⭐ LA même conversion de plan que l'assemblage définitif — une fois.
+  const depthCorrection = 1 + EYEPLANE_TO_TEMPLE_DEPTH_MM / distanceMm;
+  const eyePlanePxPerMm = 1 / scale.mmPerPx;
+  const templePlanePxPerMm = eyePlanePxPerMm / depthCorrection;
+  if (!Number.isFinite(templePlanePxPerMm) || templePlanePxPerMm <= 0) {
+    return { scale: null, refusal: { code: 'echelle-degeneree', detail: 'échelle au plan des tempes dégénérée' } };
+  }
+
+  return {
+    scale: { templePlanePxPerMm, eyePlanePxPerMm, distanceMm, irisPx: iris.widthPx, iris },
+    refusal: null,
+  };
+}
+
 /**
  * L'échelle de pose de CETTE frame, ou `null` si les iris ne la portent pas —
  * auquel cas l'appelant conserve la dernière échelle connue : la monture ne
@@ -78,22 +162,5 @@ export function renderPoseScale(
   storedProfile: CameraProfile | null,
   nowMs: number,
 ): RenderPoseScale | null {
-  const eyes = ocularPixelsOf(lm, w, h);
-  const iris = irisQualityOf(eyes.hvidLeftPx, eyes.hvidRightPx, discrepancyMax);
-  if (!iris.ok) return null;
-
-  const scale = eyePlaneScale(eyes);
-  if (scale === null || !Number.isFinite(scale.mmPerPx) || scale.mmPerPx <= 0) return null;
-
-  const focalPx = renderFocalPx(w, storedProfile, nowMs);
-  const distanceMm = distanceFromIrisMm(iris.widthPx, focalPx, HVID_MEAN_MM);
-  if (!Number.isFinite(distanceMm) || distanceMm <= 0) return null;
-
-  // ⭐ LA même conversion de plan que l'assemblage définitif — une fois.
-  const depthCorrection = 1 + EYEPLANE_TO_TEMPLE_DEPTH_MM / distanceMm;
-  const eyePlanePxPerMm = 1 / scale.mmPerPx;
-  const templePlanePxPerMm = eyePlanePxPerMm / depthCorrection;
-  if (!Number.isFinite(templePlanePxPerMm) || templePlanePxPerMm <= 0) return null;
-
-  return { templePlanePxPerMm, eyePlanePxPerMm, distanceMm, irisPx: iris.widthPx, iris };
+  return renderPoseScaleDiagnosed(lm, w, h, discrepancyMax, storedProfile, nowMs).scale;
 }

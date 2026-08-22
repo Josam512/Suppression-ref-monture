@@ -65,6 +65,14 @@ export interface Live {
   /** ⭐ Audit 2026-08-21 point 4 : la monture est posée, mais l'échelle n'a
    *  PAS convergé — aucun millimètre n'est affirmé. Annoncé en clair. */
   provisional: boolean;
+  /**
+   * ⭐ Ré-audit A6 — AUCUNE échelle de pose n'a encore été vue (iris refusés
+   * depuis le début, par exemple lunettes portées) : depuis quand, et pourquoi.
+   * L'état est affiché et borné — jamais un canvas muet, jamais une valeur
+   * métrologique fabriquée. Remis à null dès la première échelle.
+   */
+  firstScaleWaitSinceMs: number | null;
+  firstScaleRefusal: string | null;
   /** Filtre One-Euro de la POSE (rendu seul, jamais la métrologie — c32). */
   poseFilter: PoseFilter;
   /** Dernière échelle d'aperçu vue — pour instrumenter la transition (c6). */
@@ -126,6 +134,8 @@ export function createLive(
     lastLandmarksAtMs: 0,
     coordinateSpace: 'direct',
     provisional: false,
+    firstScaleWaitSinceMs: null,
+    firstScaleRefusal: null,
     poseFilter: new PoseFilter(),
     lastProvisionalPxPerMm: null,
     scaleJump: null,

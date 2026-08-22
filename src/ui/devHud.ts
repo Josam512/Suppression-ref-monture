@@ -76,7 +76,12 @@ export function hudLines(live: Live, nowMs: number): string[] {
   );
 
   const held = live.poseFilter.heldScale();
-  lines.push(`échelle de pose : ${held === null ? '—' : `${fmt(held, 3)} px/mm`}`);
+  const waiting =
+    live.firstScaleWaitSinceMs !== null
+      ? ` · ATTENTE 1re échelle ${fmt((nowMs - live.firstScaleWaitSinceMs) / 1000, 0)} s` +
+        (live.firstScaleRefusal !== null ? ` (${live.firstScaleRefusal})` : '')
+      : '';
+  lines.push(`échelle de pose : ${held === null ? '—' : `${fmt(held, 3)} px/mm`}${waiting}`);
 
   // ⭐ Complément 18 — l'instrumentation iris (L, R, écart, yaw) qui permet de
   // JUGER le seuil sur données réelles avant de jamais le retoucher.

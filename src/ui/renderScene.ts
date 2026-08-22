@@ -29,7 +29,7 @@ import {
   type FrameMetrics,
 } from '../core/faceMetrics.js';
 import { at, px, type NormalizedLandmark } from '../core/geom.js';
-import { renderPoseScale } from '../core/renderPose.js';
+import { renderPoseScaleDiagnosed } from '../core/renderPose.js';
 import { verdict } from '../core/verdict.js';
 import { drawFrame } from '../render/composite.js';
 import { drawOverlay } from '../render/overlay.js';
@@ -66,13 +66,16 @@ export function paintScene(
   // ── Échelle de la frame : calibrée si elle existe, sinon échelle de pose.
   live.provisional = live.cal === null;
   let freshScale: number | null = null;
+  let refusalDetail: string | null = null;
   if (live.cal !== null) {
     freshScale = frameMetrics(lm, w, h, live.cal, yawRad).livePxPerMm;
   } else {
-    const rp = renderPoseScale(lm, w, h, IRIS_DISCREPANCY_MAX, live.cameraProfile, Date.now());
-    if (rp !== null) {
-      freshScale = rp.templePlanePxPerMm;
-      live.lastProvisionalPxPerMm = rp.templePlanePxPerMm;
+    const rp = renderPoseScaleDiagnosed(lm, w, h, IRIS_DISCREPANCY_MAX, live.cameraProfile, Date.now());
+    if (rp.scale !== null) {
+      freshScale = rp.scale.templePlanePxPerMm;
+      live.lastProvisionalPxPerMm = rp.scale.templePlanePxPerMm;
+    } else {
+      refusalDetail = rp.refusal?.detail ?? null;
     }
   }
 
@@ -86,10 +89,17 @@ export function paintScene(
     performance.now(),
   );
   if (filtered === null) {
-    // Jamais eu d'échelle depuis le reset : rien d'honnête à poser encore.
+    // ⭐ Ré-audit A6 — jamais eu d'échelle depuis le reset : rien d'honnête à
+    // poser, mais l'attente est DATÉE et DIAGNOSTIQUÉE (hint, santé, HUD) au
+    // lieu d'un canvas muet. Aucune valeur métrologique n'est fabriquée.
+    live.firstScaleWaitSinceMs ??= performance.now();
+    if (refusalDetail !== null) live.firstScaleRefusal = refusalDetail;
+    else live.firstScaleRefusal ??= 'en attente d’une frame exploitable de face';
     live.verdict = null;
     return;
   }
+  live.firstScaleWaitSinceMs = null;
+  live.firstScaleRefusal = null;
 
   // ⭐ Complément 6 — la PREMIÈRE frame calibrée consigne le saut d'échelle
   // aperçu → final. On le mesure et on l'affiche (HUD) ; on ne le lisse pas.
@@ -159,12 +169,33 @@ export function paintScene(
   live.verdict = live.cal === null ? null : verdict(lm, live.cal, front.sprite.spec, w, h, yawRad);
 }
 
+/** Silence toléré avant d'EXPLIQUER l'attente de première échelle (A6). */
+export const WAITING_FIRST_SCALE_EXPLAIN_MS = 1500;
+
 /**
- * La note affichée sous l'image. Le caractère PROVISOIRE prime sur la note de
+ * ⭐ Ré-audit A6 — le message d'attente de première échelle, ou null.
+ *
+ * Pur et testé : en dessous du seuil, rien (une frame refusée isolée n'est pas
+ * un état) ; au-delà, la durée ET la cause — jamais un écran qui se tait.
+ */
+export function firstScaleWaitHint(sinceMs: number | null, refusal: string | null, nowMs: number): string | null {
+  if (sinceMs === null || nowMs - sinceMs < WAITING_FIRST_SCALE_EXPLAIN_MS) return null;
+  const seconds = ((nowMs - sinceMs) / 1000).toFixed(0);
+  return (
+    `monture en attente depuis ${seconds} s — ${refusal ?? 'aucune échelle de pose exploitable'} · ` +
+    `le suivi du visage fonctionne, la monture apparaîtra dès que possible`
+  );
+}
+
+/**
+ * La note affichée sous l'image. L'ATTENTE DE PREMIÈRE ÉCHELLE (expliquée)
+ * prime sur tout ; puis le caractère PROVISOIRE prime sur la note de
  * recoloriage : ne jamais laisser croire à une taille certifiée qui ne l'est
- * pas encore (audit humain du 2026-08-21, point 4).
+ * pas encore (audit humain du 2026-08-21, point 4 ; ré-audit A6).
  */
 export function sceneHint(live: Live): string | null {
+  const waiting = firstScaleWaitHint(live.firstScaleWaitSinceMs, live.firstScaleRefusal, performance.now());
+  if (waiting !== null) return waiting;
   return live.provisional ? 'aperçu — taille en cours de mesure' : live.recolorReason;
 }
 
