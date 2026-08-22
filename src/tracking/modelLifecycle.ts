@@ -45,8 +45,28 @@ export type LandmarkerFactory = (
   strategy: DetectionStrategy,
 ) => Promise<FaceLandmarker>;
 
-const defaultFactory: LandmarkerFactory = (onProgress, strategy) =>
-  createLandmarker(onProgress, strategy.delegate, strategy.minConfidence);
+/**
+ * ⭐ Ré-audit AP — le NOMBRE de FaceLandmarker vivants, compté à la source :
+ * la fabrique par défaut incrémente à la création et décore `close()` pour
+ * décrémenter. La santé (`__VTO_HEALTH__.aliveTasks`) et les bancs longue
+ * durée (soak) affirment `≤ 1` en continu — le contrat du point 6, observé.
+ */
+let aliveTasks = 0;
+
+export function aliveTaskCount(): number {
+  return aliveTasks;
+}
+
+const defaultFactory: LandmarkerFactory = async (onProgress, strategy) => {
+  const fresh = await createLandmarker(onProgress, strategy.delegate, strategy.minConfidence);
+  aliveTasks++;
+  const realClose = fresh.close.bind(fresh);
+  (fresh as { close(): void }).close = () => {
+    aliveTasks = Math.max(0, aliveTasks - 1);
+    realClose();
+  };
+  return fresh;
+};
 
 export interface ModelHostCallbacks {
   onProgress(ratio: number): void;

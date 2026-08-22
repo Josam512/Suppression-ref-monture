@@ -15,13 +15,14 @@ import type { CoordinateSpace } from '../tracking/detectionPlan.js';
 import type { LostCause } from '../tracking/faceLoop.js';
 import type { NormalizedLandmark } from '../core/geom.js';
 import { drawOverlay } from '../render/overlay.js';
+import { aliveTaskCount } from '../tracking/modelLifecycle.js';
 import type { AutoCalibration } from './useAutoCalibration.js';
 import type { Phase } from './CalibrationPanel.js';
 import { stepCrossCheck, stepRotation } from './liveSteps.js';
 import { paintLost, paintScene, sceneHint } from './renderScene.js';
 import { useCameraLoop } from './useCameraLoop.js';
 import { drawDevHud, hudEnabled } from './devHud.js';
-import { invariantReport } from '../core/invariants.js';
+import { devInvariant, invariantReport } from '../core/invariants.js';
 import type { Live } from './liveState.js';
 
 /**
@@ -36,7 +37,18 @@ function publishHealth(
   try {
     const w = window as unknown as { __VTO_HEALTH__?: unknown };
     const s = live.loopStats?.() ?? null;
+    // ⭐ Ré-audit AP — invariants runtime OBSERVÉS à chaque frame : une seule
+    // Task MediaPipe vivante ; front et profil rendus du MÊME modèle.
+    devInvariant(aliveTaskCount() <= 1, `plusieurs Tasks MediaPipe vivantes (${aliveTaskCount()})`);
+    if (live.sprites.front.status === 'ready' && live.sprites.profile.status === 'ready') {
+      devInvariant(
+        live.sprites.front.sprite.spec.slug === live.sprites.profile.sprite.spec.slug,
+        'front et profil de modèles différents',
+      );
+    }
     w.__VTO_HEALTH__ = {
+      aliveTasks: aliveTaskCount(),
+      frontSlug: live.sprites.front.status === 'ready' ? live.sprites.front.sprite.spec.slug : null,
       renderedFrames: live.renderedFrames,
       skippedRenderFrames: live.skippedRenderFrames,
       lastRenderedAtMs: live.lastRenderedAtMs,

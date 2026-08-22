@@ -14,7 +14,7 @@
  */
 
 import { modelSha, preloadErrorsOf } from '../tracking/landmarker.js';
-import { APP_BUILD_TAG, AUTO_METROLOGY_VERSION, GIT_SHA } from '../core/versions.js';
+import { APP_BUILD_TAG, AUTO_METROLOGY_VERSION, CAMERA_PROFILE_VERSION, GIT_SHA } from '../core/versions.js';
 import { irisQualityOf } from '../core/irisQuality.js';
 import { IRIS_DISCREPANCY_MAX } from '../core/autoTuning.js';
 import { ocularPixelsOf } from '../core/ocularScale.js';
@@ -123,6 +123,15 @@ export function hudLines(live: Live, nowMs: number): string[] {
       lines.push(`frame rejetée pour : ${st.lastFrameViolations.join(' + ')}`);
     }
   }
+
+  // ⭐ Ré-audit AK — le profil d'objectif et SA version de schéma, en clair.
+  const profile = live.cameraProfile;
+  lines.push(
+    profile !== null
+      ? `profil caméra v${CAMERA_PROFILE_VERSION} : focale ${fmt(profile.focalPerWidth, 3)}×L · ` +
+          `±${fmt(profile.relError * 100, 1)} % · ${profile.views} vues`
+      : `profil caméra v${CAMERA_PROFILE_VERSION} : aucun (champ supposé)`,
+  );
 
   const cal = live.cal;
   if (cal !== null) {

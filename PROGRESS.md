@@ -1275,3 +1275,51 @@ sans perte) → faults (9 scénarios : localStorage KO, front/profil 404, spec
 corrompue, tempête drawImage, rVFC mort, ancienne version d'algo, frames
 noires, échelle GPU→CPU) → chaos (100 s de sabotage aléatoire : 0 passage
 mort, 8 erreurs encaissées, calibration + PD acquis).
+
+## 2026-08-22 — Reprise du ré-audit final (A1–A18) avant tout test Samsung
+
+Le second audit humain a invalidé 18 points annoncés conformes. Reprise en
+11 commits dans l'ordre imposé, chaque commit laissant les tests antérieurs
+verts (hook pre-commit : typecheck + suite complète + barrages) :
+
+1. **Une seule Task MediaPipe** : le swap FERME l'instance courante avant de
+   créer la cible sous watchdog, recrée l'ancienne en cas d'échec, descend
+   l'échelle sinon (fabrique injectable, `maxAlive === 1` prouvé) ; budget
+   caméra réellement GLOBAL (`withDeadline` sur getUserMedia/play/dimensions,
+   résolutions tardives nettoyées) ; `onReady` n'est déclaré qu'avec un modèle
+   VIVANT (`whenReady`) ; erreurs de préchargement enregistrées + HUD.
+2. **Reprise post-tracking** : une stratégie qui a suivi puis s'est tue est
+   RECRÉÉE après une fenêtre prudente (20 s), puis l'échelle descend si le
+   silence persiste — plus de verrou à vie, pas de ping-pong.
+3. **Première échelle** : iris refusés depuis le début → état
+   `waiting-first-scale` daté et DIAGNOSTIQUÉ (hint, santé, HUD), aucune pose
+   à constante de taille.
+4. **PD persistant** : capacités séparées (total/demi-PD), report du PD
+   mémorisé (jamais jeté par une tentative vide), panneau avec repli sur la
+   calibration persistée — « PD total : 61,4 » s'affiche au reload.
+5. **Stabilité** : 4 portes (SE, dispersion/frame, dérive, outliers) jugées
+   sur la série de l'estimateur PUBLIÉ ; le mode dégradé assume une précision
+   moindre mais refuse l'instabilité (bimodale refusée MÊME à 600 frames).
+6. **Époque temporale** : la scène porte l'échelle de SA frontale, mesurée à
+   la capture (y compris pendant la calibration initiale) — l'API rend le bug
+   « photo à 40 cm, échelle à 55 cm » inexprimable.
+7. **Verdict** : statut catégorique UNIQUEMENT sur largeur MESURÉE ; le repli
+   234/454 (constantes non calibrées) affiche largeur+marge mais reste
+   `indetermine`.
+8. **Catalogue/spec** : première fiche publiée AVANT ses coloris ;
+   `assertSameModel` à l'attache ; parseur complété ; ancres validées contre
+   les dimensions RÉELLES de l'image.
+9. **Persistance** : versions PAR MÉTRIQUE ; session client (A→B jamais
+   relu ; magasin = nouveau client par défaut + bouton) ; profil caméra
+   enveloppé `{v, profile}` ; identité étendue (zoom, résolution).
+10. **Branches/occlusion** : série yaw 0–40° en pur (hauteur constante, cos
+    une fois, branche sans respiration) ; occlusion des deux côtés au banc.
+11. **CI réelle** : `.github/workflows/ci.yml` exécute `npm run ci` (et un job
+    soak 6 min) sur cette branche ; `pages.yml` déploie la branche VALIDÉE ;
+    matrice de pannes étendue S11–S16 (getUserMedia/play pendus, GPU coupé,
+    sprite tardif, client A→B, profil caméra incompatible) ; invariants
+    observés en continu (`aliveTasks ≤ 1`, front/profil du même modèle) ;
+    HUD : version du profil caméra + erreurs de préchargement.
+
+Détail et preuves : `docs/CONFORMITE-FIABILISATION.md`, section « Reprise
+A1–A18 : EXÉCUTÉE ».

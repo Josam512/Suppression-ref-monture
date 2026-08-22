@@ -1,0 +1,55 @@
+# CI de l'essayage virtuel (ré-audit A18 / guide 74, c40).
+#
+# 🔴 C'est CE workflow qui fait foi — pas un script local. `npm run ci` déroule
+# la chaîne complète : typecheck → tests unitaires → build vite → page autonome
+# → smoke (render-proof, pixels peints) → smoke-single (l'artefact EXACT) →
+# parcours fondamental (journey) → matrice de pannes (S1–S16) → chaos 100 s.
+# Le job `soak` (AO) fait tourner la session 6 minutes en parallèle : aucune
+# fuite de Task, scheduler vivant, mémoire stable, calibration immuable.
+#
+# Les bancs Playwright utilisent le Chromium installé par `playwright install`
+# (les scripts retombent dessus quand /opt/pw-browsers n'existe pas), la photo
+# de vérification versionnée (`docs/verification/`) régénère `face.y4m`, et le
+# wasm MediaPipe est recopié depuis node_modules (`sync-wasm`) : tout est
+# reproductible depuis un clone propre (c39).
+name: CI
+
+on:
+  push:
+    branches: [claude/vto-reliability-master-spec-3l4imj]
+  pull_request:
+    branches: [claude/vto-reliability-master-spec-3l4imj]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run ci
+
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run soak
+        env:
+          SOAK_MS: '360000'

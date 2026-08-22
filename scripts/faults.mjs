@@ -263,6 +263,147 @@ try {
     },
   });
 
+  // ⭐ Ré-audit AN — S11 : getUserMedia ne répond JAMAIS. Le budget caméra est
+  // GLOBAL (A4) : vrai échec nommé à l'échéance, jamais une attente infinie.
+  await scenario(browser, 'S11 getUserMedia pendu', {
+    init: () => {
+      navigator.mediaDevices.getUserMedia = () => new Promise(() => {});
+    },
+    run: async (page, name) => {
+      const said = await page
+        .waitForFunction(() => /getUserMedia|n’a pas répondu|n'a pas répondu/i.test(document.body.innerText), {
+          timeout: 30_000,
+        })
+        .then(() => true)
+        .catch(() => false);
+      check(`${name} : l'échec est NOMMÉ à l'échéance (pas d'attente infinie)`, said);
+      const retry = await page.getByRole('button', { name: /Réessayer/i }).count();
+      check(`${name} : la sortie « Réessayer » est offerte (pas de cul-de-sac)`, retry >= 1);
+    },
+  });
+
+  // AN — S12 : play() pendu — même budget, même échéance, étape nommée.
+  await scenario(browser, 'S12 video.play() pendu', {
+    init: () => {
+      HTMLMediaElement.prototype.play = function play() {
+        return new Promise(() => {});
+      };
+    },
+    run: async (page, name) => {
+      const said = await page
+        .waitForFunction(() => /play|n’a pas répondu|n'a pas répondu/i.test(document.body.innerText), {
+          timeout: 30_000,
+        })
+        .then(() => true)
+        .catch(() => false);
+      check(`${name} : l'échec est NOMMÉ à l'échéance`, said);
+    },
+  });
+
+  // AN — S13 : création GPU forcée à l'ÉCHEC (WebGL absent). L'échelle prend
+  // le relais (délégué CPU), la dégradation est DITE, une seule Task vit.
+  await scenario(browser, 'S13 GPU indisponible (WebGL coupé)', {
+    init: () => {
+      const noGl = (original) =>
+        function getContext(type, ...rest) {
+          if (typeof type === 'string' && type.startsWith('webgl')) return null;
+          return original.call(this, type, ...rest);
+        };
+      HTMLCanvasElement.prototype.getContext = noGl(HTMLCanvasElement.prototype.getContext);
+      if (typeof OffscreenCanvas !== 'undefined') {
+        OffscreenCanvas.prototype.getContext = noGl(OffscreenCanvas.prototype.getContext);
+      }
+    },
+    run: async (page, name) => {
+      check(`${name} : la session CONCLUT sur le délégué CPU (échelle vivante)`, await CALIBRATED(90_000)(page));
+      const h = await health(page);
+      check(`${name} : jamais plus d'une Task MediaPipe vivante`, (h?.aliveTasks ?? 99) <= 1, `alive=${h?.aliveTasks}`);
+      check(`${name} : aucun invariant violé`, h?.invariants?.violations === 0);
+    },
+  });
+
+  // AN/H — S14 : une réponse de sprite TARDIVE (modèle B lent) ne remplace
+  // JAMAIS la monture re-sélectionnée (A). Garde specId, prouvée au banc.
+  await scenario(browser, 'S14 sprite tardif d’une autre monture', {
+    routes: (page) =>
+      page.route('**/frames/**/front.png', async (route) => {
+        // Seule la monture NON-défaut est ralentie de 8 s.
+        if (!route.request().url().includes('ecaille-claire')) {
+          await new Promise((r) => setTimeout(r, 8000));
+        }
+        await route.continue();
+      }),
+    run: async (page, name) => {
+      check(`${name} : calibration conclue`, await CALIBRATED()(page));
+      const buttons = page.locator('button:has-text("·")');
+      if ((await buttons.count()) < 2) {
+        check(`${name} : deux montures nécessaires`, false, 'catalogue trop petit');
+        return;
+      }
+      const slugOf = async (i) => ((await buttons.nth(i).innerText()).split('·')[0] ?? '').trim();
+      const slugA = await slugOf(0);
+      await buttons.nth(1).click(); // B, dont le front mettra 8 s
+      await page.waitForTimeout(300);
+      await buttons.nth(0).click(); // retour immédiat sur A
+      await page.waitForTimeout(2000);
+      const during = await health(page);
+      check(`${name} : A est rendue pendant que B traîne`, during?.frontSlug === slugA, `front=${during?.frontSlug}`);
+      await page.waitForTimeout(8000); // la réponse TARDIVE de B arrive ici
+      const after = await health(page);
+      check(`${name} : la réponse tardive de B n'a PAS remplacé A`, after?.frontSlug === slugA, `front=${after?.frontSlug}`);
+    },
+  });
+
+  // AN/A17b — S15 : la calibration du client A ne contamine JAMAIS le client B.
+  await scenario(browser, 'S15 client A → client B', {
+    url: `${BASE}/`, // pas de resetSession : il purgerait les graines
+    init: () => {
+      try {
+        localStorage.setItem('essayage.person.v1', 'client-B');
+        localStorage.setItem(
+          'essayage.calibration.v1',
+          JSON.stringify({
+            v: 3, // version courante : seul le personId doit refuser
+            personId: 'client-A',
+            cal: { faceWidthMm: 145, source: 'auto', relError: 0.05, measuredAt: 1, pdMm: 62, pdRelError: 0.04 },
+          }),
+        );
+      } catch {}
+    },
+    run: async (page, name) => {
+      // Au boot, RIEN du client A : pas de calibration héritée.
+      const freshStart = await page
+        .waitForFunction(() => globalThis.__VTO_HEALTH__ !== undefined && globalThis.__VTO_HEALTH__.calibrated === false, {
+          timeout: 20_000,
+        })
+        .then(() => true)
+        .catch(() => false);
+      check(`${name} : AUCUNE calibration du client A au démarrage`, freshStart);
+      // …et le client B est MESURÉ, pas hérité : l'annonce de fin le prouve.
+      await page.getByText(/Calibration acquise/i).first().waitFor({ timeout: 60_000 });
+      check(`${name} : le client B est mesuré à neuf`, await CALIBRATED()(page));
+    },
+  });
+
+  // AN/A17c — S16 : profil caméra d'une AUTRE version de schéma → refus propre.
+  await scenario(browser, 'S16 profil caméra de version incompatible', {
+    url: `${BASE}/`, // pas de resetSession : il purgerait la graine
+    init: () => {
+      try {
+        localStorage.setItem(
+          'essayage.camera.v1',
+          JSON.stringify({ v: 1, profile: { focalPerWidth: 0.9, relError: 0.05, views: 60, measuredAt: 1 } }),
+        );
+      } catch {}
+    },
+    run: async (page, name) => {
+      check(`${name} : la session conclut sans le profil illisible`, await CALIBRATED()(page));
+      const txt = await page.locator('main').innerText();
+      check(`${name} : la distance repart du champ SUPPOSÉ`, /champ de caméra supposé/i.test(txt));
+      check(`${name} : aucune trace de la focale refusée`, !/séance carte précédente/i.test(txt));
+    },
+  });
+
   await browser.close();
 
   // ───────────────────────── Flux NOIR ─────────────────────────

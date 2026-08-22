@@ -159,9 +159,9 @@ Statuts : ✅ déjà conforme · 🔴 bug confirmé · 🟠 risque/partiel · �
 > ci-dessous.** La chaîne `npm run ci` était bien verte, mais 18 constats du
 > ré-audit montrent que « vert au banc » ne valait pas « conforme au guide » :
 > plusieurs chemins réellement exécutés contredisent les actions annoncées dans
-> ce tableau. **La branche n'est PAS conforme tant que la reprise A1–A18 n'est
-> pas terminée — aucun test Samsung avant.** L'état final est consigné en fin de
-> reprise, preuve par preuve.
+> ce tableau. La reprise A1–A18 est consignée preuve par preuve dans la
+> section **« Reprise A1–A18 : EXÉCUTÉE »** en fin de document — c'est ELLE
+> qui fait foi sur l'état courant.
 
 Tout le reste du tableau est implémenté et testé (`npm run ci` : typecheck →
 361 tests unitaires → build → single → smoke → smoke-single → journey →
@@ -224,3 +224,39 @@ A5) · 2. scheduler/récupération stratégie muette (A2) · 3. premier rendu (A
 coloris (A13, A14, A15) · 9. persistance/personne/caméra (A17) · 10. rendu
 branches/occlusion (série yaw + occlusion) · 11. CI/faults/soak (A18 +
 matrice étendue + soak 5–10 min + invariants étendus).
+
+## Reprise A1–A18 : EXÉCUTÉE (2026-08-22) — preuve par preuve
+
+Chaque constat du ré-audit est corrigé dans l'ordre imposé (11 commits, tous
+les tests antérieurs verts à chaque commit). La preuve est un CHEMIN EXÉCUTÉ —
+test unitaire sur le vrai code, banc navigateur, ou workflow — jamais un
+commentaire.
+
+| # | Corrigé par | Preuve exécutée |
+|---|---|---|
+| A1 | `modelLifecycle` : fermer → créer sous watchdog → recréer l'ancienne → échelle ; fabrique injectable | `lifecycle.test.ts` : `maxAlive === 1` sur création/swap/cible KO→recréation/tempête/résolution tardive/fatal ; ordre `création:gpu, fermeture:gpu, création:cpu` vérifié littéralement ; compteur `aliveTasks` publié dans la santé, asserté par S13, chaos et soak |
+| A2 | `detectionPlan.recoveryStep` : fenêtre prudente 20 s → recréer LA MÊME → 2e fenêtre muette → descendre ; retour du visage = remise à zéro | `detection.test.ts` : ≤18 s → rien ; ~26 s → UNE recréation (même marche) ; ~53 s → recréation puis descente ; sommet → une seule recréation par épisode |
+| A3 | `host.whenReady()` attendu par `useCameraLoop` avant `onReady` | `lifecycle.test.ts` (ready véridique : true à la 1re instance, false sur fatal/démontage) ; phase `loading` tenue jusqu'au modèle (journey) |
+| A4 | `ui/deadline.ts` : `withDeadline` sur getUserMedia / play / dimensions, MÊME échéance, résolutions tardives nettoyées | `deadline.test.ts` (pendu / tardif+nettoyage / rejet propre / budget épuisé) ; bancs S11 (getUserMedia pendu → échec nommé + Réessayer) et S12 (play pendu) |
+| A5 | erreurs de chargement enregistrées dans le cache (`preloadErrorsOf`), effacées au succès, ligne HUD | relecture du chemin (le `.catch` ne fait plus qu'éviter le doublon d'unhandled) + ligne HUD `préchargement KO — …` |
+| A6 | `renderPoseScaleDiagnosed` + état `waiting-first-scale` daté/expliqué (hint > 1,5 s, santé, HUD) — aucune pose à constante de taille | `firstscale.test.ts` : causes nommées (aberrant avec conseil, quantification), seuil d'explication, message sans millimètre inventé ; santé `waitingFirstScaleMs`/`firstScaleRefusal` |
+| A7 | `AutoTemporalScene.frameScalePxPerMm` : la scène PORTE l'échelle de sa frontale ; capture sans échelle fiable écartée ; `assembleTemporal(scene, relError)` | `temporalepoch.test.ts` : frontale 400 mm + profils à 550 mm → la scène garde les 400 mm ; sans échelle → pas de capture ; purge inter-générations. L'API rend le bug inexprimable |
+| A8 | conclusion dégradée via `pickStableEstimator` (SE doublée assumée, instabilité refusée) ; échec nommé `unstable-scale` | `stability.test.ts` : alternance 1,0/1,12 pendant 23 s → AUCUNE calibration, échec nommé ; matière rare stable → dégradé assumé |
+| A9 | l'estimateur CANDIDAT d'abord, la stabilité de SA série ensuite ; repli HVID dit | `stability.test.ts` : FULL instable + HVID stable → repli `hvid` (fallback:true) ; FULL courte → candidat HVID ; aucun stable → null |
+| A10 | 4 portes (SE, dispersion/frame `madRel`, dérive, outliers) + publication au statut/HUD | `stability.test.ts` : bimodale à 600 frames PASSE l'erreur-type (prouvé) et la dispersion la refuse ; dérive > plancher biologique refusée ; contamination >10 % refusée ; ligne HUD `série […] : dispersion …` |
+| A11 | `pdCarry` : capacités séparées (`missingPdCapacities`), report du PD persistant (`carriedPdFields`) ; `startMissing` relance les demi-PD | `pdcarry.test.ts` : total sans demi = manque ; report complet/partiel/nul ; `finishAuto` reporte quand rien de plus frais |
+| A12 | `pdDisplayOf` : store (plus frais) > calibration persistée ; panneau branché | `pdcarry.test.ts` : reload PD 61,4 → affiché immédiatement, « séance mémorisée » ; store prioritaire |
+| A13 | `runCatalogue` (source injectée) : première fiche publiée AVANT ses coloris | `cataloguespec.test.ts` : coloris qui ne répond JAMAIS → frontale publiée quand même, `loadingRest` dit le travail restant |
+| A14 | `assertSameModel` à l'ATTACHE de chaque coloris (écarté + nommé) ; garde au clic conservé | `cataloguespec.test.ts` : coloris du mauvais modèle → jamais listé, nommé dans `failures` |
+| A15 | parseur complété (chaînes non vides, `Number.isFinite`, bMm, angle ]0;90], date) + ancres vs image RÉELLE (`specAnchors` ← useSprites) | `cataloguespec.test.ts` : champ par champ + bbox/ancre débordant l'image réelle → erreur nommée |
+| A16 | `verdict()` : statut catégorique UNIQUEMENT sur largeur MESURÉE ; repli 234/454 affiché mais `indetermine` | `verdict.test.ts` : sans mesure, indéterminé pour TOUT delta (−18 mm compris), largeur+marge affichées ; invariants portés sur largeur mesurée |
+| A17 | versions PAR MÉTRIQUE (`metricCompatible`) ; session client (`personSession`, mode magasin sans héritage + « Nouveau client ») ; enveloppe caméra `{v, profile}` | `persistence.test.ts` (règle balayée, futur refusé, A→B jamais relu, migrations, enveloppe caméra refusée/migrée, zoom) ; bancs S15 (client A→B mesuré à neuf) et S16 (profil caméra v1 refusé proprement) |
+| A18 | `.github/workflows/ci.yml` : `npm ci` → `playwright install --with-deps chromium` → `npm run ci` sur cette branche + job `soak` ; `pages.yml` pointe la branche validée | exécution du workflow sur la branche (vérifiée après poussée) ; matrice de pannes étendue S11–S16 ; soak 6 min (`scripts/soak.mjs`) : Tasks ≤ 1, scheduler vivant, mémoire stable, calibration immuable |
+
+Compléments de la reprise : série yaw 0–40° en pur (`yawseries.test.ts` — AF)
+et occlusion des deux côtés à 10/20/30° au banc render-proof (AH) ; invariants
+runtime observés à chaque frame (`aliveTasks ≤ 1`, front/profil du même
+modèle — AP) ; HUD : version du profil caméra + erreurs de préchargement (AK) ;
+`essayage.html` documenté comme artefact de test/démo (AL, ARCHITECTURE.md) ;
+aucune doc ne présente plus le refus < 60 cm comme comportement courant (Z —
+seules des références historiques subsistent, marquées comme telles).

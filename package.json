@@ -22,7 +22,8 @@
     "smoke:single": "node scripts/smoke-single.mjs",
     "faults": "node scripts/faults.mjs",
     "chaos": "node scripts/chaos.mjs",
-    "ci": "node scripts/ci.mjs"
+    "ci": "node scripts/ci.mjs",
+    "soak": "node scripts/soak.mjs"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.0.1",

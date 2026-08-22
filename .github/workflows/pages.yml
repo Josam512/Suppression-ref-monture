@@ -30,7 +30,10 @@ on:
   workflow_dispatch:
 
 env:
-  APP_BRANCH: claude/virtual-glasses-fitting-9vwyuc
+  # 🔴 Ré-audit A18 — la branche déployée est LA branche validée par le
+  # workflow CI (ci.yml). Publier une autre branche que celle que la CI
+  # prouve, c'est déployer du code jamais validé.
+  APP_BRANCH: claude/vto-reliability-master-spec-3l4imj
   PAGES_BRANCH: gh-pages
 
 permissions:
