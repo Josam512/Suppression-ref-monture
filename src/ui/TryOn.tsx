@@ -26,6 +26,7 @@ import { useV1Calibration } from './useV1Calibration.js';
 import { identityCompatible, type CameraIdentity, type CameraProfile } from '../core/cameraProfile.js';
 import { loadCameraProfile, saveCameraProfile } from './cameraStorage.js';
 import { clearCalibration, loadCalibration, saveCalibration } from './calibrationStorage.js';
+import { rotatePersonId } from './personSession.js';
 import { freezeFrame } from './freezeFrame.js';
 import { MeasuresPanel } from './MeasuresPanel.js';
 import { emptyMeasurements, type MeasurementSnapshot } from './measurementStore.js';
@@ -42,7 +43,12 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
   const catalogue = useCatalogue();
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>({ kind: 'loading', ratio: 0 });
-  const [cal, setCal] = useState<UserCalibration | null>(loadCalibration);
+  // ⭐ A17b — en MAGASIN, un poste sert PLUSIEURS clients : aucune calibration
+  // visage héritée au démarrage (nouveau client par défaut). Le profil
+  // d'objectif — propriété du POSTE — survit, lui, dans les deux modes.
+  const [cal, setCal] = useState<UserCalibration | null>(() =>
+    props.mode === 'store' ? null : loadCalibration(),
+  );
   const cameraProfile = useRef<CameraProfile | null>(loadCameraProfile());
 
   /** Identité de l'objectif réellement ouvert — sert à étiqueter le profil. */
@@ -147,6 +153,12 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
     if (props.mode === 'store') freeze('mesure-monture');
     else startAuto();
   }, [startAuto, freeze, props.mode]);
+
+  /** ⭐ A17b — client SUIVANT : identifiant tourné, rien du précédent n'est relu. */
+  const newClient = useCallback(() => {
+    rotatePersonId();
+    restart();
+  }, [restart]);
 
   const v1 = useV1Calibration({
     live,
@@ -270,13 +282,18 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
         onError={(message) => setNotices([message])}
       />
 
-      {cal !== null && (
-        <p>
+      <p>
+        {cal !== null && (
           <button type="button" onClick={restart}>
             Refaire la calibration
           </button>
-        </p>
-      )}
+        )}
+        {props.mode === 'store' && (
+          <button type="button" onClick={newClient} style={{ marginLeft: 8 }}>
+            Nouveau client
+          </button>
+        )}
+      </p>
     </main>
   );
 }

@@ -202,12 +202,20 @@ export function useCameraLoop(
 
         // ⭐ Points 39–40 — l'identité de l'objectif ouvert, pour que le profil
         // de focale mémorisé ne soit jamais appliqué à un AUTRE objectif.
-        const settings = fresh.getVideoTracks()[0]?.getSettings();
+        // ⭐ AA — zoom (optique différente) et résolution effective (diagnostic)
+        // quand l'appareil les donne.
+        const settings = fresh.getVideoTracks()[0]?.getSettings() as
+          | (MediaTrackSettings & { zoom?: number })
+          | undefined;
         if (settings !== undefined) {
           held.current.onCameraIdentity?.({
             ...(settings.deviceId !== undefined ? { deviceId: settings.deviceId } : {}),
             ...(typeof settings.facingMode === 'string' ? { facingMode: settings.facingMode } : {}),
             ...(video.videoHeight > 0 ? { aspect: video.videoWidth / video.videoHeight } : {}),
+            ...(typeof settings.zoom === 'number' && Number.isFinite(settings.zoom)
+              ? { zoom: settings.zoom }
+              : {}),
+            ...(video.videoWidth > 0 ? { captureWidthPx: video.videoWidth } : {}),
           });
         }
 

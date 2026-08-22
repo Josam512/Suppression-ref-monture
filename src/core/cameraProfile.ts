@@ -38,6 +38,12 @@ export interface CameraIdentity {
   facingMode?: string;
   /** largeur/hauteur de capture — un crop 4:3 → 16:9 change l'optique effective. */
   aspect?: number;
+  /** ⭐ AA — zoom du capteur quand l'appareil le donne : un zoom différent est
+   *  une OPTIQUE différente (la focale effective change avec lui). */
+  zoom?: number;
+  /** ⭐ AA — largeur de capture (px) : DIAGNOSTIC seulement — `focalPerWidth`
+   *  est invariante par résolution, une renégociation n'invalide rien. */
+  captureWidthPx?: number;
 }
 
 export interface CameraProfile extends CameraIdentity {
@@ -52,6 +58,8 @@ export interface CameraProfile extends CameraIdentity {
 
 /** Tolérance de rapport d'image : au-delà, le cadrage n'est plus le même. */
 export const ASPECT_TOLERANCE = 0.05;
+/** ⭐ AA — le zoom est un réglage discret : tout écart réel change la focale. */
+export const ZOOM_TOLERANCE = 0.01;
 
 /**
  * Deux identités sont-elles compatibles ? `true` quand rien ne les CONTREDIT :
@@ -66,6 +74,11 @@ export function identityCompatible(a: CameraIdentity, b: CameraIdentity): boolea
     b.aspect !== undefined &&
     Math.abs(a.aspect / b.aspect - 1) > ASPECT_TOLERANCE
   ) {
+    return false;
+  }
+  // ⭐ AA — un zoom différent = une focale effective différente : incompatible.
+  // (`captureWidthPx`, lui, ne condamne pas : focalPerWidth est invariante.)
+  if (a.zoom !== undefined && b.zoom !== undefined && Math.abs(a.zoom / b.zoom - 1) > ZOOM_TOLERANCE) {
     return false;
   }
   return true;
@@ -158,6 +171,10 @@ export function mergeProfile(stored: CameraProfile | null, fresh: CameraProfile)
     ...(stored.aspect !== undefined || fresh.aspect !== undefined
       ? { aspect: fresh.aspect ?? stored.aspect }
       : {}),
+    ...(stored.zoom !== undefined || fresh.zoom !== undefined ? { zoom: fresh.zoom ?? stored.zoom } : {}),
+    ...(stored.captureWidthPx !== undefined || fresh.captureWidthPx !== undefined
+      ? { captureWidthPx: fresh.captureWidthPx ?? stored.captureWidthPx }
+      : {}),
   };
 }
 
@@ -191,5 +208,9 @@ export function parseCameraProfile(raw: unknown): CameraProfile | null {
     ...(typeof o['deviceId'] === 'string' ? { deviceId: o['deviceId'] } : {}),
     ...(typeof o['facingMode'] === 'string' ? { facingMode: o['facingMode'] } : {}),
     ...(typeof o['aspect'] === 'number' && Number.isFinite(o['aspect']) ? { aspect: o['aspect'] as number } : {}),
+    ...(typeof o['zoom'] === 'number' && Number.isFinite(o['zoom']) ? { zoom: o['zoom'] as number } : {}),
+    ...(typeof o['captureWidthPx'] === 'number' && Number.isFinite(o['captureWidthPx'])
+      ? { captureWidthPx: o['captureWidthPx'] as number }
+      : {}),
   };
 }

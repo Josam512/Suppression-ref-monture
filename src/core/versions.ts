@@ -27,7 +27,20 @@
 
 export const AUTO_METROLOGY_VERSION = 3;
 export const FRAME_SPEC_VERSION = 2; // profileReferenceLengthMm (ex-templeRectifiedMm)
-export const CAMERA_PROFILE_VERSION = 2; // identité d'objectif (deviceId/facing/aspect)
+export const CAMERA_PROFILE_VERSION = 2; // identité d'objectif (deviceId/facing/aspect/zoom)
+
+/**
+ * ⭐ Ré-audit A17a — versions PAR MÉTRIQUE : la version d'AUTO_METROLOGY à
+ * laquelle l'algorithme ACTUEL de chaque grandeur a été introduit. Une valeur
+ * stockée sous la version V n'est relue que si ALGO ≤ V ≤ version courante
+ * (`metricCompatible`, ui/calibrationStorage). Corriger demain un bug de
+ * largeur = incrémenter FACE_SCALE_ALGO_VERSION : les largeurs anciennes
+ * tombent MÉCANIQUEMENT — plus jamais « conservée pour tout changement ».
+ */
+export const FACE_SCALE_ALGO_VERSION = 1; // la grandeur (largeur aux repères 234/454, mm ± rel) est inchangée depuis v1
+export const PD_ALGO_VERSION = 3; // v3 : PD DIRECT pupille↔pupille
+export const TEMPORAL_ALGO_VERSION = 3; // v3 : époque de capture liée à la frame (A7)
+export const DISTANCE_ALGO_VERSION = 3; // v3 : distance MESURÉE publiée
 
 /**
  * Tampon de build, AFFICHÉ à l'écran. Les pages autonomes sont servies par des
