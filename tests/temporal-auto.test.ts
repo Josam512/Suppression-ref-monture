@@ -68,6 +68,8 @@ function autoScene(glasses?: GlassesOptions): AutoTemporalScene {
     lm: LM,
     w: W,
     h: H,
+    // ⭐ A7 — la scène porte l'échelle de SA frame ; ici, la vérité terrain.
+    frameScalePxPerMm: PX_PER_MM_TEMPLE,
   };
 }
 

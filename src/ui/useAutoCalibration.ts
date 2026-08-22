@@ -28,7 +28,6 @@ import {
 } from '../core/autoCalibrate.js';
 import type { UserCalibration } from '../core/calibration.js';
 import type { CameraProfile } from '../core/cameraProfile.js';
-import { frameMetrics } from '../core/faceMetrics.js';
 import type { NormalizedLandmark } from '../core/geom.js';
 import type { ImageBuffer } from '../core/silhouette.js';
 import type { Phase } from './CalibrationPanel.js';
@@ -42,7 +41,7 @@ import {
   type MeasurementSnapshot,
 } from './measurementStore.js';
 import { carriedPdFields, missingPdCapacities } from './pdCarry.js';
-import { TemporalCapture } from './temporalCapture.js';
+import { TemporalCapture, temporalFrameScaleOf } from './temporalCapture.js';
 
 /** Refus d'ASSEMBLAGE tolérés avant de cesser de ré-armer (point 69). */
 export const MAX_ASSEMBLY_RETRIES = 3;
@@ -180,11 +179,12 @@ export function useAutoCalibration(deps: AutoCalibrationDeps): AutoCalibration {
 
     const face = st.faceScale.generation === m.generation ? st.faceScale.value : null;
     if (face !== null && st.faceScale.phase === 'ready') {
-      // — Écart temporal : la scène doit venir de la MÊME génération (c21).
+      // — Écart temporal : la scène doit venir de la MÊME génération (c21) et
+      // elle PORTE l'échelle de SA frontale (A7) — plus jamais la médiane.
       let temporalFields: Pick<UserCalibration, 'temporalWidthMm' | 'temporalRelError'> = {};
       const scene = captures.current.generation === m.generation ? captures.current.scene() : null;
       if (scene !== null) {
-        const t = assembleTemporal(scene, 1 / (m.mmPerPxEye * face.depthCorrection), face.relError);
+        const t = assembleTemporal(scene, face.relError);
         temporalFields = t.fields;
         notes.push(t.note);
       } else {
@@ -255,34 +255,33 @@ export function useAutoCalibration(deps: AutoCalibrationDeps): AutoCalibration {
     (lm: readonly NormalizedLandmark[] | null, yawRad: number, w: number, h: number): void => {
       const s = live.current;
       // — Captures pour l'écart temporal, étiquetées par génération (c20–21).
+      // ⭐ A7 — l'échelle de LA frame est mesurée AU MOMENT de la capture, y
+      // compris pendant la calibration initiale (échelle de pose, même optique).
       if (s.auto !== null && lm !== null) {
-        const frameScale = s.cal !== null ? frameMetrics(lm, w, h, s.cal, yawRad).livePxPerMm : null;
+        const frameScale = temporalFrameScaleOf(lm, w, h, s.cal, yawRad, cameraProfile.current, Date.now());
         captures.current.offer(lm, yawRad, w, h, s.auto.generation, grab, frameScale);
       }
 
       // ⭐ Pt 35 — raffinement d'ARRIÈRE-PLAN : ne touche QUE temporal*.
       if (s.auto === null && s.cal !== null && s.cal.temporalWidthMm === undefined && lm !== null) {
-        const frameScale = frameMetrics(lm, w, h, s.cal, yawRad).livePxPerMm;
+        const frameScale = temporalFrameScaleOf(lm, w, h, s.cal, yawRad, cameraProfile.current, Date.now());
         captures.current.offer(lm, yawRad, w, h, -1, grab, frameScale);
-        const scene = captures.current.scene();
+        const scene = captures.current.scene(); // porte l'échelle de SA frontale (A7)
         const now = Date.now();
         if (scene !== null && now - lastBgTemporalMs.current > BACKGROUND_TEMPORAL_RETRY_MS) {
           lastBgTemporalMs.current = now;
-          const scale = captures.current.frontalFrameScale();
-          if (scale !== null) {
-            const t = assembleTemporal(scene, scale, s.cal.relError);
-            if (t.fields.temporalWidthMm !== undefined && t.fields.temporalRelError !== undefined) {
-              metrics.current.temporal = {
-                phase: 'ready',
-                value: { widthMm: t.fields.temporalWidthMm, relError: t.fields.temporalRelError },
-                failure: null,
-                generation: -1,
-              };
-              publishMetrics();
-              onCalibrated({ ...s.cal, ...t.fields }, [t.note]);
-            } else {
-              captures.current.reset(-1); // matière suivante — sans spammer
-            }
+          const t = assembleTemporal(scene, s.cal.relError);
+          if (t.fields.temporalWidthMm !== undefined && t.fields.temporalRelError !== undefined) {
+            metrics.current.temporal = {
+              phase: 'ready',
+              value: { widthMm: t.fields.temporalWidthMm, relError: t.fields.temporalRelError },
+              failure: null,
+              generation: -1,
+            };
+            publishMetrics();
+            onCalibrated({ ...s.cal, ...t.fields }, [t.note]);
+          } else {
+            captures.current.reset(-1); // matière suivante — sans spammer
           }
         }
       }

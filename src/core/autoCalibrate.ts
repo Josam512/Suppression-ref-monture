@@ -170,12 +170,23 @@ export interface AutoTemporalScene {
   lm: readonly NormalizedLandmark[];
   w: number;
   h: number;
+  /**
+   * ⭐ Ré-audit A7 — l'échelle AU PLAN DES TEMPES de LA frame frontale,
+   * capturée AVEC elle (même optique que l'aperçu/l'assemblage). La scène
+   * porte sa propre époque : une frontale prise à 40 cm ne peut plus être
+   * mesurée avec la médiane d'une tentative passée à 55 cm — l'API rend le
+   * bug inexprimable.
+   */
+  frameScalePxPerMm: number;
+  /** Diagnostic/invariants : quand et à quelle distance la frontale a été prise. */
+  capturedAtMs?: number;
+  distanceMmAtCapture?: number;
 }
 
-/** L'écart temporal, mesuré sur la scène — ne touche QUE ses deux champs (pt 46). */
+/** L'écart temporal, mesuré sur la scène AVEC L'ÉCHELLE DE SA FRAME (A7) —
+ *  ne touche QUE ses deux champs (pt 46). */
 export function assembleTemporal(
   temporal: AutoTemporalScene,
-  templePlanePxPerMm: number,
   scaleRelError: number,
 ): { fields: Pick<UserCalibration, 'temporalWidthMm' | 'temporalRelError'>; note: string } {
   const t = measureTemporalWidth({
@@ -184,7 +195,7 @@ export function assembleTemporal(
     lm: [...temporal.lm],
     w: temporal.w,
     h: temporal.h,
-    pxPerMm: templePlanePxPerMm,
+    pxPerMm: temporal.frameScalePxPerMm,
     scaleRelError,
   });
   if (t.measured) {
@@ -232,7 +243,9 @@ export function calibrateAuto(
 
   let temporalFields: Pick<UserCalibration, 'temporalWidthMm' | 'temporalRelError'> = {};
   if (temporal !== null) {
-    const t = assembleTemporal(temporal, 1 / (m.mmPerPxEye * face.depthCorrection), face.relError);
+    // ⭐ A7 — la scène porte l'échelle de SA frame ; la médiane de la tentative
+    // n'entre plus jamais dans la mesure temporale.
+    const t = assembleTemporal(temporal, face.relError);
     temporalFields = t.fields;
     notes.push(t.note);
   } else {
