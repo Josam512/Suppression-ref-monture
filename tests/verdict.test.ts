@@ -79,21 +79,43 @@ describe('Règle 1 bis — classify par arithmétique d\'intervalle (B2)', () =>
   });
 });
 
+/**
+ * ⚠️ RÈGLE CHANGÉE (ré-audit A16). Ces invariants portaient sur `makeCal()`
+ * nu : le statut catégorique sortait alors du repli 234/454, corrigé par des
+ * constantes NON calibrées (ratio = 1, décalage = 0) dont l'écart connu aux
+ * tempes (5–10 mm) dépasse le seuil (3–5 mm). Un statut catégorique exige
+ * désormais une largeur MESURÉE (écart temporal) : les invariants la portent,
+ * et le bloc « A16 » ci-dessous verrouille le repli → indéterminé.
+ */
+const MEASURED = { temporalWidthMm: 138, temporalRelError: 0.025 };
+
 describe('La légende assemblée', () => {
-  it('INVARIANT : monture 120 mm sur visage 138 mm → sous-taillée', () => {
-    const v = callVerdict(LANDMARKS_138, makeCal(), SPEC_120);
+  it('INVARIANT : monture 120 mm sur visage MESURÉ 138 mm → sous-taillée', () => {
+    const v = callVerdict(LANDMARKS_138, makeCal(MEASURED), SPEC_120);
     expect(v.status).toBe('sous-taillee');
     expect(v.frameWidthMm).toBeCloseTo(120, 3);
     expect(v.faceWidthMm).toBeCloseTo(138, 3);
     expect(v.deltaMm).toBeCloseTo(-18, 3);
   });
 
-  it('INVARIANT : monture 138 mm sur visage 138 mm → correcte', () => {
-    expect(callVerdict(LANDMARKS_138, makeCal(), SPEC_138).status).toBe('correcte');
+  it('INVARIANT : monture 138 mm sur visage MESURÉ 138 mm → correcte', () => {
+    expect(callVerdict(LANDMARKS_138, makeCal(MEASURED), SPEC_138).status).toBe('correcte');
   });
 
-  it('INVARIANT : monture 150 mm sur visage 138 mm → surtaillée', () => {
-    expect(callVerdict(LANDMARKS_138, makeCal(), SPEC_150).status).toBe('surtaillee');
+  it('INVARIANT : monture 150 mm sur visage MESURÉ 138 mm → surtaillée', () => {
+    expect(callVerdict(LANDMARKS_138, makeCal(MEASURED), SPEC_150).status).toBe('surtaillee');
+  });
+
+  it('🔴 A16 — SANS largeur mesurée, le statut est indéterminé POUR TOUT delta', () => {
+    // Balayer le domaine (leçon B2/S4) : même un écart de −18 mm ne se tranche
+    // pas sur des constantes de correction jamais calibrées.
+    for (const spec of [SPEC_120, SPEC_132, SPEC_138, SPEC_150]) {
+      const v = callVerdict(LANDMARKS_138, makeCal(), spec);
+      expect(v.status).toBe('indetermine');
+      // La largeur estimée et sa marge restent AFFICHÉES : rien n'est masqué.
+      expect(v.faceWidthMm).toBeCloseTo(138, 3);
+      expect(v.faceWidthUncertaintyMm).toBeGreaterThan(0);
+    }
   });
 
   it('la marge est toujours transportée avec le chiffre', () => {

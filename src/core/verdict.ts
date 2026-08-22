@@ -170,7 +170,9 @@ export const FACE_WIDTH_CORRECTION_RATIO = 1; // calibré le : —  | sur N mesu
  *  1. l'écart temporal **mesuré sur ce client** pendant la calibration
  *     (`core/temporalWidth.ts`) — la largeur de sa tête à hauteur des yeux ;
  *  2. à défaut, l'écartement des repères 234/454 corrigé par les deux
- *     constantes ci-dessus, qui valent aujourd'hui « aucune correction ».
+ *     constantes ci-dessus, qui valent aujourd'hui « aucune correction » —
+ *     ce repli s'AFFICHE (largeur estimée + marge) mais ne porte JAMAIS un
+ *     statut catégorique (ré-audit A16, voir `verdict()`).
  *
  * ⚠️ Ce n'est PAS un branchement sur la source (§4 règle 2) : la question posée
  * est « cette grandeur a-t-elle été mesurée ? », pas « d'où vient-elle ? ». Une
@@ -225,6 +227,15 @@ export function verdict(
   const frameWidthMm = totalFrameWidthMm(spec);
   const deltaMm = frameWidthMm - faceWidthMm;
 
+  // ⭐ Ré-audit A16 — un statut CATÉGORIQUE exige une largeur MESURÉE sur ce
+  // client (l'écart temporal). Le repli 234/454 dépend de constantes NON
+  // CALIBRÉES (ratio = 1, décalage = 0 mm) dont l'écart connu aux tempes
+  // anatomiques (5–10 mm) dépasse le seuil de décision lui-même (3–5 mm) :
+  // la largeur estimée et sa marge restent AFFICHÉES, le statut reste
+  // 'indetermine' — qui n'est de toute façon jamais montré comme un jugement
+  // (§0.0.1). Question posée à la DONNÉE, jamais à la source (§4 règle 2).
+  const widthMeasured = cal.temporalWidthMm !== undefined && cal.temporalRelError !== undefined;
+
   // Le décentrement n'est affiché que si la mesure peut réellement trancher
   // les 3 mm. Masqué s'il n'est pas concluant — pas approximé, masqué.
   //
@@ -247,7 +258,7 @@ export function verdict(
     faceWidthUncertaintyMm: faceWidthMm * compared.relError,
     deltaMm,
     thresholdMm: thresholdFor(faceWidthMm),
-    status: classify(deltaMm, corrected),
+    status: widthMeasured ? classify(deltaMm, corrected) : 'indetermine',
     decentrementMm,
     source: cal.source,
   };
