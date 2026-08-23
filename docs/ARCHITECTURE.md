@@ -50,3 +50,35 @@ tentative sont exprimés en millisecondes.
 `essayage.html` (page autonome, `npm run single`) est un artefact de **démonstration** : le
 produit servi reste le build Vite. Les deux sont testés par la CI (`npm run ci`), parce que
 c'est l'artefact autonome que le téléphone ouvre.
+
+## Règles produit de la refonte « VTO autonome » (⚖️ arbitrage humain, 2026-08-23)
+
+Gravées ici sur instruction explicite — toute tâche future qui les contredit
+contredit un arbitrage :
+
+1. **Le tracking doit fonctionner sans métrologie.**
+2. **Le rendu doit fonctionner sans métrologie** — la monture apparaît et suit
+   dès qu'un backend produit des landmarks ; la PD et la précision absolue
+   sont des capacités ADDITIONNELLES, jamais des prérequis au VTO.
+3. **La métrologie peut échouer sans casser tracking ni rendu** (enveloppes
+   séparées, `useTryOnLoop`).
+4. **Le backend de tracking est remplaçable** (`tracking/FaceTracker.ts`,
+   `tracking/backends/`) — hors de `backends/`, personne n'importe
+   FaceLandmarker ni n'appelle `detectForVideo`.
+5. **Aucun modèle ou délégué particulier n'est considéré universel** : le
+   catalogue de stratégies est négocié par ÉLIMINATION RÉELLE sur l'appareil,
+   jamais par une règle `if <appareil>`.
+6. **Une stratégie n'est saine que lorsqu'elle produit réellement des
+   landmarks** — `init`/`createFromOptions` réussi ne prouve rien (sonde :
+   3 inférences propres → healthy ; stable : 478 landmarks validés sur
+   5 frames → mémorisée pour l'appareil).
+
+Chemin critique : caméra → TrackerManager (négociation) → FaceTrackingResult
+→ rendu (échelle métrique OU pose iris OU **visuelle de secours**,
+`ui/sceneScale.ts`). Le moteur métrologique observe les mêmes landmarks EN
+PARALLÈLE et publie ses mesures quand elles existent — s'il est KO, le flux
+critique produit quand même des lunettes.
+
+Outil d'appareil : `diagnostic.html` (jamais lié depuis le produit, §0.0.2)
+exécute le catalogue entier sur la caméra réelle et affiche un tableau
+Init / Inférence / Landmarks par stratégie — UNE ouverture de téléphone suffit.

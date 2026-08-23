@@ -69,6 +69,12 @@ jobs:
       # `.nojekyll` est INDISPENSABLE : sans lui, Jekyll ignore tout fichier ou
       # dossier commençant par `_`, et le wasm de MediaPipe disparaît du site
       # servi sans le moindre message — encore le §1 bug #4.
+      #
+      # ⚠️ `diagnostic.html` reste DÉLIBÉRÉMENT servi : c'est l'outil d'appareil
+      # de la refonte 2026-08-23 (il essaie tout le catalogue de stratégies sur
+      # la caméra réelle et affiche les erreurs intégrales). Il n'est jamais lié
+      # depuis le produit — mais un téléphone en panne doit pouvoir se
+      # diagnostiquer en UNE ouverture d'URL.
       - run: rm -f dist/prep.html dist/calib.html && touch dist/.nojekyll
 
       # Publication : le contenu de `dist` DEVIENT la branche servie. On écrase

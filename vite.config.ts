@@ -37,6 +37,11 @@ export default defineConfig({
         prep: 'prep.html',
         // Outil de calibration du lot 8 — interne, jamais montré à un client.
         calib: 'calib.html',
+        // Diagnostic d'appareil (refonte 2026-08-23) : essaie TOUT le catalogue
+        // de stratégies sur la caméra réelle et affiche les erreurs intégrales.
+        // Jamais lié depuis le produit — mais DÉPLOYÉ, pour qu'un téléphone en
+        // panne se diagnostique en UNE ouverture d'URL.
+        diagnostic: 'diagnostic.html',
       },
     },
   },

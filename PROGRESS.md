@@ -1399,3 +1399,76 @@ S18 (id fantôme ignoré, mémoire réécrite par la stratégie re-prouvée) ; S
 Le prochain test Samsung dira quelle stratégie gagne — et si aucune ne gagne,
 le HUD dira exactement pourquoi, stratégie par stratégie, erreur complète à
 l'appui.
+
+---
+
+## Refonte « VTO autonome » — le rendu n'est plus l'otage de la mesure (2026-08-23)
+
+⚖️ **Arbitrage humain** : « sur un smartphone moderne classique, la lunette
+doit apparaître et suivre le visage même si la métrologie avancée échoue. La
+PD et la précision absolue deviennent des capacités additionnelles, jamais des
+prérequis au VTO. » Trois axes, trois commits (R1–R3), et six règles gravées
+dans `docs/ARCHITECTURE.md`.
+
+### R1 — l'abstraction `FaceTracker` et la santé par SONDE
+
+- `tracking/FaceTracker.ts` : interface unique (`init/detect/dispose`,
+  `FaceTrackingResult {timestampMs, landmarks, yawRad, rollRad, confidence,
+  backend}`). `tracking/backends/MediaPipeTracker.ts` est le SEUL fichier qui
+  touche FaceLandmarker/detectForVideo — le reste du produit ne sait pas quel
+  backend tourne, et un backend futur (autre lib, autre modèle) se branche
+  sans toucher ni au rendu ni à la métrologie.
+- **Santé par sonde** (`PROBE_REQUIRED_SUCCESSES = 3`) : une création qui
+  réussit mais dont `detect()` jette immédiatement est un backend KO — c'est
+  précisément la panne Samsung observée (« Graph has errors » à chaque frame
+  après un `createFromOptions` sans reproche). `probing 0→3` ne devient
+  `healthy` qu'après 3 inférences réellement abouties ; toute recréation
+  repasse par la sonde.
+- **Catalogue réordonné, graph minimal d'abord** : `gpu-sans-matrice` →
+  `cpu-sans-matrice` → `gpu-canvas-sans-matrice` → `cpu-canvas-sans-matrice`
+  → variantes avec matrices → marges/seuils. ⚖️ Conséquence assumée : sur la
+  voie NOMINALE le yaw vient des landmarks (`tracking/yaw.ts`), la matrice ne
+  sert que plus bas dans l'échelle ; `yawAgreement` surveille l'accord des
+  deux voies quand elles coexistent.
+
+### R2 — l'échelle VISUELLE de secours (aucun gate)
+
+- Décision d'échelle PURE et hiérarchisée (`ui/sceneScale.ts`) : métrique
+  (calibration) → pose (iris) → **visuelle** (`ui/visualScale.ts` :
+  largeur du visage en px ÷ largeur totale de la MONTURE en mm — « cette
+  monture couvre ce visage », recalculée chaque frame, elle SUIT la
+  distance). Aucune constante anatomique : la seule cote en mm est celle de
+  la monture, mesurée au réglet dans son spec.json (§0.0.3 respecté).
+- L'échelle visuelle n'est JAMAIS persistée, jamais convertie en mm de
+  visage, jamais vue par la métrologie (le moteur lit les landmarks BRUTS via
+  pump) ; la légende reste gelée (`aperçu — taille en cours de mesure`) et la
+  cause du repli est publiée (`live.visualFallbackReason`, santé, HUD).
+- **Constat de banc à confronter au réel** : la fixture « bandeau sur les
+  yeux » (face-shades.y4m) n'a PAS provoqué de refus d'iris — MediaPipe
+  INFÈRE des iris plausibles sous l'occlusion et la calibration converge
+  (S19 le consigne : `calibrated=true`, PD conclu yeux occlus). Le plancher de
+  quantification (3 px) est inatteignable avec des landmarks vivants. La
+  branche de repli visuel se prouve donc en unitaire (iris 2 px synthétiques
+  → échelle visuelle, cause dite) et la fenêtre « lunettes AVANT la
+  métrologie » se prouve au banc S19 : 29 frames rendues sans calibration,
+  zéro invariant violé.
+
+### R3 — la métrologie service optionnel, et le diagnostic en UNE ouverture
+
+- Conditions vérifiées mécaniquement : le chemin de rendu (`renderScene`,
+  `sceneScale`, `visualScale`, `renderPose`, `poseFilter`) ne contient AUCUNE
+  lecture de pd/halfPd/temporalWidth/calibrationState (grep : seuls des
+  commentaires énonçant la règle) ; `verdict()` n'alimente que la LÉGENDE,
+  après `renderedFrames++`, jamais un gate du sprite. L'enveloppe MÉTROLOGIE
+  de `useTryOnLoop` absorbe toute exception de pump en compteur diagnostique
+  — l'enveloppe RENDU s'exécute quoi qu'il arrive (S5 au banc).
+- `diagnostic.html` + `src/diag/diagMain.ts` : l'échelle automatique du
+  produit, rendue EXHAUSTIVE et lisible — chaque stratégie du catalogue est
+  créée (watchdog 15 s), sondée par inférences réelles (cible 10 landmarks
+  validés sous 6 s, arrêt à 5 erreurs), éliminée ; tableau
+  Init/Inférence/Landmarks/Erreur intégrale, une seule Task à la fois.
+  Déployé sur Pages (délibérément conservé par pages.yml), jamais lié depuis
+  le produit : un téléphone en panne se diagnostique en UNE ouverture d'URL.
+
+Preuves exécutées : 469 tests (méta 459) ; matrice de pannes S1–S19 60/60
+verts, dont S19 neuf ; typecheck strict clean, diagMain compris.
