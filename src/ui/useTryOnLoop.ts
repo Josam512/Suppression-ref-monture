@@ -97,6 +97,20 @@ function publishHealth(
  */
 export const RENDER_HOLD_MS = 180;
 
+/**
+ * 🔴 Ré-audit 2026-08-23 — cadence MAXIMALE de la métrologie (~15 Hz).
+ *
+ * La métrologie (pump : captures plein cadre, getImageData, collectes) tournait
+ * AVANT le rendu, dans le même tick, à la cadence caméra : une métrologie
+ * lente ne tuait plus le rendu (enveloppes) mais le RETARDAIT à chaque frame.
+ * Désormais : tracking → RENDU immédiat → métrologie ensuite, décimée. À
+ * 15 Hz, le film de carte (§14.7) garde largement sa matière : ~100+ vues sur
+ * un aller-retour, pour un plancher MIN_SWEEP_VIEWS de 8 — la leçon du §14.7
+ * (relever à chaque image, pas aux tranches) reste respectée en esprit : on
+ * relève à cadence FIXE, jamais aux moments qui arrangent.
+ */
+export const METROLOGY_MIN_INTERVAL_MS = 66;
+
 export interface TryOnLoopDeps {
   live: MutableRefObject<Live>;
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -122,6 +136,41 @@ export function useTryOnLoop(deps: TryOnLoopDeps): { retryCamera(): void } {
   /** Erreurs par enveloppe — comptées et NOMMÉES, jamais avalées (point 70). */
   const stageErrors = useRef({ metrology: 0, render: 0, lastMetrology: '', lastRender: '' });
 
+  /** Horloge de décimation métrologique — partagée frame/perte (ré-audit). */
+  const lastPumpAtMs = useRef(0);
+
+  /**
+   * ── Enveloppe MÉTROLOGIE (point 17), décimée à ~15 Hz (ré-audit
+   * 2026-08-23) : une exception ici est un diagnostic, jamais la mort du
+   * rendu ni du tracking — et une métrologie lente ne retarde plus le rendu,
+   * qui est peint AVANT l'appel.
+   */
+  const pumpDecimated = useCallback(
+    (lm: readonly NormalizedLandmark[] | null, yawRad: number, w: number, h: number): void => {
+      const now = performance.now();
+      if (now - lastPumpAtMs.current < METROLOGY_MIN_INTERVAL_MS) return;
+      lastPumpAtMs.current = now;
+      const s = live.current;
+      try {
+        pump(lm, yawRad, w, h);
+        if (lm !== null && phaseRef.current !== 'mesure-carte') {
+          // 🔴 Compte rendu de la séance filmée : seul « J'ai fini » déclenche le calcul.
+          const rot = stepRotation(s, lm, yawRad, w, h);
+          if (rot !== null) {
+            setPhase({ kind: 'mesure-rotation', degrees: rot.degrees, cardViews: rot.cardViews });
+          }
+          const warn = stepCrossCheck(s, lm, w, h);
+          if (warn !== null) pushNotice(warn);
+        }
+      } catch (err) {
+        stageErrors.current.metrology++;
+        stageErrors.current.lastMetrology = err instanceof Error ? err.message : String(err);
+        console.error('Métrologie —', err);
+      }
+    },
+    [live, phaseRef, pump, setPhase, pushNotice],
+  );
+
   const renderFrame = useCallback(
     (
       ctx: CanvasRenderingContext2D,
@@ -137,36 +186,19 @@ export function useTryOnLoop(deps: TryOnLoopDeps): { retryCamera(): void } {
       s.lastLandmarksAtMs = performance.now();
       s.coordinateSpace = space;
 
-      // ── Enveloppe MÉTROLOGIE (point 17) : une exception ici est un
-      // diagnostic, jamais la mort du rendu ni du tracking.
-      try {
-        pump(lm, yawRad, w, h);
-
-        if (phaseRef.current !== 'mesure-carte') {
-          // 🔴 Compte rendu de la séance filmée : seul « J'ai fini » déclenche le calcul.
-          const rot = stepRotation(s, lm, yawRad, w, h);
-          if (rot !== null) {
-            setPhase({ kind: 'mesure-rotation', degrees: rot.degrees, cardViews: rot.cardViews });
-          }
-          const warn = stepCrossCheck(s, lm, w, h);
-          if (warn !== null) pushNotice(warn);
-        }
-      } catch (err) {
-        stageErrors.current.metrology++;
-        stageErrors.current.lastMetrology = err instanceof Error ? err.message : String(err);
-        console.error('Métrologie —', err);
-      }
-
       // Étape carte (diagnostic) : rien ne mesure, la vidéo passe sous un
       // canvas vide — le client lit la consigne et appuie quand il veut.
       if (phaseRef.current === 'mesure-carte') {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, w, h);
+        pumpDecimated(lm, yawRad, w, h);
         return;
       }
 
       // ── Enveloppe RENDU (point 17) : une frame ratée est une frame ratée,
-      // le tracking continue à la suivante.
+      // le tracking continue à la suivante. 🔴 Ré-audit 2026-08-23 — le rendu
+      // passe EN PREMIER : la monture est peinte avant tout travail
+      // métrologique du tick, une métrologie lente ne la retarde plus.
       try {
         paintScene(ctx, s, lm, yawRad, videoRef.current);
         drawOverlay(ctx, { verdict: s.verdict, consecutiveFailures: 0, hint: sceneHint(s) });
@@ -176,23 +208,21 @@ export function useTryOnLoop(deps: TryOnLoopDeps): { retryCamera(): void } {
         stageErrors.current.lastRender = err instanceof Error ? err.message : String(err);
         console.error('Rendu —', err);
       }
+
+      // ── Métrologie ENSUITE, décimée (~15 Hz) — voir pumpDecimated.
+      pumpDecimated(lm, yawRad, w, h);
       publishHealth(s, stageErrors.current);
     },
-    [live, videoRef, phaseRef, pump, setPhase, pushNotice],
+    [live, videoRef, phaseRef, pumpDecimated],
   );
 
   const renderLost = useCallback(
     (ctx: CanvasRenderingContext2D, n: number, cause: LostCause, reason: string | null): void => {
-      // La perte nourrit le moteur automatique (« je ne vous vois pas »),
-      // JAMAIS le maintien de rendu ci-dessous, qui ne mesure rien.
-      try {
-        pump(null, 0, ctx.canvas.width, ctx.canvas.height);
-      } catch (err) {
-        stageErrors.current.metrology++;
-        stageErrors.current.lastMetrology = err instanceof Error ? err.message : String(err);
-      }
       const s = live.current;
       const heldMs = performance.now() - s.lastLandmarksAtMs;
+      // 🔴 Ré-audit 2026-08-23 — le RENDU d'abord (maintien ou alarme), la
+      // perte nourrit ENSUITE le moteur automatique (« je ne vous vois pas »),
+      // décimée comme le reste de la métrologie. Le maintien ne mesure rien.
       try {
         if (
           cause !== 'invalid-input' &&
@@ -203,6 +233,7 @@ export function useTryOnLoop(deps: TryOnLoopDeps): { retryCamera(): void } {
           // Micro-perte : repeindre la dernière pose connue au lieu de faire
           // clignoter la monture. Au-delà de RENDER_HOLD_MS, l'alarme brute.
           paintScene(ctx, s, s.lastLandmarks, s.lastYawRad, videoRef.current);
+          pumpDecimated(null, 0, ctx.canvas.width, ctx.canvas.height);
           return;
         }
         s.verdict = null;
@@ -213,9 +244,10 @@ export function useTryOnLoop(deps: TryOnLoopDeps): { retryCamera(): void } {
         stageErrors.current.render++;
         stageErrors.current.lastRender = err instanceof Error ? err.message : String(err);
       }
+      pumpDecimated(null, 0, ctx.canvas.width, ctx.canvas.height);
       publishHealth(s, stageErrors.current);
     },
-    [live, videoRef, phaseRef, pump],
+    [live, videoRef, phaseRef, pumpDecimated],
   );
 
   /** Après une erreur caméra/modèle, tout se remonte : plus de cul-de-sac (audit E1). */
