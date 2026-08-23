@@ -73,6 +73,9 @@ export interface Live {
    */
   firstScaleWaitSinceMs: number | null;
   firstScaleRefusal: string | null;
+  /** ⚖️ 2026-08-23 — l'échelle VISUELLE de secours est active : la cause du
+   *  refus d'iris qu'elle pallie (null = échelle iris ou calibrée). */
+  visualFallbackReason: string | null;
   /** Filtre One-Euro de la POSE (rendu seul, jamais la métrologie — c32). */
   poseFilter: PoseFilter;
   /** Dernière échelle d'aperçu vue — pour instrumenter la transition (c6). */
@@ -136,6 +139,7 @@ export function createLive(
     provisional: false,
     firstScaleWaitSinceMs: null,
     firstScaleRefusal: null,
+    visualFallbackReason: null,
     poseFilter: new PoseFilter(),
     lastProvisionalPxPerMm: null,
     scaleJump: null,

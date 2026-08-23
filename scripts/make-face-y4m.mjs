@@ -20,6 +20,10 @@ import { chromium } from 'playwright';
 
 const SRC = resolve('docs/verification/essayage-severine.jpg');
 const OUT = resolve('tests/fixtures/face.y4m');
+// Variante S19 : les YEUX sont masqués (bandeau sombre, ~lunettes de soleil).
+// Le maillage tient, les iris deviennent inexploitables → refus d'échelle de
+// pose persistant : c'est le cas que l'échelle VISUELLE de secours couvre.
+const OUT_SHADES = resolve('tests/fixtures/face-shades.y4m');
 // 2544×3392 est exactement du 3:4 → 480×640 sans recadrage ni déformation.
 const W = 480;
 const H = 640;
@@ -39,53 +43,64 @@ const browser = await chromium.launch({ executablePath: findChromium(), args: ['
 try {
   const page = await browser.newPage();
   await page.goto(`file://${SRC}`);
-  const rgba = await page.evaluate(
-    async ({ w, h }) => {
-      const img = document.querySelector('img');
-      await img.decode();
-      const canvas = document.createElement('canvas');
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, w, h);
-      return Array.from(ctx.getImageData(0, 0, w, h).data);
-    },
-    { w: W, h: H },
-  );
+  const grab = (shadeBand) =>
+    page.evaluate(
+      async ({ w, h, band }) => {
+        const img = document.querySelector('img');
+        await img.decode();
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        if (band) {
+          ctx.fillStyle = '#1c1c1c';
+          ctx.fillRect(0, Math.round(band.top * h), w, Math.round(band.height * h));
+        }
+        return Array.from(ctx.getImageData(0, 0, w, h).data);
+      },
+      { w: W, h: H, band: shadeBand },
+    );
 
   // RGB → YUV 4:2:0, coefficients BT.601 (le standard des fichiers Y4M).
-  const y = new Uint8Array(W * H);
-  const u = new Uint8Array((W / 2) * (H / 2));
-  const v = new Uint8Array((W / 2) * (H / 2));
-  for (let j = 0; j < H; j++) {
-    for (let i = 0; i < W; i++) {
-      const o = (j * W + i) * 4;
-      const [r, g, b] = [rgba[o], rgba[o + 1], rgba[o + 2]];
-      y[j * W + i] = Math.max(0, Math.min(255, Math.round(0.299 * r + 0.587 * g + 0.114 * b)));
-      if (i % 2 === 0 && j % 2 === 0) {
-        // Sous-échantillonnage 2×2 : moyenne du bloc pour U et V.
-        let sr = 0;
-        let sg = 0;
-        let sb = 0;
-        for (const [di, dj] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
-          const p = ((j + dj) * W + (i + di)) * 4;
-          sr += rgba[p];
-          sg += rgba[p + 1];
-          sb += rgba[p + 2];
+  const toY4m = (rgba) => {
+    const y = new Uint8Array(W * H);
+    const u = new Uint8Array((W / 2) * (H / 2));
+    const v = new Uint8Array((W / 2) * (H / 2));
+    for (let j = 0; j < H; j++) {
+      for (let i = 0; i < W; i++) {
+        const o = (j * W + i) * 4;
+        const [r, g, b] = [rgba[o], rgba[o + 1], rgba[o + 2]];
+        y[j * W + i] = Math.max(0, Math.min(255, Math.round(0.299 * r + 0.587 * g + 0.114 * b)));
+        if (i % 2 === 0 && j % 2 === 0) {
+          // Sous-échantillonnage 2×2 : moyenne du bloc pour U et V.
+          let sr = 0;
+          let sg = 0;
+          let sb = 0;
+          for (const [di, dj] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+            const p = ((j + dj) * W + (i + di)) * 4;
+            sr += rgba[p];
+            sg += rgba[p + 1];
+            sb += rgba[p + 2];
+          }
+          const [mr, mg, mb] = [sr / 4, sg / 4, sb / 4];
+          const k = (j / 2) * (W / 2) + i / 2;
+          u[k] = Math.max(0, Math.min(255, Math.round(-0.169 * mr - 0.331 * mg + 0.5 * mb + 128)));
+          v[k] = Math.max(0, Math.min(255, Math.round(0.5 * mr - 0.419 * mg - 0.081 * mb + 128)));
         }
-        const [mr, mg, mb] = [sr / 4, sg / 4, sb / 4];
-        const k = (j / 2) * (W / 2) + i / 2;
-        u[k] = Math.max(0, Math.min(255, Math.round(-0.169 * mr - 0.331 * mg + 0.5 * mb + 128)));
-        v[k] = Math.max(0, Math.min(255, Math.round(0.5 * mr - 0.419 * mg - 0.081 * mb + 128)));
       }
     }
-  }
+    const header = Buffer.from(`YUV4MPEG2 W${W} H${H} F30:1 Ip A1:1 C420jpeg\n`);
+    const frame = Buffer.concat([Buffer.from('FRAME\n'), Buffer.from(y), Buffer.from(u), Buffer.from(v)]);
+    return Buffer.concat([header, ...Array.from({ length: FRAMES }, () => frame)]);
+  };
 
-  const header = Buffer.from(`YUV4MPEG2 W${W} H${H} F30:1 Ip A1:1 C420jpeg\n`);
-  const frame = Buffer.concat([Buffer.from('FRAME\n'), Buffer.from(y), Buffer.from(u), Buffer.from(v)]);
   mkdirSync(resolve('tests/fixtures'), { recursive: true });
-  writeFileSync(OUT, Buffer.concat([header, ...Array.from({ length: FRAMES }, () => frame)]));
+  writeFileSync(OUT, toY4m(await grab(null)));
   console.log(`✅ ${OUT} — ${W}×${H}, ${FRAMES} frames, visage réel du sujet.`);
+  // Le bandeau couvre la zone oculaire de CETTE photo (0,40 H → 0,50 H).
+  writeFileSync(OUT_SHADES, toY4m(await grab({ top: 0.4, height: 0.1 })));
+  console.log(`✅ ${OUT_SHADES} — yeux masqués (refus d'iris persistant, S19).`);
 } finally {
   await browser.close();
 }

@@ -81,6 +81,8 @@ function publishHealth(
       // bancs peuvent affirmer « vivant, expliqué » au lieu de « muet ».
       waitingFirstScaleMs: live.firstScaleWaitSinceMs === null ? 0 : performance.now() - live.firstScaleWaitSinceMs,
       firstScaleRefusal: live.firstScaleRefusal,
+      // ⚖️ 2026-08-23 — la monture est posée à l'échelle VISUELLE de secours.
+      visualFallback: live.visualFallbackReason,
       invariants: invariantReport(),
     };
   } catch {

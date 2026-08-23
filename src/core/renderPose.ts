@@ -29,10 +29,16 @@
  *
  * ⭐ Ré-audit A6 — quand il n'y a JAMAIS eu d'échelle (iris refusés depuis le
  * début : lunettes portées, reflet permanent), le refus est DIAGNOSTIQUÉ
- * (`renderPoseScaleDiagnosed`) : l'appelant affiche un état « en attente de
- * première échelle » borné et expliqué, au lieu d'un canvas muet. Aucune pose
- * « visuelle » à constante de taille n'est fabriquée : ce serait le présupposé
- * de taille interdit (§0.0.3) — on explique, on n'invente pas.
+ * (`renderPoseScaleDiagnosed`) : la cause est nommée, avec les valeurs de la
+ * frame.
+ *
+ * ⚖️ ARBITRAGE 2026-08-23 (VTO autonome) — il renverse la fin de la lecture
+ * A6 : sur refus persistant, l'appelant ne laisse PLUS un canvas sans
+ * monture — il pose une échelle VISUELLE de secours (ui/visualScale.ts : la
+ * monture choisie couvre la largeur du visage ; aucune constante anatomique).
+ * Strictement visuelle : jamais persistée, jamais vue par la métrologie, la
+ * légende reste gelée. Ce fichier, lui, ne change pas : il dit la vérité de
+ * la frame, c'est l'appelant qui décide quoi poser.
  */
 
 import { EYEPLANE_TO_TEMPLE_DEPTH_MM, AUTO_ASSUMED_HFOV_DEG } from './autoCalibrate.js';

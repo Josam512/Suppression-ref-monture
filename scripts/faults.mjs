@@ -52,7 +52,9 @@ function makeBlackY4m(path) {
   writeFileSync(path, Buffer.concat(parts));
 }
 
-if (!existsSync('tests/fixtures/face.y4m')) execSync('node scripts/make-face-y4m.mjs', { stdio: 'inherit' });
+if (!existsSync('tests/fixtures/face.y4m') || !existsSync('tests/fixtures/face-shades.y4m')) {
+  execSync('node scripts/make-face-y4m.mjs', { stdio: 'inherit' });
+}
 execSync('node scripts/sync-wasm.mjs', { stdio: 'inherit' });
 makeBlackY4m('tests/fixtures/black.y4m');
 
@@ -477,6 +479,43 @@ try {
       });
       check(`${name} : le chemin d'échec DESSINE (§1 bug #3)`, painted);
       check(`${name} : aucune exception non rattrapée`, pageErrors.length === 0, pageErrors[0] ?? '');
+    },
+  });
+  await browser.close();
+
+  // ───────────────── Yeux OCCLUS (refonte « VTO autonome ») ─────────────────
+  // S19 — l'essayage visuel n'attend PAS la métrologie : la monture est posée
+  // et suivie dès les landmarks (échelle provisoire), la PD se mesure en
+  // parallèle. Le flux porte un bandeau sombre sur la zone oculaire.
+  browser = await chromium.launch(LAUNCH('tests/fixtures/face-shades.y4m'));
+  await scenario(browser, 'S19 lunettes AVANT la métrologie (yeux occlus)', {
+    run: async (page, name, pageErrors) => {
+      let renderedWhileUncalibrated = 0;
+      let sawUncalibrated = false;
+      const deadline = Date.now() + 20_000;
+      while (Date.now() < deadline) {
+        const h = await health(page);
+        if (h && h.calibrated === false) {
+          sawUncalibrated = true;
+          renderedWhileUncalibrated = Math.max(renderedWhileUncalibrated, h.renderedFrames ?? 0);
+        }
+        if (h && h.calibrated === true && renderedWhileUncalibrated > 3) break;
+        await page.waitForTimeout(400);
+      }
+      check(`${name} : une fenêtre SANS calibration a été observée`, sawUncalibrated);
+      check(
+        `${name} : la monture est POSÉE avant toute métrologie (frames rendues sans calibration)`,
+        renderedWhileUncalibrated > 3,
+        `rendues=${renderedWhileUncalibrated}`,
+      );
+      const h = await health(page);
+      check(`${name} : le suivi tient yeux occlus (landmarks réels)`, (h?.landmarkFrames ?? 0) > 30);
+      check(`${name} : aucun invariant violé`, h?.invariants?.violations === 0);
+      check(`${name} : aucune exception non rattrapée`, pageErrors.length === 0, pageErrors[0] ?? '');
+      // Constat documentaire (pas une assertion) : que conclut la métrologie
+      // sur des yeux occlus ? À confronter au vrai visage — cf. PROGRESS.
+      const pd = (await page.locator('body').innerText()).match(/PD[^\n]{0,40}/)?.[0] ?? 'PD non affiché';
+      console.log(`   ↳ constat yeux occlus : calibrated=${h?.calibrated} · ${pd.replace(/\s+/g, ' ')}`);
     },
   });
   await browser.close();

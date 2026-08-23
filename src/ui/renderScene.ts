@@ -18,18 +18,16 @@
  *   - le profil manquant ne prive que des branches (point 4).
  */
 
-import { IRIS_DISCREPANCY_MAX } from '../core/autoCalibration.js';
 import {
   EAR_L,
   EAR_R,
-  frameMetrics,
   MAX_YAW_FOR_SCALE_RAD,
   poseAnchorOf,
   rollRadOf,
   type FrameMetrics,
 } from '../core/faceMetrics.js';
 import { at, px, type NormalizedLandmark } from '../core/geom.js';
-import { renderPoseScaleDiagnosed } from '../core/renderPose.js';
+import { resolveSceneScale } from './sceneScale.js';
 import { verdict } from '../core/verdict.js';
 import { drawFrame } from '../render/composite.js';
 import { drawOverlay } from '../render/overlay.js';
@@ -63,21 +61,23 @@ export function paintScene(
   const roll = rollRadOf(lm, w, h);
   const anchor = poseAnchorOf(lm, w, h, roll);
 
-  // ── Échelle de la frame : calibrée si elle existe, sinon échelle de pose.
+  // ── Échelle de la frame : métrique, pose (iris), ou VISUELLE de secours —
+  // la décision est PURE et testée branche par branche (ui/sceneScale.ts).
   live.provisional = live.cal === null;
-  let freshScale: number | null = null;
-  let refusalDetail: string | null = null;
-  if (live.cal !== null) {
-    freshScale = frameMetrics(lm, w, h, live.cal, yawRad).livePxPerMm;
-  } else {
-    const rp = renderPoseScaleDiagnosed(lm, w, h, IRIS_DISCREPANCY_MAX, live.cameraProfile, Date.now());
-    if (rp.scale !== null) {
-      freshScale = rp.scale.templePlanePxPerMm;
-      live.lastProvisionalPxPerMm = rp.scale.templePlanePxPerMm;
-    } else {
-      refusalDetail = rp.refusal?.detail ?? null;
-    }
-  }
+  const decision = resolveSceneScale(
+    live.cal,
+    lm,
+    w,
+    h,
+    yawRad,
+    live.cameraProfile,
+    front.sprite.spec.totalWidthMm,
+    Date.now(),
+  );
+  const freshScale = decision.scale;
+  const refusalDetail = decision.refusalDetail;
+  live.visualFallbackReason = decision.visualFallbackReason;
+  if (decision.provisionalPxPerMm !== null) live.lastProvisionalPxPerMm = decision.provisionalPxPerMm;
 
   // ⭐ Complément 35 — au-delà du yaw exploitable, l'échelle n'est plus
   // réestimée : le filtre TIENT la dernière valeur sûre, 234/454 ne font pas
