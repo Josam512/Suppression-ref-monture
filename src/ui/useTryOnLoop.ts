@@ -68,6 +68,7 @@ function publishHealth(
       lastInferenceErrorFull: s?.lastInferenceErrorFull ?? null,
       inferenceContext: s?.lastInferenceContext ?? null,
       runningStrategy: s?.runningStrategy ?? null,
+      trackerHealth: s?.trackerHealth ?? null,
       generation: s?.generation ?? 0,
       yawAgreement: s?.yawAgreement ?? null,
       negotiation: s?.negotiation ?? [],

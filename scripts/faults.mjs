@@ -454,9 +454,9 @@ try {
     run: async (page, name) => {
       check(`${name} : la session conclut malgré la mémoire illisible`, await CALIBRATED()(page));
       const h = await health(page);
-      check(`${name} : repartie du NOMINAL (gpu), pas d'une devinette`, h?.runningStrategy === 'gpu', `vivante=${h?.runningStrategy}`);
+      check(`${name} : repartie du NOMINAL (graph minimal), pas d'une devinette`, h?.runningStrategy === 'gpu-sans-matrice', `vivante=${h?.runningStrategy}`);
       const rewritten = await page.evaluate(() => localStorage.getItem('essayage.detection.v1'));
-      check(`${name} : la stratégie re-prouvée a remplacé l'id fantôme`, /"strategyId":"gpu"/.test(rewritten ?? ''));
+      check(`${name} : la stratégie re-prouvée a remplacé l'id fantôme`, /"strategyId":"gpu-sans-matrice"/.test(rewritten ?? ''));
     },
   });
 

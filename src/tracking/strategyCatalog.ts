@@ -19,11 +19,9 @@
  *   - l'aval (PD, rendu, temporal, verdict) ne sait JAMAIS quelle stratégie a
  *     gagné : il reçoit (landmarks, yaw, espace), rien d'autre.
  *
- * Les index 0–3 sont l'échelle historique (gpu → cpu → marge → seuils),
- * libellés INCHANGÉS : la montée par élimination temporelle (visage trop
- * proche) reste à 3 marches de profondeur, et les bancs qui lisent ces
- * libellés restent vrais. Les index 4+ sont les variantes de négociation,
- * parcourues surtout par la voie des ERREURS d'inférence (modelLifecycle).
+ * Refonte 2026-08-23 : l'ordre est MINIMAL D'ABORD (sans matrice, vidéo
+ * directe) — cf. le commentaire du tableau. La montée par élimination
+ * temporelle et la voie des erreurs parcourent le même catalogue circulaire.
  */
 
 import type { Delegate } from './landmarker.js';
@@ -69,18 +67,23 @@ export interface DetectionStrategy {
 }
 
 export const DETECTION_STRATEGIES: readonly DetectionStrategy[] = [
-  // — L'échelle historique (0–3) : ids et libellés INCHANGÉS.
+  // 🔴 Refonte 2026-08-23 (arbitrage humain) — le graph MINIMAL d'abord : les
+  // stratégies SANS matrice de pose ouvrent le catalogue (le sous-graphe de
+  // géométrie faciale est le premier suspect de « Graph has errors » sur
+  // appareil réel ; le yaw vient des landmarks, tracking/yaw.ts). Vidéo
+  // directe avant canvas, GPU avant CPU. Les matrices ne sont demandées que
+  // plus bas dans l'échelle ; marge et seuils restent le remède « visage très
+  // proche », atteint par la montée temporelle.
+  { id: 'gpu-sans-matrice', delegate: 'GPU', source: 'video', matrices: false, padFraction: null, minConfidence: null, label: 'délégué GPU, vidéo directe, graph minimal (sans matrice)' },
+  { id: 'cpu-sans-matrice', delegate: 'CPU', source: 'video', matrices: false, padFraction: null, minConfidence: null, label: 'délégué CPU, vidéo directe, graph minimal (sans matrice)' },
+  { id: 'gpu-canvas-sans-matrice', delegate: 'GPU', source: 'canvas', matrices: false, padFraction: null, minConfidence: null, label: 'délégué GPU, entrée canvas, graph minimal' },
+  { id: 'cpu-canvas-sans-matrice', delegate: 'CPU', source: 'canvas', matrices: false, padFraction: null, minConfidence: null, label: 'délégué CPU, entrée canvas, graph minimal' },
   { id: 'gpu', delegate: 'GPU', source: 'video', matrices: true, padFraction: null, minConfidence: null, label: 'délégué GPU, pleine résolution' },
   { id: 'cpu', delegate: 'CPU', source: 'video', matrices: true, padFraction: null, minConfidence: null, label: 'délégué CPU (XNNPACK), pleine résolution' },
-  { id: 'cpu-marge', delegate: 'CPU', source: 'canvas', matrices: true, padFraction: 0.25, minConfidence: null, label: 'CPU, marge de 25 % autour du cadre (visage très proche)' },
-  { id: 'cpu-seuils', delegate: 'CPU', source: 'canvas', matrices: true, padFraction: 0.25, minConfidence: 0.25, label: 'CPU, marge 25 % + seuils de confiance abaissés à 0,25' },
-  // — Les variantes de négociation (4+) : mêmes moteurs, autres entrées/graphes.
   { id: 'gpu-canvas', delegate: 'GPU', source: 'canvas', matrices: true, padFraction: null, minConfidence: null, label: 'délégué GPU, entrée recopiée en canvas' },
   { id: 'cpu-canvas', delegate: 'CPU', source: 'canvas', matrices: true, padFraction: null, minConfidence: null, label: 'délégué CPU, entrée recopiée en canvas' },
-  { id: 'gpu-sans-matrice', delegate: 'GPU', source: 'video', matrices: false, padFraction: null, minConfidence: null, label: 'délégué GPU, sans matrice de pose (yaw par landmarks)' },
-  { id: 'gpu-canvas-sans-matrice', delegate: 'GPU', source: 'canvas', matrices: false, padFraction: null, minConfidence: null, label: 'délégué GPU, canvas, sans matrice de pose' },
-  { id: 'cpu-sans-matrice', delegate: 'CPU', source: 'video', matrices: false, padFraction: null, minConfidence: null, label: 'délégué CPU, sans matrice de pose (yaw par landmarks)' },
-  { id: 'cpu-canvas-sans-matrice', delegate: 'CPU', source: 'canvas', matrices: false, padFraction: null, minConfidence: 0.25, label: 'dernier recours : CPU, canvas, sans matrice, seuils abaissés' },
+  { id: 'cpu-marge', delegate: 'CPU', source: 'canvas', matrices: true, padFraction: 0.25, minConfidence: null, label: 'CPU, marge de 25 % autour du cadre (visage très proche)' },
+  { id: 'cpu-seuils', delegate: 'CPU', source: 'canvas', matrices: true, padFraction: 0.25, minConfidence: 0.25, label: 'CPU, marge 25 % + seuils de confiance abaissés à 0,25' },
 ];
 
 /** Index d'une stratégie mémorisée — null si l'id est inconnu du catalogue. */

@@ -71,11 +71,11 @@ function feedSilent(plan: DetectionPlan, n: number, gapMs: number, startMs: numb
 describe('échelle de stratégies — montées TEMPORELLES, sans sonde (points 6/11/12)', () => {
   it('sans visage, l’échelle entière est gravie par élimination, en DURÉE', () => {
     const plan = initialPlan();
-    expect(currentStrategy(plan).id).toBe('gpu');
+    expect(currentStrategy(plan).id).toBe(DETECTION_STRATEGIES[0]!.id);
     // 15 fps pendant ~40 s : les 9 montées attendues (2,5 s de silence chacune).
     const advanced = feedSilent(plan, 600, 66, 0);
     expect(advanced).toBe(DETECTION_STRATEGIES.length - 1);
-    expect(currentStrategy(plan).id).toBe('cpu-canvas-sans-matrice');
+    expect(currentStrategy(plan).id).toBe(DETECTION_STRATEGIES[DETECTION_STRATEGIES.length - 1]!.id);
   });
 
   it('le même code à 60 fps monte au même MOMENT, pas au même nombre de frames', () => {
@@ -99,7 +99,7 @@ describe('échelle de stratégies — montées TEMPORELLES, sans sonde (points 6
     const plan = initialPlan();
     // Une caméra qui livre 2 frames en 4 s ne prouve pas une stratégie muette.
     expect(feedSilent(plan, SWAP_MIN_SILENT_FRAMES - 2, 500, 0)).toBe(0);
-    expect(currentStrategy(plan).id).toBe('gpu');
+    expect(currentStrategy(plan).id).toBe(DETECTION_STRATEGIES[0]!.id);
   });
 
   it('🔴 les frames INVALIDES ne font JAMAIS monter l’échelle', () => {
@@ -108,7 +108,7 @@ describe('échelle de stratégies — montées TEMPORELLES, sans sonde (points 6
       const t = planStep(plan, { frameValid: false, landmarksFound: false, nowMs: i * 66 });
       expect(t.advanceTo).toBeNull();
     }
-    expect(currentStrategy(plan).id).toBe('gpu');
+    expect(currentStrategy(plan).id).toBe(DETECTION_STRATEGIES[0]!.id);
     expect(plan.silentValidFrames).toBe(0); // une entrée cassée ne dit rien des détecteurs
   });
 
@@ -118,16 +118,16 @@ describe('échelle de stratégies — montées TEMPORELLES, sans sonde (points 6
     expect(plan.phase).toBe('tracking');
     // ~18 s d'absence à 15 fps : bien plus qu'une pause, moins que la fenêtre prudente.
     expect(feedSilent(plan, 270, 66, 100)).toBe(0);
-    expect(currentStrategy(plan).id).toBe('gpu');
+    expect(currentStrategy(plan).id).toBe(DETECTION_STRATEGIES[0]!.id);
     expect(plan.strategyEverTracked).toBe(true);
   });
 
   it('en haut de l’échelle : on continue de chercher, honnêtement — pas de ping-pong', () => {
     const plan = initialPlan();
     feedSilent(plan, 600, 66, 0); // gravit tout le catalogue
-    expect(currentStrategy(plan).id).toBe('cpu-canvas-sans-matrice');
+    expect(currentStrategy(plan).id).toBe(DETECTION_STRATEGIES[DETECTION_STRATEGIES.length - 1]!.id);
     expect(feedSilent(plan, 600, 66, 60_000)).toBe(0);
-    expect(currentStrategy(plan).id).toBe('cpu-canvas-sans-matrice');
+    expect(currentStrategy(plan).id).toBe(DETECTION_STRATEGIES[DETECTION_STRATEGIES.length - 1]!.id);
     expect(plan.phase).toBe('searching');
   });
 
@@ -144,7 +144,7 @@ describe('échelle de stratégies — montées TEMPORELLES, sans sonde (points 6
     expect(actions[0]!.recreate).toBe(true);
     expect(actions[0]!.advanceTo).toBe(0); // la MÊME marche, pas la suivante
     expect(actions[0]!.reason).toMatch(/recrée/);
-    expect(currentStrategy(plan).id).toBe('gpu');
+    expect(currentStrategy(plan).id).toBe(DETECTION_STRATEGIES[0]!.id);
   });
 
   it('A2 — le retour du visage remet la reprise à zéro : chaque absence repaie la fenêtre entière', () => {
@@ -155,7 +155,7 @@ describe('échelle de stratégies — montées TEMPORELLES, sans sonde (points 6
     planStep(plan, { frameValid: true, landmarksFound: true, nowMs: 30_000 }); // le client revient
     expect(plan.recoveryAttempts).toBe(0);
     expect(feedSilent(plan, 270, 66, 31_000)).toBe(0); // nouvelle absence courte : rien
-    expect(currentStrategy(plan).id).toBe('gpu');
+    expect(currentStrategy(plan).id).toBe(DETECTION_STRATEGIES[0]!.id);
   });
 
   it('A2 — recréée et TOUJOURS muette une fenêtre complète : l’échelle descend enfin', () => {
@@ -177,7 +177,7 @@ describe('échelle de stratégies — montées TEMPORELLES, sans sonde (points 6
   it('A2 — après un épisode suivi : UNE recréation, un tour COMPLET du catalogue, puis recherche honnête', () => {
     const plan = initialPlan();
     feedSilent(plan, 600, 66, 0); // gravit tout le catalogue sans jamais suivre
-    expect(currentStrategy(plan).id).toBe('cpu-canvas-sans-matrice');
+    expect(currentStrategy(plan).id).toBe(DETECTION_STRATEGIES[DETECTION_STRATEGIES.length - 1]!.id);
     planStep(plan, { frameValid: true, landmarksFound: true, nowMs: 60_000 }); // suit enfin → tour RÉ-ANCRÉ
     const actions: ReturnType<typeof planStep>[] = [];
     for (let i = 0; i < 1500; i++) {
@@ -193,16 +193,16 @@ describe('échelle de stratégies — montées TEMPORELLES, sans sonde (points 6
     expect(plan.phase).toBe('searching');
   });
 
-  it('le catalogue finit sur le dernier recours : CPU, canvas, sans matrice, seuils 0,25', () => {
+  it('le catalogue OUVRE sur le graph minimal et FINIT sur marge + seuils (remède sensibilité)', () => {
+    // Refonte 2026-08-23 : minimal d'abord — sans matrice, vidéo directe.
+    const first = DETECTION_STRATEGIES[0]!;
+    expect(first.matrices).toBe(false);
+    expect(first.source).toBe('video');
+    expect(first.padFraction).toBeNull();
     const last = DETECTION_STRATEGIES[DETECTION_STRATEGIES.length - 1]!;
     expect(last.minConfidence).toBe(0.25);
+    expect(last.padFraction).not.toBeNull(); // marge : le remède « visage très proche »
     expect(last.delegate).toBe('CPU');
-    expect(last.source).toBe('canvas');
-    expect(last.matrices).toBe(false);
-    // …et la marche « marge + seuils » (visage très proche) existe toujours.
-    const permissive = DETECTION_STRATEGIES.find((s) => s.id === 'cpu-seuils')!;
-    expect(permissive.padFraction).not.toBeNull();
-    expect(permissive.minConfidence).toBe(0.25);
   });
 
   it('🔴 NÉGOCIATION — le catalogue couvre TOUT l’espace {GPU,CPU} × {vidéo,canvas} × {matrices ON,OFF}', () => {
@@ -221,8 +221,8 @@ describe('échelle de stratégies — montées TEMPORELLES, sans sonde (points 6
     }
     // Les ids sont uniques (la mémoire par appareil s'y réfère).
     expect(new Set(DETECTION_STRATEGIES.map((s) => s.id)).size).toBe(DETECTION_STRATEGIES.length);
-    // La première marche reste le nominal : GPU, vidéo directe, matrices ON.
-    expect(DETECTION_STRATEGIES[0]).toMatchObject({ id: 'gpu', delegate: 'GPU', source: 'video', matrices: true });
+    // La première marche est le nominal MINIMAL : GPU, vidéo directe, sans matrice.
+    expect(DETECTION_STRATEGIES[0]).toMatchObject({ id: 'gpu-sans-matrice', delegate: 'GPU', source: 'video', matrices: false });
   });
 
   it('le dé-mappage de la marge est EXACT : centre → centre, bords → bords', () => {
@@ -237,8 +237,11 @@ describe('échelle de stratégies — montées TEMPORELLES, sans sonde (points 6
 
   it('complément 9 — une stratégie paddée étiquette son repère : le Z y est inexploitable', () => {
     expect(coordinateSpaceOf(DETECTION_STRATEGIES[0]!)).toBe('direct');
-    expect(coordinateSpaceOf(DETECTION_STRATEGIES[2]!)).toBe('padded-remapped');
-    expect(coordinateSpaceOf(DETECTION_STRATEGIES[3]!)).toBe('padded-remapped');
+    for (const s of DETECTION_STRATEGIES) {
+      expect(coordinateSpaceOf(s)).toBe(s.padFraction === null ? 'direct' : 'padded-remapped');
+    }
+    // …et les marches à marge existent bel et bien au catalogue.
+    expect(DETECTION_STRATEGIES.filter((s) => s.padFraction !== null).length).toBeGreaterThanOrEqual(2);
   });
 });
 

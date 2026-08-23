@@ -8,6 +8,7 @@
 
 import type { FrameFeedStats } from './frameFeed.js';
 import type { ModelState } from './modelLifecycle.js';
+import type { TrackerHealth } from './FaceTracker.js';
 import type { CoordinateSpace, DetectionPlan, NegotiationEntry } from './detectionPlan.js';
 
 export type LostCause =
@@ -55,6 +56,8 @@ export interface FaceLoopStats {
   lastInferenceContext: InferenceContext | null;
   /** Accord de signe matrice ↔ landmarks, observé aux angles francs (null = pas encore vu). */
   yawAgreement: boolean | null;
+  /** La santé PROUVÉE du backend (sonde réelle) — jamais déduite d'un init. */
+  trackerHealth: TrackerHealth;
   /** Génération de la Task courante (recréations comprises). */
   generation: number;
   /** Le tableau de négociation : chaque stratégie essayée et son verdict. */

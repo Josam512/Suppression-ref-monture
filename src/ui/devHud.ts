@@ -65,6 +65,13 @@ export function hudLines(live: Live, nowMs: number): string[] {
         .join(' → ');
       lines.push(`négociation (${s.negotiation.length}) : ${row} · gén ${s.generation}`);
     }
+    // ⭐ Refonte 2026-08-23 — la santé PROUVÉE du backend (sonde), en clair.
+    const th = s.trackerHealth;
+    lines.push(
+      `backend : ${th.state}` +
+        (th.state === 'probing' ? ` ${th.successes}/3` : '') +
+        (th.state === 'degraded' || th.state === 'failed' ? ` — ${th.reason.slice(0, 70)}` : ''),
+    );
     if (s.yawAgreement === false) lines.push(`⚠️ yaw : matrice et landmarks en DÉSACCORD de signe`);
     const c = s.lastInferenceContext;
     if (c !== null) {

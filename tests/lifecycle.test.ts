@@ -13,23 +13,31 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { FaceLandmarker } from '@mediapipe/tasks-vision';
+import type { FaceTracker } from '../src/tracking/FaceTracker.js';
 import {
   createModelHost,
   INFERENCE_ERROR_SWAP_AFTER,
   MODEL_CREATE_TIMEOUT_MS,
   NEGOTIATION_ERROR_NEXT_AFTER,
   STORM_RETRY_MS,
-  type LandmarkerFactory,
+  type TrackerFactory,
 } from '../src/tracking/modelLifecycle.js';
-import { DETECTION_STRATEGIES, initialPlan } from '../src/tracking/detectionPlan.js';
+import { DETECTION_STRATEGIES, initialPlan, type DetectionStrategy } from '../src/tracking/detectionPlan.js';
 
-/** Fabrique-espion : compte les Tasks vivantes et journalise chaque événement. */
+// Le catalogue est ORDONNÉ (minimal d'abord, refonte 2026-08-23) : ces tests
+// parlent de POSITIONS (première marche, suivante…), pas d'identités — les ids
+// sont donc lus sur le catalogue pour survivre à tout réordonnancement.
+const ID0 = DETECTION_STRATEGIES[0]!.id;
+const ID1 = DETECTION_STRATEGIES[1]!.id;
+const ID2 = DETECTION_STRATEGIES[2]!.id;
+const LAST = DETECTION_STRATEGIES[DETECTION_STRATEGIES.length - 1]!.id;
+
+/** Fabrique-espion : compte les backends vivants et journalise chaque événement. */
 function bench(): {
-  factory: LandmarkerFactory;
+  factory: TrackerFactory;
   fails: Set<string>;
   log: string[];
-  instance: (id: string) => FaceLandmarker;
+  instance: (id: string) => FaceTracker;
   alive(): number;
   maxAlive(): number;
   created(): number;
@@ -39,19 +47,23 @@ function bench(): {
   let created = 0;
   const fails = new Set<string>();
   const log: string[] = [];
-  const instance = (id: string): FaceLandmarker => {
+  const instance = (id: string): FaceTracker => {
     created++;
     alive++;
     maxAlive = Math.max(maxAlive, alive);
     log.push(`création:${id}`);
     return {
-      close(): void {
+      id,
+      strategy: DETECTION_STRATEGIES.find((st) => st.id === id) ?? (DETECTION_STRATEGIES[0] as DetectionStrategy),
+      init: async () => {},
+      detect: () => null,
+      dispose(): void {
         alive--;
         log.push(`fermeture:${id}`);
       },
-    } as unknown as FaceLandmarker;
+    };
   };
-  const factory: LandmarkerFactory = async (_onProgress, strategy) => {
+  const factory: TrackerFactory = async (_onProgress, strategy) => {
     await Promise.resolve(); // asynchrone, comme la vraie création
     if (fails.has(strategy.id)) {
       log.push(`échec:${strategy.id}`);
@@ -90,7 +102,7 @@ describe('modelLifecycle — une seule Task, fermer avant créer (A1)', () => {
     host.ensure();
     await flush();
     expect(host.state()).toBe('ready');
-    expect(host.runningStrategy()?.id).toBe('gpu');
+    expect(host.runningStrategy()?.id).toBe(ID0);
     expect(await ready).toBe(true);
     expect(b.maxAlive()).toBe(1);
     host.dispose();
@@ -106,8 +118,8 @@ describe('modelLifecycle — une seule Task, fermer avant créer (A1)', () => {
     plan.strategyIndex = 1;
     host.ensure();
     await flush();
-    expect(host.runningStrategy()?.id).toBe('cpu');
-    expect(b.log).toEqual(['création:gpu', 'fermeture:gpu', 'création:cpu']);
+    expect(host.runningStrategy()?.id).toBe(ID1);
+    expect(b.log).toEqual([`création:${ID0}`, `fermeture:${ID0}`, `création:${ID1}`]);
     expect(b.maxAlive()).toBe(1); // le cœur du ré-audit A1
     host.dispose();
   });
@@ -119,15 +131,15 @@ describe('modelLifecycle — une seule Task, fermer avant créer (A1)', () => {
     const host = createModelHost(plan, { ...silent, onWarning: (m) => warnings.push(m) }, b.factory);
     host.ensure();
     await flush();
-    b.fails.add('cpu');
+    b.fails.add(ID1);
     plan.strategyIndex = 1;
     host.ensure();
     await flush();
-    expect(host.runningStrategy()?.id).toBe('gpu');
+    expect(host.runningStrategy()?.id).toBe(ID0);
     expect(plan.strategyIndex).toBe(0); // le plan est réconcilié sur la stratégie vivante
     expect(host.state()).toBe('ready');
     expect(warnings.some((w) => /je recrée/.test(w))).toBe(true);
-    expect(b.log).toEqual(['création:gpu', 'fermeture:gpu', 'échec:cpu', 'création:gpu']);
+    expect(b.log).toEqual([`création:${ID0}`, `fermeture:${ID0}`, `échec:${ID1}`, `création:${ID0}`]);
     expect(b.maxAlive()).toBe(1);
     host.dispose();
   });
@@ -138,12 +150,12 @@ describe('modelLifecycle — une seule Task, fermer avant créer (A1)', () => {
     const host = createModelHost(plan, silent, b.factory);
     host.ensure();
     await flush();
-    b.fails.add('cpu'); // la cible échouera…
-    b.fails.add('gpu'); // …et l'ancienne ne peut plus être recréée (GPU mort)
+    b.fails.add(ID1); // la cible échouera…
+    b.fails.add(ID0); // …et l'ancienne ne peut plus être recréée
     plan.strategyIndex = 1;
     host.ensure();
     await flush();
-    expect(host.runningStrategy()?.id).toBe('cpu-marge');
+    expect(host.runningStrategy()?.id).toBe(ID2);
     expect(host.state()).toBe('ready');
     expect(b.maxAlive()).toBe(1);
     host.dispose();
@@ -158,11 +170,11 @@ describe('modelLifecycle — une seule Task, fermer avant créer (A1)', () => {
     plan.strategyEverTracked = true; // elle a SUIVI un visage : règle prudente
     for (let i = 0; i < INFERENCE_ERROR_SWAP_AFTER; i++) host.noteInferenceError();
     await flush();
-    expect(host.runningStrategy()?.id).toBe('gpu'); // recréée, pas remplacée
-    expect(b.log).toEqual(['création:gpu', 'fermeture:gpu', 'création:gpu']);
+    expect(host.runningStrategy()?.id).toBe(ID0); // recréée, pas remplacée
+    expect(b.log).toEqual([`création:${ID0}`, `fermeture:${ID0}`, `création:${ID0}`]);
     for (let i = 0; i < INFERENCE_ERROR_SWAP_AFTER; i++) host.noteInferenceError();
     await flush();
-    expect(host.runningStrategy()?.id).toBe('cpu'); // la tempête persiste → suivante
+    expect(host.runningStrategy()?.id).toBe(ID1); // la tempête persiste → suivante
     expect(plan.strategyEverTracked).toBe(false);
     expect(b.maxAlive()).toBe(1);
     host.dispose();
@@ -177,17 +189,17 @@ describe('modelLifecycle — une seule Task, fermer avant créer (A1)', () => {
     await flush();
     for (let i = 0; i < NEGOTIATION_ERROR_NEXT_AFTER - 1; i++) host.noteInferenceError();
     await flush();
-    expect(host.runningStrategy()?.id).toBe('gpu'); // 2 erreurs : rien encore
+    expect(host.runningStrategy()?.id).toBe(ID0); // 2 erreurs : rien encore
     host.noteInferenceError(); // la 3e élimine
     await flush();
-    expect(host.runningStrategy()?.id).toBe('cpu');
-    expect(b.log).toEqual(['création:gpu', 'fermeture:gpu', 'création:cpu']); // fermer AVANT créer
-    expect(advances).toEqual(['gpu:erreurs']);
+    expect(host.runningStrategy()?.id).toBe(ID1);
+    expect(b.log).toEqual([`création:${ID0}`, `fermeture:${ID0}`, `création:${ID1}`]); // fermer AVANT créer
+    expect(advances).toEqual([`${ID0}:erreurs`]);
     // Un succès sur la nouvelle marche remet les compteurs : 2 erreurs isolées n'éliminent plus.
     host.noteInferenceSuccess();
     for (let i = 0; i < NEGOTIATION_ERROR_NEXT_AFTER - 1; i++) host.noteInferenceError();
     await flush();
-    expect(host.runningStrategy()?.id).toBe('cpu');
+    expect(host.runningStrategy()?.id).toBe(ID1);
     expect(b.maxAlive()).toBe(1);
     host.dispose();
   });
@@ -204,7 +216,7 @@ describe('modelLifecycle — une seule Task, fermer avant créer (A1)', () => {
       for (let i = 0; i < NEGOTIATION_ERROR_NEXT_AFTER; i++) host.noteInferenceError();
       await flush();
     }
-    expect(host.runningStrategy()?.id).toBe('cpu-canvas-sans-matrice'); // dernier recours, VIVANT
+    expect(host.runningStrategy()?.id).toBe(LAST); // dernière marche du tour, VIVANTE
     // Tout visité : la règle prudente reprend — recréation, puis épuisement.
     for (let i = 0; i < INFERENCE_ERROR_SWAP_AFTER; i++) host.noteInferenceError();
     await flush();
@@ -233,19 +245,41 @@ describe('modelLifecycle — une seule Task, fermer avant créer (A1)', () => {
     expect(host.runningStrategy()?.id).toBe(DETECTION_STRATEGIES[DETECTION_STRATEGIES.length - 1]!.id);
     for (let i = 0; i < NEGOTIATION_ERROR_NEXT_AFTER; i++) host.noteInferenceError();
     await flush();
-    expect(host.runningStrategy()?.id).toBe('gpu'); // le tour continue au début
+    expect(host.runningStrategy()?.id).toBe(ID0); // le tour continue au début
     expect(host.retryDelayMs()).toBe(0); // 3 visitées sur 10 : rien d'épuisé
     expect(b.maxAlive()).toBe(1);
+    host.dispose();
+  });
+
+  it('🔴 SONDE : init réussi n’est PAS sain — healthy exige 3 inférences propres RÉELLES', async () => {
+    const b = bench();
+    const plan = initialPlan();
+    const host = createModelHost(plan, silent, b.factory);
+    expect(host.health().state).toBe('initializing');
+    host.ensure();
+    await flush();
+    // Créé et adopté, mais JAMAIS sondé : probing, pas healthy.
+    expect(host.health()).toMatchObject({ state: 'probing', successes: 0 });
+    host.noteInferenceSuccess();
+    host.noteInferenceSuccess();
+    expect(host.health()).toMatchObject({ state: 'probing', successes: 2 });
+    host.noteInferenceSuccess(); // la 3e inférence propre prouve la santé
+    expect(host.health().state).toBe('healthy');
+    // Une RECRÉATION doit re-prouver : la santé ne survit pas à l'instance.
+    plan.strategyIndex = 1;
+    host.ensure();
+    await flush();
+    expect(host.health()).toMatchObject({ state: 'probing', successes: 0 });
     host.dispose();
   });
 
   it('création PENDUE : le watchdog descend l’échelle, la résolution tardive est FERMÉE', async () => {
     vi.useFakeTimers();
     const b = bench();
-    let resolveGpu: ((l: FaceLandmarker) => void) | null = null;
-    const factory: LandmarkerFactory = (_p, strategy) =>
-      strategy.id === 'gpu'
-        ? new Promise<FaceLandmarker>((res) => {
+    let resolveGpu: ((l: FaceTracker) => void) | null = null;
+    const factory: TrackerFactory = (_p, strategy) =>
+      strategy.id === DETECTION_STRATEGIES[0]!.id
+        ? new Promise<FaceTracker>((res) => {
             resolveGpu = res;
           })
         : Promise.resolve(b.instance(strategy.id));
@@ -253,15 +287,15 @@ describe('modelLifecycle — une seule Task, fermer avant créer (A1)', () => {
     const host = createModelHost(plan, silent, factory);
     host.ensure();
     await vi.advanceTimersByTimeAsync(MODEL_CREATE_TIMEOUT_MS + 10);
-    expect(host.runningStrategy()?.id).toBe('cpu');
+    expect(host.runningStrategy()?.id).toBe(ID1);
     expect(host.state()).toBe('ready');
     // La création pendue résout APRÈS coup : l'instance est fermée, jamais adoptée.
     expect(resolveGpu).not.toBeNull();
-    resolveGpu!(b.instance('gpu'));
+    resolveGpu!(b.instance(ID0));
     await vi.advanceTimersByTimeAsync(1);
-    expect(b.log).toContain('fermeture:gpu');
-    expect(b.alive()).toBe(1); // seule la CPU vit
-    expect(host.runningStrategy()?.id).toBe('cpu');
+    expect(b.log).toContain(`fermeture:${ID0}`);
+    expect(b.alive()).toBe(1); // seule la marche suivante vit
+    expect(host.runningStrategy()?.id).toBe(ID1);
     host.dispose();
   });
 
@@ -286,10 +320,10 @@ describe('modelLifecycle — une seule Task, fermer avant créer (A1)', () => {
   });
 
   it('démontage PENDANT la création : l’instance fraîche est fermée, ready = false', async () => {
-    let resolveGpu: ((l: FaceLandmarker) => void) | null = null;
+    let resolveGpu: ((l: FaceTracker) => void) | null = null;
     const b = bench();
-    const factory: LandmarkerFactory = () =>
-      new Promise<FaceLandmarker>((res) => {
+    const factory: TrackerFactory = () =>
+      new Promise<FaceTracker>((res) => {
         resolveGpu = res;
       });
     const plan = initialPlan();
@@ -298,7 +332,7 @@ describe('modelLifecycle — une seule Task, fermer avant créer (A1)', () => {
     host.ensure();
     host.dispose();
     expect(resolveGpu).not.toBeNull();
-    resolveGpu!(b.instance('gpu'));
+    resolveGpu!(b.instance(ID0));
     await flush();
     expect(b.alive()).toBe(0); // fermée à l'arrivée : rien ne fuit après démontage
     expect(await ready).toBe(false);

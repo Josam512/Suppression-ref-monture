@@ -17,7 +17,6 @@
  * (landmarks, yaw, espace) et ne sait JAMAIS quelle stratégie a gagné.
  */
 
-import { yawFromLandmarks, yawFromMatrix } from './yaw.js';
 import { attachFrameFeed, type FrameSnapshot } from './frameFeed.js';
 import { createModelHost } from './modelLifecycle.js';
 import { detectionInput, landmarksInvalidReason, unpadLandmarks } from './frameInput.js';
@@ -35,7 +34,6 @@ import {
 import {
   FULL_ERROR_MAX_CHARS,
   NEGOTIATION_HISTORY_MAX,
-  YAW_AGREEMENT_MIN_RAD,
   type FaceLoopControl,
   type FaceLoopHandlers,
   type FaceLoopOptions,
@@ -79,6 +77,7 @@ export async function startFaceLoop(
     lastInferenceErrorFull: null,
     lastInferenceContext: null,
     yawAgreement: null,
+    trackerHealth: { state: 'idle' },
     generation: 0,
     negotiation: [],
     modelState: 'creating',
@@ -101,10 +100,11 @@ export async function startFaceLoop(
   const onSnapshot = (s: FrameSnapshot): void => {
     if (disposed) return;
     stats.modelState = host.state();
+    stats.trackerHealth = host.health();
     stats.runningStrategy = host.runningStrategy()?.id ?? null;
 
-    const landmarker = host.current();
-    if (landmarker === null) {
+    const tracker = host.current();
+    if (tracker === null) {
       lostStreak++;
       handlers.onLost(lostStreak, 'model-pending', host.lastError() ?? 'modèle de détection en cours de création');
       host.ensure();
@@ -143,19 +143,13 @@ export async function startFaceLoop(
     const din = detectionInput(s, video, strategy, scratch);
     stats.inferenceAttempts++;
     try {
-      const res = landmarker.detectForVideo(din.input, ts);
-      lm = res.faceLandmarks[0];
-      const mat = res.facialTransformationMatrixes?.[0];
-      if (mat !== undefined) {
-        yaw = yawFromMatrix(mat.data);
-        // Les deux voies coexistent ici : l'accord de SIGNE est observé aux
-        // angles francs — un repli au signe inversé serait VISIBLE, jamais tu.
-        if (lm !== undefined && Math.abs(yaw) > YAW_AGREEMENT_MIN_RAD) {
-          const alt = yawFromLandmarks(lm);
-          if (Math.abs(alt) > YAW_AGREEMENT_MIN_RAD / 2) stats.yawAgreement = Math.sign(alt) === Math.sign(yaw);
-        }
-      } else if (lm !== undefined) {
-        yaw = yawFromLandmarks(lm); // stratégie sans matrice : rotation par les landmarks
+      // 🔴 Refonte FaceTracker — la boucle ne touche plus MediaPipe : elle
+      // consomme un FaceTrackingResult (landmarks, yaw, accord des voies).
+      const res = tracker.detect(din.input, ts);
+      if (res !== null) {
+        lm = res.landmarks;
+        yaw = res.yawRad;
+        if (res.yawAgreement !== undefined && res.yawAgreement !== null) stats.yawAgreement = res.yawAgreement;
       }
       stats.inferenceSuccess++;
       host.noteInferenceSuccess();
