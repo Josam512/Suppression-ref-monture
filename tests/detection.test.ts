@@ -15,7 +15,9 @@ import {
   currentStrategy,
   DETECTION_STRATEGIES,
   initialPlan,
+  NEGOTIATION_STABLE_FRAMES,
   planStep,
+  RENEGOTIATION_SILENT_MS,
   unpadPoint,
   SWAP_MIN_SILENT_FRAMES,
   SWAP_SILENT_MS,
@@ -68,6 +70,13 @@ function feedSilent(plan: DetectionPlan, n: number, gapMs: number, startMs: numb
   return advanced;
 }
 
+/** 🔴 Ré-audit 2026-08-23 — PROUVE la stratégie courante : 5 landmarks CONSÉCUTIFS. */
+function prove(plan: DetectionPlan, startMs: number): void {
+  for (let i = 0; i < NEGOTIATION_STABLE_FRAMES; i++) {
+    planStep(plan, { frameValid: true, landmarksFound: true, nowMs: startMs + i * 66 });
+  }
+}
+
 describe('échelle de stratégies — montées TEMPORELLES, sans sonde (points 6/11/12)', () => {
   it('sans visage, l’échelle entière est gravie par élimination, en DURÉE', () => {
     const plan = initialPlan();
@@ -112,32 +121,82 @@ describe('échelle de stratégies — montées TEMPORELLES, sans sonde (points 6
     expect(plan.silentValidFrames).toBe(0); // une entrée cassée ne dit rien des détecteurs
   });
 
-  it('🔴 sortie du champ ≠ panne : une stratégie qui a suivi n’est PAS soupçonnée avant la fenêtre prudente', () => {
+  it('🔴 sortie du champ ≠ panne : une stratégie PROUVÉE n’est PAS soupçonnée avant la fenêtre prudente', () => {
     const plan = initialPlan();
-    planStep(plan, { frameValid: true, landmarksFound: true, nowMs: 0 });
+    prove(plan, 0); // 5 landmarks consécutifs : la preuve (ré-audit 2026-08-23)
     expect(plan.phase).toBe('tracking');
+    expect(plan.strategyProven).toBe(true);
     // ~18 s d'absence à 15 fps : bien plus qu'une pause, moins que la fenêtre prudente.
-    expect(feedSilent(plan, 270, 66, 100)).toBe(0);
+    expect(feedSilent(plan, 270, 66, 1_000)).toBe(0);
     expect(currentStrategy(plan).id).toBe(DETECTION_STRATEGIES[0]!.id);
-    expect(plan.strategyEverTracked).toBe(true);
+    expect(plan.strategyProven).toBe(true);
   });
 
-  it('en haut de l’échelle : on continue de chercher, honnêtement — pas de ping-pong', () => {
+  it('🔴 RÉ-AUDIT : une frame CHANCEUSE ne confère PAS la prudence — élimination rapide quand même', () => {
     const plan = initialPlan();
-    feedSilent(plan, 600, 66, 0); // gravit tout le catalogue
+    planStep(plan, { frameValid: true, landmarksFound: true, nowMs: 0 }); // UNE frame, pas une preuve
+    expect(plan.strategyProven).toBe(false);
+    // Redevenue muette : la fenêtre RAPIDE s'applique (~2,5 s), pas les 20 s prudentes.
+    const actions: number[] = [];
+    for (let i = 0; i < 120; i++) {
+      const t = planStep(plan, { frameValid: true, landmarksFound: false, nowMs: 100 + i * 66 });
+      if (t.advanceTo !== null) actions.push(100 + i * 66);
+    }
+    expect(actions.length).toBeGreaterThanOrEqual(1);
+    expect(actions[0]!).toBeLessThan(SWAP_SILENT_MS + 2_000); // vite, jamais 20 s
+  });
+
+  it('🔴 RÉ-AUDIT : le compteur stable est CONSÉCUTIF — 5 frames éparses ne prouvent rien', () => {
+    const plan = initialPlan();
+    // landmark / muet / landmark / muet… : jamais 5 d'affilée.
+    for (let i = 0; i < 20; i++) {
+      const t = planStep(plan, { frameValid: true, landmarksFound: i % 2 === 0, nowMs: i * 66 });
+      expect(t.stableReached).not.toBe(true);
+    }
+    expect(plan.strategyProven).toBe(false);
+    expect(plan.stableFrames).toBeLessThanOrEqual(1);
+    // …alors que 5 consécutives prouvent, une fois.
+    prove(plan, 10_000);
+    expect(plan.strategyProven).toBe(true);
+  });
+
+  it('🔴 RÉ-AUDIT : catalogue entier muet, RIEN jamais prouvé → NOUVEAU TOUR après le cooldown', () => {
+    const plan = initialPlan();
+    feedSilent(plan, 600, 66, 0); // gravit tout le catalogue (~40 s)
     expect(currentStrategy(plan).id).toBe(DETECTION_STRATEGIES[DETECTION_STRATEGIES.length - 1]!.id);
-    expect(feedSilent(plan, 600, 66, 60_000)).toBe(0);
-    expect(currentStrategy(plan).id).toBe(DETECTION_STRATEGIES[DETECTION_STRATEGIES.length - 1]!.id);
-    expect(plan.phase).toBe('searching');
+    // Le silence continue : après RENEGOTIATION_SILENT_MS sur la dernière
+    // marche, un tour NEUF repart du début — on ne reste jamais collé.
+    const actions: ReturnType<typeof planStep>[] = [];
+    for (let i = 0; i < 700; i++) {
+      const t = planStep(plan, { frameValid: true, landmarksFound: false, nowMs: 60_000 + i * 66 });
+      if (t.advanceTo !== null) actions.push(t);
+    }
+    expect(actions.length).toBeGreaterThanOrEqual(1);
+    expect(actions[0]!.reason).toMatch(/nouveau tour/i);
+    expect(actions[0]!.advanceTo).toBe(0); // reparti du début du catalogue
+    // …et pas de ping-pong : au plus un tour par fenêtre de cooldown.
+    const firstWindowActions = actions.filter((a) => a.reason?.match(/nouveau tour/i)).length;
+    expect(firstWindowActions).toBeLessThanOrEqual(Math.ceil((700 * 66) / RENEGOTIATION_SILENT_MS) + 1);
+  });
+
+  it('🔴 RÉ-AUDIT : une stratégie PROUVÉE dans la session → plus AUCUN tour périodique (champ vide ≠ panne)', () => {
+    const plan = initialPlan();
+    prove(plan, 0); // preuve sur la première marche
+    // Longue absence : recréation prudente puis tour complet, puis SILENCE —
+    // jamais de renégociation périodique (churner des Tasks sur un champ vide).
+    feedSilent(plan, 1500, 66, 1_000);
+    const extra = feedSilent(plan, 1000, 66, 300_000);
+    expect(extra).toBe(0);
+    expect(plan.anyStrategyProven).toBe(true);
   });
 
   it('A2 — silence anormalement LONG post-tracking : la MÊME stratégie est recréée, une fois', () => {
     const plan = initialPlan();
-    planStep(plan, { frameValid: true, landmarksFound: true, nowMs: 0 });
+    prove(plan, 0); // la prudence exige la PREUVE (ré-audit 2026-08-23)
     const actions: ReturnType<typeof planStep>[] = [];
     // ~26 s de frames valides muettes : UNE action attendue, la recréation.
     for (let i = 0; i < 400; i++) {
-      const t = planStep(plan, { frameValid: true, landmarksFound: false, nowMs: 100 + i * 66 });
+      const t = planStep(plan, { frameValid: true, landmarksFound: false, nowMs: 1_000 + i * 66 });
       if (t.advanceTo !== null) actions.push(t);
     }
     expect(actions).toHaveLength(1);
@@ -149,8 +208,8 @@ describe('échelle de stratégies — montées TEMPORELLES, sans sonde (points 6
 
   it('A2 — le retour du visage remet la reprise à zéro : chaque absence repaie la fenêtre entière', () => {
     const plan = initialPlan();
-    planStep(plan, { frameValid: true, landmarksFound: true, nowMs: 0 });
-    feedSilent(plan, 400, 66, 100); // → recréation déclenchée
+    prove(plan, 0); // la prudence exige la PREUVE (ré-audit 2026-08-23)
+    feedSilent(plan, 400, 66, 1_000); // → recréation déclenchée
     expect(plan.recoveryAttempts).toBe(1);
     planStep(plan, { frameValid: true, landmarksFound: true, nowMs: 30_000 }); // le client revient
     expect(plan.recoveryAttempts).toBe(0);
@@ -160,25 +219,25 @@ describe('échelle de stratégies — montées TEMPORELLES, sans sonde (points 6
 
   it('A2 — recréée et TOUJOURS muette une fenêtre complète : l’échelle descend enfin', () => {
     const plan = initialPlan();
-    planStep(plan, { frameValid: true, landmarksFound: true, nowMs: 0 });
+    prove(plan, 0); // la prudence exige la PREUVE (ré-audit 2026-08-23)
     const actions: ReturnType<typeof planStep>[] = [];
     // ~53 s de frames valides muettes : recréation, puis descente.
     for (let i = 0; i < 800; i++) {
-      const t = planStep(plan, { frameValid: true, landmarksFound: false, nowMs: 100 + i * 66 });
+      const t = planStep(plan, { frameValid: true, landmarksFound: false, nowMs: 1_000 + i * 66 });
       if (t.advanceTo !== null) actions.push(t);
     }
     expect(actions.length).toBeGreaterThanOrEqual(2);
     expect(actions[0]!.recreate).toBe(true); // d'abord la même…
     expect(actions[1]!.advanceTo).toBe(1); // …puis la marche suivante
     expect(actions[1]!.recreate).toBeUndefined();
-    expect(plan.strategyEverTracked).toBe(false); // la nouvelle marche repart en acquisition rapide
+    expect(plan.strategyProven).toBe(false); // la nouvelle marche repart en acquisition rapide
   });
 
-  it('A2 — après un épisode suivi : UNE recréation, un tour COMPLET du catalogue, puis recherche honnête', () => {
+  it('A2 — après un épisode PROUVÉ : UNE recréation, un tour COMPLET du catalogue, puis recherche honnête', () => {
     const plan = initialPlan();
     feedSilent(plan, 600, 66, 0); // gravit tout le catalogue sans jamais suivre
     expect(currentStrategy(plan).id).toBe(DETECTION_STRATEGIES[DETECTION_STRATEGIES.length - 1]!.id);
-    planStep(plan, { frameValid: true, landmarksFound: true, nowMs: 60_000 }); // suit enfin → tour RÉ-ANCRÉ
+    prove(plan, 60_000); // suit et PROUVE enfin → tour RÉ-ANCRÉ (ré-audit)
     const actions: ReturnType<typeof planStep>[] = [];
     for (let i = 0; i < 1500; i++) {
       const t = planStep(plan, { frameValid: true, landmarksFound: false, nowMs: 61_000 + i * 66 });

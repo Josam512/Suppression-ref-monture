@@ -152,7 +152,9 @@ export async function startFaceLoop(
         if (res.yawAgreement !== undefined && res.yawAgreement !== null) stats.yawAgreement = res.yawAgreement;
       }
       stats.inferenceSuccess++;
-      host.noteInferenceSuccess();
+      // 🔴 Ré-audit 2026-08-23 — une inférence propre efface les erreurs mais
+      // ne PROUVE rien : seul un visage VALIDÉ (plus bas) avance la sonde.
+      host.noteInferenceCompleted();
     } catch (err) {
       // ⭐ Point 71 — une exception d'inférence n'est PAS « visage non trouvé ».
       const msg = err instanceof Error ? err.message : String(err);
@@ -191,6 +193,7 @@ export async function startFaceLoop(
       lostStreak = 0;
       stats.landmarkFrames++;
       stats.lastLandmarkAt = performance.now();
+      host.noteValidFace(); // 🔴 la sonde de santé n'avance QUE sur un visage validé
       const t = planStep(plan, { frameValid: true, landmarksFound: true, nowMs: performance.now() });
       if (t.stableReached === true) {
         // 🔴 La SEULE preuve de compatibilité : des landmarks réels, plusieurs
@@ -238,6 +241,9 @@ export async function startFaceLoop(
     },
     modelReady(): Promise<boolean> {
       return host.whenReady();
+    },
+    trackerProven(): Promise<boolean> {
+      return host.whenProven();
     },
   };
 }

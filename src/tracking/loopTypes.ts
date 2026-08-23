@@ -106,4 +106,11 @@ export interface FaceLoopControl {
    * la boucle est stoppée avant. L'IHM ne déclare « prêt » qu'après.
    */
   modelReady(): Promise<boolean>;
+  /**
+   * 🔴 Ré-audit 2026-08-23 — résout `true` au PREMIER visage VALIDÉ de la
+   * session (`modelCreated` ≠ `trackerProven`) : c'est LÀ que la métrologie a
+   * le droit de démarrer. `false` si fatal/arrêt sans jamais avoir vu un
+   * visage.
+   */
+  trackerProven(): Promise<boolean>;
 }

@@ -52,6 +52,13 @@ export interface CameraHandlers {
    * mesure ni chrono métrique ne démarre avant que le modèle puisse répondre.
    */
   onReady(stats: () => Readonly<FaceLoopStats>): void;
+  /**
+   * 🔴 Ré-audit 2026-08-23 — appelé UNE fois, au PREMIER visage VALIDÉ de la
+   * session : `modelCreated` (onReady, UI caméra) ≠ `trackerProven` (ici).
+   * C'est le point de départ légitime des collectes métrologiques d'arrière-
+   * plan : aucune n'a de sens tant que le backend n'a rien produit.
+   */
+  onTrackerProven?(): void;
   /** L'identité de l'objectif RÉELLEMENT ouvert (points 39–40) — avant onReady. */
   onCameraIdentity?(identity: CameraIdentity): void;
   /** Dégradation RÉCUPÉRABLE (ex. GPU KO → CPU vivant). La séance continue. */
@@ -261,6 +268,12 @@ export function useCameraLoop(
         if (!modelAlive) return; // fatal déjà signalé par onError ; « Réessayer » remonte tout
 
         held.current.onReady(() => control.stats());
+
+        // 🔴 Ré-audit 2026-08-23 — le PREMIER visage validé arrive quand il
+        // arrive : on ne bloque pas l'UI dessus, on notifie (métrologie).
+        void control.trackerProven().then((proven) => {
+          if (!disposed && proven) held.current.onTrackerProven?.();
+        });
       } catch (err) {
         stopStream(stream);
         if (!disposed) held.current.onError(describeInitError(err));

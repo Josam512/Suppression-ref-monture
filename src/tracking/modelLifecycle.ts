@@ -10,12 +10,18 @@
  *     ÉLIMINE le backend courant AVANT de créer la cible ; pendant la fenêtre,
  *     les frames sont `model-pending`, et c'est dit ;
  *   - 🔴 `init` réussi ne prouve RIEN : la SANTÉ vient d'une sonde réelle —
- *     PROBE_REQUIRED_SUCCESSES inférences propres après adoption → healthy ;
- *     une création qui réussit puis lève au premier detect = backend KO
- *     (négociation : 3 erreurs → suivant) ;
- *   - stratégie ÉPROUVÉE en tempête : recréer la même, puis avancer ;
- *     l'espacement STORM_RETRY_MS n'arrive qu'après TOUT le catalogue ;
- *   - `whenReady()` dit quand un backend est RÉELLEMENT vivant (A3).
+ *     🔴 ré-audit 2026-08-23 (soir) : PROBE_REQUIRED_SUCCESSES frames de
+ *     LANDMARKS VALIDÉS après adoption → healthy. Une inférence propre mais
+ *     SANS visage n'avance pas la sonde (`noteValidFace` seul l'avance ;
+ *     `noteInferenceCompleted` ne fait qu'effacer les erreurs) : trois
+ *     detect() vides ne rendront plus jamais un backend « healthy » ;
+ *   - stratégie PROUVÉE (5 landmarks consécutifs) en tempête : recréer la
+ *     même, puis avancer ; l'espacement STORM_RETRY_MS n'arrive qu'après
+ *     TOUT le catalogue — puis, cooldown écoulé, un NOUVEAU TOUR repart de
+ *     la dernière stratégie historiquement saine (sinon du début) ;
+ *   - `whenReady()` dit quand un backend est CRÉÉ (A3 — l'UI caméra peut
+ *     démarrer) ; `whenProven()` dit quand il a produit son PREMIER visage
+ *     validé — c'est LÀ que la métrologie a le droit de démarrer.
  *
  * La FABRIQUE est injectable : les bancs comptent les backends vivants et
  * prouvent `maxAlive === 1` sur les séquences réelles.
@@ -32,20 +38,18 @@ import {
   type DetectionPlan,
   type DetectionStrategy,
 } from './detectionPlan.js';
+import { initialNotes, noteCompleted, noteError, noteValidFace, STORM_RETRY_MS } from './inferenceNotes.js';
 
 export { createWithWatchdog, MODEL_CREATE_TIMEOUT_MS, type TrackerFactory } from './taskWatchdog.js';
 export { PROBE_REQUIRED_SUCCESSES, type TrackerHealth } from './FaceTracker.js';
-
-/** Stratégie ÉPROUVÉE : exceptions consécutives avant recréation, puis avance. */
-export const INFERENCE_ERROR_SWAP_AFTER = 10;
-/** 🔴 Négociation — stratégie JAMAIS éprouvée : élimination rapide. 3 erreurs
- *  d'inférence consécutives suffisent (Samsung réel : le graph lève à CHAQUE
- *  frame) ; le backend est éliminé et le suivant du catalogue est essayé. */
-export const NEGOTIATION_ERROR_NEXT_AFTER = 3;
-/** Tempête INDÉPASSABLE (catalogue épuisé) : tentatives ESPACÉES à cette cadence.
- *  Marteler à la cadence caméra un moteur qui lève à CHAQUE appel a tué l'onglet
- *  du runner CI (S13, fuite native par appel). Un succès → plein régime. */
-export const STORM_RETRY_MS = 250;
+// La machine des NOTES (négociation, tempête, sonde) vit dans inferenceNotes.ts
+// (règle des 300 lignes) ; ses constantes restent exposées ici — c'est l'API du host.
+export {
+  INFERENCE_ERROR_SWAP_AFTER,
+  NEGOTIATION_ERROR_NEXT_AFTER,
+  STORM_RENEGOTIATE_MS,
+  STORM_RETRY_MS,
+} from './inferenceNotes.js';
 
 export type ModelState = 'creating' | 'ready' | 'failed';
 
@@ -94,13 +98,21 @@ export interface ModelHost {
   /** Réconcilie l'instance vivante avec `plan.strategyIndex`. */
   ensure(force?: boolean): void;
   noteInferenceError(): void;
-  noteInferenceSuccess(): void;
+  /** Inférence PROPRE (pas d'exception) — efface erreurs/tempête. 🔴 N'avance
+   *  PAS la sonde de santé : un detect() vide ne prouve pas la compatibilité. */
+  noteInferenceCompleted(): void;
+  /** 🔴 Ré-audit 2026-08-23 — un visage VALIDÉ a été produit : SEULE preuve
+   *  qui avance la sonde vers healthy et règle `whenProven()`. */
+  noteValidFace(): void;
   /** Nouvelle instance depuis le dernier appel ? (l'appelant remet ses timestamps à zéro) */
   takeGenerationBump(): boolean;
   /** > 0 quand la tempête a épuisé le catalogue : la boucle ESPACE ses tentatives. */
   retryDelayMs(): number;
   /** ⭐ A3 — `true` à la PREMIÈRE instance vivante, `false` si fatal/démontage. */
   whenReady(): Promise<boolean>;
+  /** 🔴 `true` au PREMIER visage validé de la session (la métrologie peut
+   *  démarrer), `false` si fatal/démontage sans jamais avoir vu un visage. */
+  whenProven(): Promise<boolean>;
   dispose(): void;
 }
 
@@ -119,11 +131,7 @@ export function createModelHost(
   let state: ModelState = 'creating';
   let modelError: string | null = null;
   let generationBump = false;
-  let consecutiveErrors = 0;
-  let recreateTried = false;
-  let stormExhausted = false;
-  let probeSuccesses = 0;
-  let healthySinceMs = 0;
+  const notes = initialNotes(); // négociation, tempête, sonde — inferenceNotes.ts
 
   let readyOutcome: boolean | null = null;
   let readyResolvers: Array<(ok: boolean) => void> = [];
@@ -134,6 +142,15 @@ export function createModelHost(
     readyResolvers = [];
   }
 
+  let provenOutcome: boolean | null = null;
+  let provenResolvers: Array<(ok: boolean) => void> = [];
+  function settleProven(ok: boolean): void {
+    if (provenOutcome !== null) return;
+    provenOutcome = ok;
+    for (const r of provenResolvers) r(ok);
+    provenResolvers = [];
+  }
+
   /** L'instance fraîche devient LE backend — l'unique, l'ancien déjà éliminé. */
   function adopt(fresh: FaceTracker, index: number): void {
     active = fresh;
@@ -141,7 +158,7 @@ export function createModelHost(
     generationBump = true; // nouvelle instance → nouveau domaine de timestamps
     state = 'ready';
     modelError = null;
-    probeSuccesses = 0; // 🔴 la santé se REPROUVE : init réussi n'est pas sain
+    notes.probeSuccesses = 0; // 🔴 la santé se REPROUVE : init réussi n'est pas sain
     settleReady(true);
   }
 
@@ -202,6 +219,7 @@ export function createModelHost(
         } else {
           state = 'failed';
           settleReady(false);
+          settleProven(false);
           cb.onError(
             `Aucune stratégie de détection n'a pu se créer (dernier échec : ${describeError(err)}). ` +
               `Rechargez la page ; si cela persiste, essayez un autre navigateur.`,
@@ -224,70 +242,41 @@ export function createModelHost(
     state: () => state,
     health(): TrackerHealth {
       if (state === 'failed') return { state: 'failed', reason: modelError ?? 'aucune stratégie ne se crée' };
-      if (stormExhausted) return { state: 'degraded', reason: 'tempête d’inférence — tout le catalogue épuisé, tentatives espacées' };
+      if (notes.stormExhausted) return { state: 'degraded', reason: 'tempête d’inférence — tout le catalogue épuisé, tentatives espacées' };
       if (state === 'creating' || active === null) return { state: 'initializing' };
-      if (probeSuccesses < PROBE_REQUIRED_SUCCESSES) return { state: 'probing', successes: probeSuccesses };
-      return { state: 'healthy', sinceMs: healthySinceMs };
+      if (notes.probeSuccesses < PROBE_REQUIRED_SUCCESSES) return { state: 'probing', successes: notes.probeSuccesses };
+      return { state: 'healthy', sinceMs: notes.healthySinceMs };
     },
     lastError: () => modelError,
     ensure,
     noteInferenceError(): void {
-      consecutiveErrors++;
-      // 🔴 Négociation — une stratégie JAMAIS éprouvée qui lève est éliminée
-      // VITE : le backend est fermé, le suivant du catalogue essayé. Une
-      // stratégie qui A suivi garde la règle prudente (recréer d'abord).
-      if (!plan.strategyEverTracked && !allStrategiesTried(plan)) {
-        if (consecutiveErrors < NEGOTIATION_ERROR_NEXT_AFTER) return;
-        consecutiveErrors = 0;
-        recreateTried = false;
-        const from = currentStrategy(plan);
-        advanceStrategy(plan);
-        cb.onAdvance?.(from.id, 'erreurs', `${NEGOTIATION_ERROR_NEXT_AFTER} erreurs d'inférence consécutives`);
-        cb.onWarning(`« ${from.label} » lève à l'inférence — j'essaie « ${currentStrategy(plan).label} ».`);
-        ensure();
-        return;
-      }
-      if (consecutiveErrors < INFERENCE_ERROR_SWAP_AFTER) return;
-      consecutiveErrors = 0;
-      if (!recreateTried) {
-        recreateTried = true;
-        cb.onWarning(`l'inférence lève en continu — je recrée « ${currentStrategy(plan).label} ».`);
-        ensure(true);
-        return;
-      }
-      if (!allStrategiesTried(plan)) {
-        recreateTried = false;
-        const from = currentStrategy(plan);
-        advanceStrategy(plan);
-        cb.onAdvance?.(from.id, 'erreurs', 'lève encore après recréation');
-        cb.onWarning(`l'inférence lève toujours — j'essaie « ${currentStrategy(plan).label} ».`);
-        ensure();
-      } else {
-        stormExhausted = true; // TOUT le catalogue essayé : tentatives espacées (STORM_RETRY_MS)
-      }
+      noteError(notes, plan, { onWarning: cb.onWarning, ...(cb.onAdvance ? { onAdvance: cb.onAdvance } : {}), ensure });
     },
-    noteInferenceSuccess(): void {
-      consecutiveErrors = 0;
-      recreateTried = false;
-      stormExhausted = false;
-      if (probeSuccesses < PROBE_REQUIRED_SUCCESSES) {
-        probeSuccesses++;
-        if (probeSuccesses === PROBE_REQUIRED_SUCCESSES) healthySinceMs = performance.now();
-      }
+    noteInferenceCompleted(): void {
+      noteCompleted(notes);
+    },
+    noteValidFace(): void {
+      settleProven(true); // la métrologie a le droit de démarrer (whenProven)
+      noteValidFace(notes, runningIndex);
     },
     takeGenerationBump(): boolean {
       const b = generationBump;
       generationBump = false;
       return b;
     },
-    retryDelayMs: () => (stormExhausted ? STORM_RETRY_MS : 0),
+    retryDelayMs: () => (notes.stormExhausted ? STORM_RETRY_MS : 0),
     whenReady(): Promise<boolean> {
       if (readyOutcome !== null) return Promise.resolve(readyOutcome);
       return new Promise<boolean>((res) => readyResolvers.push(res));
     },
+    whenProven(): Promise<boolean> {
+      if (provenOutcome !== null) return Promise.resolve(provenOutcome);
+      return new Promise<boolean>((res) => provenResolvers.push(res));
+    },
     dispose(): void {
       disposed = true;
       settleReady(false);
+      settleProven(false);
       active?.dispose();
       active = null;
     },

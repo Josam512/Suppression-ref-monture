@@ -199,14 +199,14 @@ export function TryOn(props: { mode: Mode; onQuit(): void }): JSX.Element {
       }
     },
     onReadyAction: () => {
-      if (live.current.cal !== null) {
-        // ⭐ Point 28 — tests de CAPACITÉS : le rendu part tout de suite, et ce
-        // qui MANQUE à cette calibration (PD, temporal) se collecte en fond.
-        setPhase({ kind: 'essayage' });
-        startMissing();
-      } else if (props.mode === 'store') freeze('mesure-monture');
+      // ⭐ Point 28 + ré-audit 2026-08-23 : rendu immédiat ; le manque (PD,
+      // temporal) attend le premier visage PROUVÉ (onProvenAction). startAuto
+      // reste ici (écran + sortie carte même sans visage, S13) : il ne mesure que sur pump(landmarks).
+      if (live.current.cal !== null) setPhase({ kind: 'essayage' });
+      else if (props.mode === 'store') freeze('mesure-monture');
       else startAuto();
     },
+    onProvenAction: () => { if (live.current.cal !== null) startMissing(); },
     onFatalError: (message) => setPhase({ kind: 'error', message }),
   });
 

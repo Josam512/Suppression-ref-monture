@@ -19,6 +19,7 @@ import {
   INFERENCE_ERROR_SWAP_AFTER,
   MODEL_CREATE_TIMEOUT_MS,
   NEGOTIATION_ERROR_NEXT_AFTER,
+  STORM_RENEGOTIATE_MS,
   STORM_RETRY_MS,
   type TrackerFactory,
 } from '../src/tracking/modelLifecycle.js';
@@ -167,7 +168,7 @@ describe('modelLifecycle — une seule Task, fermer avant créer (A1)', () => {
     const host = createModelHost(plan, silent, b.factory);
     host.ensure();
     await flush();
-    plan.strategyEverTracked = true; // elle a SUIVI un visage : règle prudente
+    plan.strategyProven = true; // elle a PROUVÉ sa stabilité : règle prudente
     for (let i = 0; i < INFERENCE_ERROR_SWAP_AFTER; i++) host.noteInferenceError();
     await flush();
     expect(host.runningStrategy()?.id).toBe(ID0); // recréée, pas remplacée
@@ -175,7 +176,7 @@ describe('modelLifecycle — une seule Task, fermer avant créer (A1)', () => {
     for (let i = 0; i < INFERENCE_ERROR_SWAP_AFTER; i++) host.noteInferenceError();
     await flush();
     expect(host.runningStrategy()?.id).toBe(ID1); // la tempête persiste → suivante
-    expect(plan.strategyEverTracked).toBe(false);
+    expect(plan.strategyProven).toBe(false);
     expect(b.maxAlive()).toBe(1);
     host.dispose();
   });
@@ -196,7 +197,7 @@ describe('modelLifecycle — une seule Task, fermer avant créer (A1)', () => {
     expect(b.log).toEqual([`création:${ID0}`, `fermeture:${ID0}`, `création:${ID1}`]); // fermer AVANT créer
     expect(advances).toEqual([`${ID0}:erreurs`]);
     // Un succès sur la nouvelle marche remet les compteurs : 2 erreurs isolées n'éliminent plus.
-    host.noteInferenceSuccess();
+    host.noteInferenceCompleted();
     for (let i = 0; i < NEGOTIATION_ERROR_NEXT_AFTER - 1; i++) host.noteInferenceError();
     await flush();
     expect(host.runningStrategy()?.id).toBe(ID1);
@@ -226,8 +227,40 @@ describe('modelLifecycle — une seule Task, fermer avant créer (A1)', () => {
     expect(host.state()).toBe('ready');
     expect(host.retryDelayMs()).toBe(STORM_RETRY_MS); // plus rien à essayer → espacement
     expect(b.maxAlive()).toBe(1);
-    host.noteInferenceSuccess(); // le pilote revient : plein régime immédiat
+    host.noteInferenceCompleted(); // le pilote revient : plein régime immédiat
     expect(host.retryDelayMs()).toBe(0);
+    host.dispose();
+  });
+
+  it('🔴 RÉ-AUDIT : catalogue épuisé DEPUIS le cooldown → NOUVEAU TOUR (jamais collé sur la dernière)', async () => {
+    const b = bench();
+    const plan = initialPlan();
+    const host = createModelHost(plan, silent, b.factory);
+    host.ensure();
+    await flush();
+    // Épuiser le catalogue entier (négociation 3 erreurs, puis prudence, puis tempête).
+    for (let rung = 1; rung < DETECTION_STRATEGIES.length; rung++) {
+      for (let i = 0; i < NEGOTIATION_ERROR_NEXT_AFTER; i++) host.noteInferenceError();
+      await flush();
+    }
+    for (let i = 0; i < 2 * INFERENCE_ERROR_SWAP_AFTER; i++) host.noteInferenceError();
+    await flush();
+    expect(host.retryDelayMs()).toBe(STORM_RETRY_MS); // épuisé, espacé
+    expect(host.runningStrategy()?.id).toBe(LAST); // collé sur la dernière… pour l'instant
+    // Le cooldown passe : la PROCHAINE erreur déclenche un tour complet neuf.
+    const origNow = performance.now.bind(performance);
+    try {
+      const jump = origNow() + STORM_RENEGOTIATE_MS + 1_000;
+      performance.now = () => jump;
+      host.noteInferenceError();
+      await flush();
+      expect(host.runningStrategy()?.id).toBe(ID0); // reparti du début (rien de prouvé)
+      expect(plan.visitedStrategies).toBe(1); // compteur de tour VIERGE
+      expect(host.retryDelayMs()).toBe(STORM_RETRY_MS); // le tour neuf reste ESPACÉ
+      expect(b.maxAlive()).toBe(1);
+    } finally {
+      performance.now = origNow;
+    }
     host.dispose();
   });
 
@@ -251,7 +284,7 @@ describe('modelLifecycle — une seule Task, fermer avant créer (A1)', () => {
     host.dispose();
   });
 
-  it('🔴 SONDE : init réussi n’est PAS sain — healthy exige 3 inférences propres RÉELLES', async () => {
+  it('🔴 SONDE : init réussi n’est PAS sain — healthy exige 3 visages VALIDÉS réels', async () => {
     const b = bench();
     const plan = initialPlan();
     const host = createModelHost(plan, silent, b.factory);
@@ -260,10 +293,10 @@ describe('modelLifecycle — une seule Task, fermer avant créer (A1)', () => {
     await flush();
     // Créé et adopté, mais JAMAIS sondé : probing, pas healthy.
     expect(host.health()).toMatchObject({ state: 'probing', successes: 0 });
-    host.noteInferenceSuccess();
-    host.noteInferenceSuccess();
+    host.noteValidFace();
+    host.noteValidFace();
     expect(host.health()).toMatchObject({ state: 'probing', successes: 2 });
-    host.noteInferenceSuccess(); // la 3e inférence propre prouve la santé
+    host.noteValidFace(); // le 3e VISAGE validé prouve la santé
     expect(host.health().state).toBe('healthy');
     // Une RECRÉATION doit re-prouver : la santé ne survit pas à l'instance.
     plan.strategyIndex = 1;
@@ -271,6 +304,39 @@ describe('modelLifecycle — une seule Task, fermer avant créer (A1)', () => {
     await flush();
     expect(host.health()).toMatchObject({ state: 'probing', successes: 0 });
     host.dispose();
+  });
+
+  it('🔴 RÉ-AUDIT : des inférences PROPRES sans visage ne prouvent RIEN — jamais healthy sur du vide', async () => {
+    const b = bench();
+    const plan = initialPlan();
+    const host = createModelHost(plan, silent, b.factory);
+    host.ensure();
+    await flush();
+    // 50 detect() propres qui ne voient PERSONNE : la sonde ne bouge pas.
+    for (let i = 0; i < 50; i++) host.noteInferenceCompleted();
+    expect(host.health()).toMatchObject({ state: 'probing', successes: 0 });
+    host.dispose();
+  });
+
+  it('🔴 RÉ-AUDIT : whenProven ne se règle qu’au premier VISAGE — false si démontage sans visage', async () => {
+    const b = bench();
+    const plan = initialPlan();
+    const host = createModelHost(plan, silent, b.factory);
+    host.ensure();
+    await flush();
+    const proven = host.whenProven();
+    host.noteInferenceCompleted(); // propre mais vide : ne règle rien
+    host.noteValidFace(); // le premier visage validé règle la promesse
+    expect(await proven).toBe(true);
+    host.dispose();
+
+    const b2 = bench();
+    const host2 = createModelHost(initialPlan(), silent, b2.factory);
+    host2.ensure();
+    await flush();
+    const neverProven = host2.whenProven();
+    host2.dispose(); // aucun visage jamais vu
+    expect(await neverProven).toBe(false);
   });
 
   it('création PENDUE : le watchdog descend l’échelle, la résolution tardive est FERMÉE', async () => {

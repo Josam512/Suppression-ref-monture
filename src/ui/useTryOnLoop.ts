@@ -109,11 +109,14 @@ export interface TryOnLoopDeps {
   onCameraIdentity?(identity: CameraIdentity): void;
   /** Décidé par TryOn : essayage direct, gel V2, ou mesure automatique. */
   onReadyAction(): void;
+  /** 🔴 Ré-audit 2026-08-23 — premier visage VALIDÉ : les collectes
+   *  métrologiques d'arrière-plan (startMissing) démarrent ICI, jamais avant. */
+  onProvenAction?(): void;
   onFatalError(message: string): void;
 }
 
 export function useTryOnLoop(deps: TryOnLoopDeps): { retryCamera(): void } {
-  const { live, videoRef, canvasRef, phaseRef, pump, setPhase, pushNotice, onCameraIdentity, onReadyAction, onFatalError } =
+  const { live, videoRef, canvasRef, phaseRef, pump, setPhase, pushNotice, onCameraIdentity, onReadyAction, onProvenAction, onFatalError } =
     deps;
 
   /** Erreurs par enveloppe — comptées et NOMMÉES, jamais avalées (point 70). */
@@ -235,6 +238,7 @@ export function useTryOnLoop(deps: TryOnLoopDeps): { retryCamera(): void } {
         live.current.loopStats = stats;
         onReadyAction();
       },
+      ...(onProvenAction !== undefined ? { onTrackerProven: onProvenAction } : {}),
       ...(onCameraIdentity !== undefined ? { onCameraIdentity } : {}),
       // ⭐ Guide point 10 — une dégradation RÉCUPÉRABLE (GPU KO → CPU vivant,
       // flux rVFC replié sur RAF…) est un bandeau, jamais une phase d'erreur.
