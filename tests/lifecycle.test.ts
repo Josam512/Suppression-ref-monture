@@ -14,6 +14,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FaceTracker } from '../src/tracking/FaceTracker.js';
+import { MEDIAPIPE_FACE_TOPOLOGY } from '../src/tracking/faceTopology.js';
 import {
   createModelHost,
   INFERENCE_ERROR_SWAP_AFTER,
@@ -56,6 +57,7 @@ function bench(): {
     return {
       id,
       strategy: DETECTION_STRATEGIES.find((st) => st.id === id) ?? (DETECTION_STRATEGIES[0] as DetectionStrategy),
+      topology: MEDIAPIPE_FACE_TOPOLOGY,
       init: async () => {},
       detect: () => null,
       dispose(): void {

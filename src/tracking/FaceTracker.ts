@@ -17,6 +17,7 @@
  */
 
 import type { DetectionStrategy } from './strategyCatalog.js';
+import type { FaceTopology } from './faceTopology.js';
 
 /** Ce que `detect` reçoit : l'élément vidéo LUI-MÊME ou un canvas préparé. */
 export type VideoFrameSource = HTMLVideoElement | HTMLCanvasElement;
@@ -51,6 +52,10 @@ export interface TrackerInitContext {
 export interface FaceTracker {
   readonly id: string;
   readonly strategy: DetectionStrategy;
+  /** 🔴 Ré-audit 2026-08-23 — la topologie du maillage que CE backend produit
+   *  (points sémantiques nommés + taille de sortie). La validation de sortie
+   *  la consomme : plus aucun « 478 » supposé hors du backend. */
+  readonly topology: FaceTopology;
   init(ctx: TrackerInitContext): Promise<void>;
   detect(frame: VideoFrameSource, timestampMs: number): FaceTrackingResult | null;
   dispose(): void;

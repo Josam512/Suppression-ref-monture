@@ -13,12 +13,16 @@
  */
 
 import { unpadPoint, type DetectionStrategy } from './strategyCatalog.js';
+import { criticalIndices, MEDIAPIPE_FACE_TOPOLOGY, type FaceTopology } from './faceTopology.js';
 import type { FrameSnapshot } from './frameFeed.js';
 
-/** Longueur minimale d'une sortie FaceLandmarker exploitable (478 = avec iris). */
-export const MIN_LANDMARKS = 478;
-/** Repères sans lesquels ni pose, ni rendu, ni métrologie ne tiennent. */
-export const CRITICAL_LANDMARKS = [1, 33, 133, 168, 234, 263, 362, 454, 468, 473, 162, 389] as const;
+/** Longueur d'une sortie complète du backend PAR DÉFAUT (MediaPipe, iris
+ *  compris) — 🔴 ré-audit 2026-08-23 : DÉRIVÉE de la topologie, plus un
+ *  nombre magique. Un backend futur validera par SA topologie. */
+export const MIN_LANDMARKS = MEDIAPIPE_FACE_TOPOLOGY.pointCount;
+/** Repères sans lesquels ni pose, ni rendu, ni métrologie ne tiennent —
+ *  dérivés des points NOMMÉS de la topologie, jamais énumérés en dur. */
+export const CRITICAL_LANDMARKS = criticalIndices(MEDIAPIPE_FACE_TOPOLOGY);
 
 /** L'entrée réellement soumise à l'inférence, avec ses dimensions (diagnostic). */
 export interface DetectionInput {
@@ -70,15 +74,21 @@ export function unpadLandmarks(
 /**
  * ⭐ Guide point 16 — la sortie du modèle est validée ICI, à la frontière.
  * Rend la raison du rejet, ou null si la frame est exploitable.
+ *
+ * 🔴 Ré-audit 2026-08-23 — la validation se fait CONTRE LA TOPOLOGIE DU
+ * BACKEND (taille de sortie + points critiques nommés), MediaPipe par
+ * défaut : un tracker futur à 68 points validera par sa propre topologie
+ * sans qu'aucun « 478 » traîne ici.
  */
 export function landmarksInvalidReason(
   lm: ReadonlyArray<{ x: number; y: number }> | undefined,
+  topology: FaceTopology = MEDIAPIPE_FACE_TOPOLOGY,
 ): string | null {
   if (lm === undefined || lm.length === 0) return null; // « aucun visage » n'est pas « sortie invalide »
-  if (lm.length < MIN_LANDMARKS) {
-    return `sortie partielle : ${lm.length} landmarks au lieu de ${MIN_LANDMARKS}`;
+  if (lm.length < topology.pointCount) {
+    return `sortie partielle : ${lm.length} landmarks au lieu de ${topology.pointCount}`;
   }
-  for (const i of CRITICAL_LANDMARKS) {
+  for (const i of criticalIndices(topology)) {
     const p = lm[i];
     if (p === undefined || !Number.isFinite(p.x) || !Number.isFinite(p.y)) {
       return `landmark critique ${i} non fini`;

@@ -22,6 +22,7 @@ import { yawFromLandmarks, yawFromMatrix } from '../yaw.js';
 import { rollRadOf } from '../../core/faceMetrics.js';
 import { YAW_AGREEMENT_MIN_RAD } from '../loopTypes.js';
 import type { DetectionStrategy } from '../strategyCatalog.js';
+import { MEDIAPIPE_FACE_TOPOLOGY } from '../faceTopology.js';
 import type { FaceTracker, FaceTrackingResult, TrackerInitContext, VideoFrameSource } from '../FaceTracker.js';
 
 function sourceDims(frame: VideoFrameSource): { w: number; h: number } {
@@ -32,6 +33,8 @@ function sourceDims(frame: VideoFrameSource): { w: number; h: number } {
 export class MediaPipeTracker implements FaceTracker {
   readonly id: string;
   readonly strategy: DetectionStrategy;
+  /** Le maillage FaceLandmarker (478 pts, iris) — déclaré par CE backend. */
+  readonly topology = MEDIAPIPE_FACE_TOPOLOGY;
   private landmarker: FaceLandmarker | null = null;
 
   constructor(strategy: DetectionStrategy) {

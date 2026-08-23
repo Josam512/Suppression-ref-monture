@@ -180,7 +180,8 @@ export async function startFaceLoop(
       return;
     }
 
-    const invalidReason = landmarksInvalidReason(lm);
+    // 🔴 Ré-audit 2026-08-23 — validée contre la topologie DU backend vivant.
+    const invalidReason = landmarksInvalidReason(lm, tracker.topology);
     if (invalidReason !== null) {
       stats.invalidLandmarkFrames++;
       lostStreak++;

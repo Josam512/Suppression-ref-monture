@@ -108,7 +108,7 @@ async function probeStrategy(strategy: (typeof DETECTION_STRATEGIES)[number]): P
     try {
       const res = tracker.detect(din.input, ts);
       v.inferenceOk++;
-      if (res !== null && landmarksInvalidReason(res.landmarks) === null) v.landmarks++;
+      if (res !== null && landmarksInvalidReason(res.landmarks, tracker.topology) === null) v.landmarks++;
     } catch (err) {
       v.inferenceErrors++;
       v.firstError ??= err instanceof Error ? err.message.slice(0, 600) : String(err).slice(0, 600);
