@@ -1344,3 +1344,58 @@ Le workflow a exigé deux correctifs que le local ne pouvait PAS révéler :
 
 Le job `soak` était vert sur le runner dès le run n°1 (3 exécutions vertes
 consécutives).
+
+## 2026-08-22/23 — NÉGOCIATION DE CAPACITÉS : le premier test Samsung réel
+
+Premier essai matériel sur la branche validée : caméra vivante, mais
+`detectForVideo` lève « Encountered multiple errors: INTERNAL: Graph has
+errors… » à CHAQUE frame — la création réussissait, l'inférence jamais. Tout
+l'aval (PD, pose, rendu) ne recevait donc AUCUN landmark. Deux causes
+structurelles : le catalogue de stratégies ne variait NI la source d'entrée
+(toujours un canvas recopié — MediaPipe n'a jamais vu le <video>), NI le
+sous-graphe de matrice de pose (toujours ON) ; et 445 tests + bancs prouvaient
+le comportement Chromium CI, pas le graph MediaPipe de CE navigateur-là.
+
+**Arbitrage humain** : pas de « config qui marche sur Samsung » — une
+négociation de capacités UNIVERSELLE au runtime, sans jamais un `if Samsung`.
+
+Ce qui est en place (commits « Négociation de capacités 1/3 » et « 2/3 ») :
+
+1. **Catalogue 2×2×2** (`strategyCatalog`) : 10 stratégies couvrant TOUT
+   {GPU, CPU} × {vidéo directe, canvas} × {matrices ON, OFF} + marge/seuils
+   historiques (index 0–3 inchangés). Couverture verrouillée par un test
+   mécanique. La vidéo directe devient le défaut (un étage de copie de moins).
+2. **Élimination réelle** : une stratégie JAMAIS éprouvée qui lève est fermée
+   après 3 erreurs consécutives et la suivante est essayée ; une stratégie
+   ÉPROUVÉE garde la règle prudente (10 → recréer → avancer). L'avance est
+   CIRCULAIRE (départ possible sur une stratégie mémorisée), « plus rien à
+   essayer » n'existe qu'après avoir VISITÉ tout le catalogue — et alors
+   seulement l'espacement `STORM_RETRY_MS` s'applique.
+3. **Compatible = prouvé** : ≥ 478 landmarks VALIDÉS sur 5 frames
+   (`NEGOTIATION_STABLE_FRAMES`). `createFromOptions` réussi ne compte pas.
+4. **Mémoire d'appareil** (`ui/detectionMemory`, `essayage.detection.v1`) : la
+   stratégie prouvée est tentée en premier au prochain démarrage ; défaillante,
+   la négociation reprend et la remplaçante écrase la mémoire. Purgée par
+   `?resetSession=1`, indifférente à « Nouveau client » (propriété du poste).
+5. **Yaw sans matrice** (`tracking/yaw.ts`) — ⚖️ arbitrage consigné : les
+   stratégies « sans-matrice » retirent le sous-graphe de géométrie faciale
+   (suspect documenté de « Graph has errors ») ; le yaw vient alors d'une
+   paire symétrique 234/454 — θ = atan2(Δz, écart projeté), la LARGEUR
+   s'annule algébriquement. Ce n'est PAS l'estimateur 2D banni au §4 (qui
+   dépendait d'un rapport de morphologie) : rotation seule, même convention de
+   signe que la matrice (test), accord observé en continu quand les deux voies
+   coexistent (`yawAgreement`, santé). L'aval reçoit (landmarks, yaw) et ne
+   sait jamais quelle stratégie a gagné.
+6. **Le dossier en UNE capture** : santé et HUD portent l'erreur d'inférence
+   INTÉGRALE (2 000 car.) + contexte (stratégie, délégué, source, matrices,
+   dimensions, timestamps, génération de Task) + le tableau de négociation
+   (chaque stratégie essayée → éliminée pourquoi / prouvée stable).
+
+Preuves exécutées : 461 tests (méta 450) ; matrice de pannes S1–S18 55/55
+verts — dont S17 (mémoire honorée puis RE-prouvée par des landmarks réels) et
+S18 (id fantôme ignoré, mémoire réécrite par la stratégie re-prouvée) ; S13
+(tempête d'inférence) vert sous la nouvelle marche à 3 erreurs.
+
+Le prochain test Samsung dira quelle stratégie gagne — et si aucune ne gagne,
+le HUD dira exactement pourquoi, stratégie par stratégie, erreur complète à
+l'appui.
