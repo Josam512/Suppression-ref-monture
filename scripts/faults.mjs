@@ -420,6 +420,46 @@ try {
     },
   });
 
+  // 🔴 Négociation (2026-08-22) — S17 : une stratégie MÉMORISÉE pour l'appareil
+  // est essayée EN PREMIER, prouvée à nouveau (≥ 478 landmarks), et conservée.
+  await scenario(browser, 'S17 stratégie négociée mémorisée', {
+    url: `${BASE}/`, // pas de resetSession : il purgerait la graine
+    init: () => {
+      try {
+        localStorage.setItem('essayage.detection.v1', JSON.stringify({ v: 1, strategyId: 'cpu' }));
+      } catch {}
+    },
+    run: async (page, name) => {
+      check(`${name} : la session conclut sur la stratégie mémorisée`, await CALIBRATED()(page));
+      const h = await health(page);
+      check(`${name} : la stratégie vivante EST celle mémorisée`, h?.runningStrategy === 'cpu', `vivante=${h?.runningStrategy}`);
+      check(
+        `${name} : re-prouvée STABLE par des landmarks réels (jamais par createFromOptions)`,
+        (h?.negotiation ?? []).some((e) => e.id === 'cpu' && e.outcome === 'stable'),
+      );
+      const kept = await page.evaluate(() => localStorage.getItem('essayage.detection.v1'));
+      check(`${name} : la mémoire d'appareil est conservée`, /"strategyId":"cpu"/.test(kept ?? ''));
+    },
+  });
+
+  // S18 : un id mémorisé INCONNU (catalogue remanié) est ignoré — négociation
+  // vierge depuis le nominal, et la stratégie re-prouvée ÉCRASE la mémoire.
+  await scenario(browser, 'S18 mémoire de stratégie inconnue', {
+    url: `${BASE}/`,
+    init: () => {
+      try {
+        localStorage.setItem('essayage.detection.v1', JSON.stringify({ v: 1, strategyId: 'strategie-fantome' }));
+      } catch {}
+    },
+    run: async (page, name) => {
+      check(`${name} : la session conclut malgré la mémoire illisible`, await CALIBRATED()(page));
+      const h = await health(page);
+      check(`${name} : repartie du NOMINAL (gpu), pas d'une devinette`, h?.runningStrategy === 'gpu', `vivante=${h?.runningStrategy}`);
+      const rewritten = await page.evaluate(() => localStorage.getItem('essayage.detection.v1'));
+      check(`${name} : la stratégie re-prouvée a remplacé l'id fantôme`, /"strategyId":"gpu"/.test(rewritten ?? ''));
+    },
+  });
+
   await browser.close();
 
   // ───────────────────────── Flux NOIR ─────────────────────────

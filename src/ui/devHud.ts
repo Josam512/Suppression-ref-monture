@@ -55,7 +55,33 @@ export function hudLines(live: Live, nowMs: number): string[] {
         `lm ${s.landmarkFrames} · invalides ${s.invalidLandmarkFrames} · errs ${s.inferenceErrors} · ` +
         `♥ ${fmt((nowMs - s.lastLandmarkAt) / 1000, 1)} s`,
     );
-    if (s.lastInferenceError !== null) lines.push(`dernière erreur inf : ${s.lastInferenceError}`);
+    // ⭐ Négociation (2026-08-22) — UNE capture doit dire : quelles stratégies
+    // ont été essayées, pourquoi éliminées, laquelle a été prouvée stable, et
+    // l'erreur COMPLÈTE avec son contexte (calculator fautif compris).
+    if (s.negotiation.length > 0) {
+      const row = s.negotiation
+        .slice(-6)
+        .map((e) => `${e.id}${e.outcome === 'stable' ? ' ✓stable' : ` ✗${e.outcome}`}`)
+        .join(' → ');
+      lines.push(`négociation (${s.negotiation.length}) : ${row} · gén ${s.generation}`);
+    }
+    if (s.yawAgreement === false) lines.push(`⚠️ yaw : matrice et landmarks en DÉSACCORD de signe`);
+    const c = s.lastInferenceContext;
+    if (c !== null) {
+      lines.push(
+        `ctx erreur : ${c.strategyId} · ${c.delegate}/${c.source}/${c.matrices ? 'matrices' : 'sans-matrice'} · ` +
+          `in ${c.inputW}×${c.inputH} · vidéo ${c.videoW}×${c.videoH} · ts ${fmt(c.tsMs, 0)} · t ${fmt(c.videoTimeS, 2)} s · gén ${c.generation}`,
+      );
+    }
+    if (s.lastInferenceErrorFull !== null) {
+      // L'erreur INTÉGRALE, repliée — la santé (__VTO_HEALTH__) porte les 2000 caractères.
+      const full = s.lastInferenceErrorFull;
+      for (let i = 0; i < full.length && i < 4 * 92; i += 92) {
+        lines.push(`${i === 0 ? 'erreur inf : ' : '  '}${full.slice(i, i + 92)}`);
+      }
+    } else if (s.lastInferenceError !== null) {
+      lines.push(`dernière erreur inf : ${s.lastInferenceError}`);
+    }
   }
 
   // ⭐ Ré-audit A5 — un préchargement mort n'est plus invisible : il s'affiche.

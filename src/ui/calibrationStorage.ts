@@ -163,5 +163,6 @@ export function clearCalibration(): void {
   }
 }
 
-/** Les clés que `?resetSession=1` purge (outil de banc, point 59). */
-export const SESSION_STORAGE_KEYS = [STORAGE_KEY, 'essayage.camera.v1', PERSON_STORAGE_KEY] as const;
+/** Les clés que `?resetSession=1` purge (outil de banc, point 59). La mémoire
+ *  de stratégie négociée en fait partie : les bancs renégocient à vierge. */
+export const SESSION_STORAGE_KEYS = [STORAGE_KEY, 'essayage.camera.v1', PERSON_STORAGE_KEY, 'essayage.detection.v1'] as const;

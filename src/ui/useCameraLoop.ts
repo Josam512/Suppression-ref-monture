@@ -28,6 +28,7 @@ import { preloadLandmarkerAssets } from '../tracking/landmarker.js';
 import type { CameraIdentity } from '../core/cameraProfile.js';
 import type { NormalizedLandmark } from '../core/geom.js';
 import { withDeadline } from './deadline.js';
+import { loadNegotiatedStrategy, saveNegotiatedStrategy } from './detectionMemory.js';
 
 export interface CameraHandlers {
   onFrame(
@@ -222,20 +223,29 @@ export function useCameraLoop(
         const ctx = canvas.getContext('2d');
         if (ctx === null) throw new Error('Contexte 2D indisponible.');
 
-        const control = await startFaceLoop(video, {
-          onLandmarks: (lm, yawRad, space) => held.current.onFrame(ctx, lm, yawRad, space),
-          onLost: (n, cause, reason) => held.current.onLost(ctx, n, cause, reason),
-          onTransition: (reason) => console.warn(`Détection — ${reason}`),
-          onProgress: (r) => {
-            if (!disposed) held.current.onProgress(r);
+        const control = await startFaceLoop(
+          video,
+          {
+            onLandmarks: (lm, yawRad, space) => held.current.onFrame(ctx, lm, yawRad, space),
+            onLost: (n, cause, reason) => held.current.onLost(ctx, n, cause, reason),
+            onTransition: (reason) => console.warn(`Détection — ${reason}`),
+            onProgress: (r) => {
+              if (!disposed) held.current.onProgress(r);
+            },
+            onWarning: (message) => {
+              if (!disposed) held.current.onWarning(message);
+            },
+            onError: (message) => {
+              if (!disposed) held.current.onError(message);
+            },
+            // 🔴 Négociation — la stratégie PROUVÉE stable (≥ 478 landmarks sur
+            // plusieurs frames) est mémorisée pour cet appareil/navigateur : le
+            // prochain démarrage l'essaie en premier. Défaillante plus tard, la
+            // négociation reprend et la remplaçante écrasera cette mémoire.
+            onStrategyStable: (id) => saveNegotiatedStrategy(id),
           },
-          onWarning: (message) => {
-            if (!disposed) held.current.onWarning(message);
-          },
-          onError: (message) => {
-            if (!disposed) held.current.onError(message);
-          },
-        });
+          { initialStrategyId: loadNegotiatedStrategy() },
+        );
         if (disposed) {
           control.stop();
           stopStream(stream);

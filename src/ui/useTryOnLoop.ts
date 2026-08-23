@@ -63,6 +63,14 @@ function publishHealth(
       lastMetrologyError: stage.lastMetrology || null,
       lastRenderError: stage.lastRender || null,
       lastInferenceError: s?.lastInferenceError ?? null,
+      // ⭐ Négociation (2026-08-22) — le DOSSIER complet en une capture : erreur
+      // intégrale + contexte, stratégie vivante, tableau des éliminations.
+      lastInferenceErrorFull: s?.lastInferenceErrorFull ?? null,
+      inferenceContext: s?.lastInferenceContext ?? null,
+      runningStrategy: s?.runningStrategy ?? null,
+      generation: s?.generation ?? 0,
+      yawAgreement: s?.yawAgreement ?? null,
+      negotiation: s?.negotiation ?? [],
       lastSnapshotError: s?.feed?.lastSnapshotError ?? null,
       engineAlive: live.auto !== null,
       calibrated: live.cal !== null,
