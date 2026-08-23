@@ -30,24 +30,31 @@
 
 import type { FaceLandmarker } from '@mediapipe/tasks-vision';
 import { createLandmarker } from './landmarker.js';
-import { currentStrategy, DETECTION_STRATEGIES, type DetectionPlan, type DetectionStrategy } from './detectionPlan.js';
+import { createWithWatchdog, type LandmarkerFactory } from './taskWatchdog.js';
+import {
+  advanceStrategy,
+  allStrategiesTried,
+  currentStrategy,
+  DETECTION_STRATEGIES,
+  type DetectionPlan,
+  type DetectionStrategy,
+} from './detectionPlan.js';
 
-/** Création d'une instance MediaPipe : au-delà, elle est réputée PENDUE. */
-export const MODEL_CREATE_TIMEOUT_MS = 15_000;
-/** Exceptions d'inférence consécutives avant recréation, puis descente. */
+export { createWithWatchdog, MODEL_CREATE_TIMEOUT_MS, type LandmarkerFactory } from './taskWatchdog.js';
+
+/** Stratégie ÉPROUVÉE : exceptions consécutives avant recréation, puis avance. */
 export const INFERENCE_ERROR_SWAP_AFTER = 10;
+/** 🔴 Négociation — stratégie JAMAIS éprouvée : élimination rapide. 3 erreurs
+ *  d'inférence consécutives suffisent (Samsung réel : le graph lève à CHAQUE
+ *  frame — attendre 10 erreurs × 10 marches gaspillait la séance) ; la Task
+ *  est fermée et la suivante du catalogue est essayée. */
+export const NEGOTIATION_ERROR_NEXT_AFTER = 3;
 /** Tempête INDÉPASSABLE (échelle épuisée) : tentatives ESPACÉES à cette cadence.
  *  Marteler à la cadence caméra un moteur qui lève à CHAQUE appel a tué l'onglet
  *  du runner CI (S13, fuite native par appel). Un succès → plein régime. */
 export const STORM_RETRY_MS = 250;
 
 export type ModelState = 'creating' | 'ready' | 'failed';
-
-/** Fabrique une instance pour UNE stratégie. Injectable (banc du ré-audit A1). */
-export type LandmarkerFactory = (
-  onProgress: (ratio: number) => void,
-  strategy: DetectionStrategy,
-) => Promise<FaceLandmarker>;
 
 /**
  * ⭐ Ré-audit AP — le NOMBRE de FaceLandmarker vivants, compté à la source :
@@ -62,7 +69,7 @@ export function aliveTaskCount(): number {
 }
 
 const defaultFactory: LandmarkerFactory = async (onProgress, strategy) => {
-  const fresh = await createLandmarker(onProgress, strategy.delegate, strategy.minConfidence);
+  const fresh = await createLandmarker(onProgress, strategy.delegate, strategy.minConfidence, strategy.matrices);
   aliveTasks++;
   const realClose = fresh.close.bind(fresh);
   (fresh as { close(): void }).close = () => {
@@ -78,6 +85,8 @@ export interface ModelHostCallbacks {
   onWarning(message: string): void;
   /** FATAL : plus aucune stratégie ne peut se créer. */
   onError(message: string): void;
+  /** 🔴 Négociation — une stratégie vient d'être ÉLIMINÉE (tableau du HUD). */
+  onAdvance?(fromId: string, outcome: 'erreurs' | 'création-KO', detail: string): void;
 }
 
 export interface ModelHost {
@@ -105,39 +114,6 @@ export interface ModelHost {
 
 const describeError = (err: unknown): string =>
   (err instanceof Error ? err.message : String(err)).slice(0, 90);
-
-/** Course entre une création et son délai. Une résolution TARDIVE est fermée. */
-function createWithWatchdog(
-  factory: LandmarkerFactory,
-  strategy: DetectionStrategy,
-  onProgress: (r: number) => void,
-): Promise<FaceLandmarker> {
-  let settled = false;
-  return new Promise<FaceLandmarker>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      reject(new Error(`création « ${strategy.label} » sans réponse après ${MODEL_CREATE_TIMEOUT_MS / 1000} s`));
-    }, MODEL_CREATE_TIMEOUT_MS);
-    factory(onProgress, strategy).then(
-      (fresh) => {
-        if (settled) {
-          fresh.close(); // arrivée après le délai : ne pas laisser fuir une Task
-          return;
-        }
-        settled = true;
-        clearTimeout(timer);
-        resolve(fresh);
-      },
-      (err: unknown) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        reject(err instanceof Error ? err : new Error(String(err)));
-      },
-    );
-  });
-}
 
 export function createModelHost(
   plan: DetectionPlan,
@@ -221,9 +197,11 @@ export function createModelHost(
           }
         }
         if (disposed) return;
-        // 2e repli — la marche suivante de l'échelle, même contrat.
-        if (targetIndex < DETECTION_STRATEGIES.length - 1) {
-          plan.strategyIndex = targetIndex + 1;
+        // 2e repli — la stratégie suivante du catalogue (avance circulaire) ;
+        // fatal seulement quand TOUT le catalogue a été visité sans succès.
+        cb.onAdvance?.(target.id, 'création-KO', modelError);
+        if (!allStrategiesTried(plan)) {
+          if (plan.strategyIndex === targetIndex) advanceStrategy(plan);
           state = 'creating';
           cb.onWarning(`${modelError} — j'essaie « ${currentStrategy(plan).label} ».`);
         } else {
@@ -253,6 +231,21 @@ export function createModelHost(
     ensure,
     noteInferenceError(): void {
       consecutiveErrors++;
+      // 🔴 Négociation — une stratégie JAMAIS éprouvée qui lève est éliminée
+      // VITE : fermer la Task, essayer la suivante du catalogue. Une stratégie
+      // qui A suivi garde la règle prudente (recréer d'abord) : une perte GPU
+      // transitoire ne condamne pas une marche qui marchait.
+      if (!plan.strategyEverTracked && !allStrategiesTried(plan)) {
+        if (consecutiveErrors < NEGOTIATION_ERROR_NEXT_AFTER) return;
+        consecutiveErrors = 0;
+        recreateTried = false;
+        const from = currentStrategy(plan);
+        advanceStrategy(plan);
+        cb.onAdvance?.(from.id, 'erreurs', `${NEGOTIATION_ERROR_NEXT_AFTER} erreurs d'inférence consécutives`);
+        cb.onWarning(`« ${from.label} » lève à l'inférence — j'essaie « ${currentStrategy(plan).label} ».`);
+        ensure();
+        return;
+      }
       if (consecutiveErrors < INFERENCE_ERROR_SWAP_AFTER) return;
       consecutiveErrors = 0;
       if (!recreateTried) {
@@ -261,17 +254,15 @@ export function createModelHost(
         ensure(true);
         return;
       }
-      if (plan.strategyIndex < DETECTION_STRATEGIES.length - 1) {
-        plan.strategyIndex++;
-        plan.strategyEverTracked = false;
-        plan.silentSinceMs = null;
-        plan.silentValidFrames = 0;
-        plan.recoveryAttempts = 0;
+      if (!allStrategiesTried(plan)) {
         recreateTried = false;
+        const from = currentStrategy(plan);
+        advanceStrategy(plan);
+        cb.onAdvance?.(from.id, 'erreurs', 'lève encore après recréation');
         cb.onWarning(`l'inférence lève toujours — j'essaie « ${currentStrategy(plan).label} ».`);
         ensure();
       } else {
-        stormExhausted = true; // plus rien à essayer : tentatives espacées (STORM_RETRY_MS)
+        stormExhausted = true; // TOUT le catalogue essayé : tentatives espacées (STORM_RETRY_MS)
       }
     },
     noteInferenceSuccess(): void {

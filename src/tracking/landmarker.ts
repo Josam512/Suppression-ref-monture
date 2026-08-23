@@ -201,10 +201,15 @@ export function lastInitReport(): ModelInitReport | null {
 export async function createLandmarker(
   onProgress: (ratio: number) => void = () => {},
   delegate: Delegate = 'GPU',
-  /** Seuils detection/presence/tracking abaissés — dernière marche de l'échelle
-   *  de stratégies (detectionPlan). N'affaiblit AUCUNE mesure : la détection
-   *  d'un visage et les gates métrologiques restent deux couches distinctes. */
+  /** Seuils detection/presence/tracking abaissés — marches « seuils » du
+   *  catalogue de stratégies. N'affaiblit AUCUNE mesure : la détection d'un
+   *  visage et les gates métrologiques restent deux couches distinctes. */
   minConfidence: number | null = null,
+  /** Sous-graphe de géométrie faciale (matrice de pose). OFF sur les marches
+   *  « sans-matrice » de la négociation : ce sous-graphe fait lever tout le
+   *  graph sur certains appareils réels ; le yaw vient alors des landmarks
+   *  (yawFromLandmarks — rotation seule, arbitrage humain 2026-08-22). */
+  matrices = true,
 ): Promise<FaceLandmarker> {
   const t0 = performance.now();
   const [fileset, modelAssetBuffer] = await Promise.all([
@@ -218,8 +223,8 @@ export async function createLandmarker(
     runningMode: 'VIDEO',
     numFaces: 1,
     outputFaceBlendshapes: false,
-    // ⚠️ Activé UNIQUEMENT pour en extraire la ROTATION (§4).
-    outputFacialTransformationMatrixes: true,
+    // ⚠️ Quand elle est produite, la matrice ne sert qu'à la ROTATION (§4).
+    outputFacialTransformationMatrixes: matrices,
     ...(minConfidence !== null
       ? {
           minFaceDetectionConfidence: minConfidence,
@@ -238,25 +243,7 @@ export async function createLandmarker(
   return landmarker;
 }
 
-/**
- * Yaw depuis la matrice de pose MediaPipe (colonne-major, 4×4).
- *
- * 🔴 SEULE lecture autorisée de cette matrice, et seulement sa partie rotation.
- * Sa TRANSLATION et son ÉCHELLE sont exprimées dans le repère du modèle
- * canonique : les utiliser reviendrait au « visage moyen habillé en
- * mathématiques » banni au §4. La rotation, elle, ne dépend pas de la taille
- * du visage — c'est pourquoi elle seule est admise.
- *
- * Un estimateur de yaw bricolé en 2D dépendrait du rapport profondeur du nez /
- * largeur du visage, c'est-à-dire d'une morphologie supposée : ce serait un
- * présupposé de taille déguisé, interdit au §0.0.3.
- */
-export function yawFromMatrix(m: ArrayLike<number>): number {
-  const r02 = m[8];
-  const r22 = m[10];
-  if (r02 === undefined || r22 === undefined) return 0;
-  return Math.atan2(r02, r22);
-}
+export { yawFromLandmarks, yawFromMatrix } from './yaw.js';
 
 /** Contour du visage en coordonnées écran, pour l'occlusion de la branche. */
 export function faceOutlinePath(

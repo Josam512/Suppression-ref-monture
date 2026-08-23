@@ -4,156 +4,64 @@
  *   Couche 1-2  frameFeed.ts       → une frame caméra VALIDE, pixels normalisés
  *   Couche 4    landmarker.ts      → les 478 landmarks
  *   Vie du modèle modelLifecycle.ts → watchdog de création, UNE seule Task
- *                                     (fermer avant créer, ré-audit A1)
- *   Décision    detectionPlan.ts   → échelle de stratégies, montées temporelles
+ *   Décision    detectionPlan.ts   → catalogue + négociation de capacités
  *
- * Durci par le guide de fiabilisation (2026-08-21) :
- *
- *   - UNE seule Task MediaPipe lourde à la fois (point 6) : la sonde
- *     FaceDetector est sortie du chemin produit ; les montées se font par
- *     élimination temporelle ;
- *   - la sortie du modèle est VALIDÉE à la frontière (point 16) : longueur
- *     ≥ 478 et repères critiques finis, sinon la frame est `invalid-landmarks`
- *     et n'atteint jamais `at(473)` au milieu du rendu ou de la métrologie ;
- *   - chaque étage a son compteur (complément 10) : un écran figé dit
- *     immédiatement OÙ la chaîne s'est arrêtée ;
- *   - une exception d'inférence est NOMMÉE (`inference-error`), jamais
- *     confondue avec « visage non trouvé » (point 71).
+ * 🔴 Négociation (arbitrage humain 2026-08-22, Samsung réel) : ce module
+ * ROUTE l'entrée (vidéo directe ou canvas selon la stratégie), lit le yaw par
+ * la matrice OU par les landmarks (stratégies sans matrice), consigne chaque
+ * élimination dans `stats.negotiation` (le tableau qu'une seule capture du
+ * HUD suffit à lire), conserve l'erreur d'inférence INTÉGRALE avec son
+ * contexte, et notifie `onStrategyStable` quand une stratégie a prouvé
+ * ≥ 478 landmarks validés sur NEGOTIATION_STABLE_FRAMES frames — c'est ce
+ * signal qui mémorise la stratégie pour l'appareil. L'aval reçoit
+ * (landmarks, yaw, espace) et ne sait JAMAIS quelle stratégie a gagné.
  */
 
-import { yawFromMatrix } from './landmarker.js';
-import { attachFrameFeed, type FrameFeedStats, type FrameSnapshot } from './frameFeed.js';
-import { createModelHost, type ModelState } from './modelLifecycle.js';
+import { yawFromLandmarks, yawFromMatrix } from './yaw.js';
+import { attachFrameFeed, type FrameSnapshot } from './frameFeed.js';
+import { createModelHost } from './modelLifecycle.js';
+import { detectionInput, landmarksInvalidReason, unpadLandmarks } from './frameInput.js';
 import {
   coordinateSpaceOf,
   currentStrategy,
   initialPlan,
+  NEGOTIATION_STABLE_FRAMES,
   planStep,
-  unpadPoint,
-  type CoordinateSpace,
+  strategyIndexOf,
   type DetectionPlan,
-  type DetectionStrategy,
+  type NegotiationEntry,
 } from './detectionPlan.js';
 
-export type LostCause =
-  | 'invalid-input'
-  | 'no-face'
-  | 'invalid-landmarks'
-  | 'inference-error'
-  | 'model-pending';
+import {
+  FULL_ERROR_MAX_CHARS,
+  NEGOTIATION_HISTORY_MAX,
+  YAW_AGREEMENT_MIN_RAD,
+  type FaceLoopControl,
+  type FaceLoopHandlers,
+  type FaceLoopOptions,
+  type FaceLoopStats,
+} from './loopTypes.js';
 
 export { MODEL_CREATE_TIMEOUT_MS } from './modelLifecycle.js';
-
-/** Longueur minimale d'une sortie FaceLandmarker exploitable (478 = avec iris). */
-export const MIN_LANDMARKS = 478;
-/** Repères sans lesquels ni pose, ni rendu, ni métrologie ne tiennent. */
-export const CRITICAL_LANDMARKS = [1, 33, 133, 168, 234, 263, 362, 454, 468, 473, 162, 389] as const;
-
-/** Compteurs par étage — le HUD lit ici « où la chaîne s'est arrêtée ». */
-export interface FaceLoopStats {
-  validFrames: number;
-  inferenceAttempts: number;
-  inferenceSuccess: number;
-  inferenceErrors: number;
-  landmarkFrames: number;
-  invalidLandmarkFrames: number;
-  lastLandmarkAt: number;
-  lastInferenceError: string | null;
-  modelState: ModelState;
-  /** Stratégie de l'instance VIVANTE (l'index du plan peut viser plus loin). */
-  runningStrategy: string | null;
-  feed: Readonly<FrameFeedStats> | null;
-}
-
-export interface FaceLoopHandlers {
-  /** Couche 4 OK : landmarks bruts de CETTE frame (coordonnées normalisées).
-   *  `space` dit si le Z est exploitable : `padded-remapped` → X/Y dé-mappés,
-   *  Z NON transformé, interdit de production (complément 9). */
-  onLandmarks(
-    lm: ReadonlyArray<{ x: number; y: number; z?: number }>,
-    yawRad: number,
-    space: CoordinateSpace,
-  ): void;
-  /** Pas de landmarks sur cette frame. `cause` nomme l'étage fautif (§11). */
-  onLost(consecutive: number, cause: LostCause, reason: string | null): void;
-  /** Montée de stratégie, avec sa raison (§17). */
-  onTransition?(reason: string): void;
-  onProgress?(ratio: number): void;
-  /** Dégradation RÉCUPÉRABLE : la séance continue (guide, point 10). */
-  onWarning?(message: string): void;
-  /** FATAL : plus aucune stratégie ne peut continuer. */
-  onError?(message: string): void;
-}
-
-export interface FaceLoopControl {
-  stop(): void;
-  plan(): Readonly<DetectionPlan>;
-  stats(): Readonly<FaceLoopStats>;
-  /**
-   * ⭐ Ré-audit A3 — résout `true` quand une instance de détection est
-   * RÉELLEMENT vivante (fin de la compilation WASM comprise), `false` si plus
-   * aucune stratégie ne peut se créer (fatal déjà signalé par onError) ou si
-   * la boucle est stoppée avant. L'IHM ne déclare « prêt » qu'après.
-   */
-  modelReady(): Promise<boolean>;
-}
-
-/** Ajoute la marge (letterbox) de la stratégie autour de la frame : le crop
- *  interne du landmarker (×1,5, mis au carré) cesse de déborder hors image sur
- *  un visage très proche. Les landmarks sont dé-mappés par `unpadPoint`. */
-function inputFor(
-  s: FrameSnapshot,
-  strategy: DetectionStrategy,
-  scratch: HTMLCanvasElement,
-): HTMLCanvasElement {
-  const pad = strategy.padFraction;
-  if (pad === null) return s.source;
-  const w = Math.round(s.w * (1 + 2 * pad));
-  const h = Math.round(s.h * (1 + 2 * pad));
-  if (scratch.width !== w || scratch.height !== h) {
-    scratch.width = w;
-    scratch.height = h;
-  }
-  const g = scratch.getContext('2d')!;
-  g.fillStyle = '#7f7f7f'; // remplissage neutre, comme le letterbox interne de MediaPipe
-  g.fillRect(0, 0, w, h);
-  g.drawImage(s.source, Math.round(s.w * pad), Math.round(s.h * pad));
-  return scratch;
-}
-
-/** Dé-mappe les landmarks du cadre AVEC marge vers le cadre d'origine (X/Y seuls). */
-function unpadLandmarks(
-  lm: ReadonlyArray<{ x: number; y: number; z?: number }>,
-  pad: number,
-): ReadonlyArray<{ x: number; y: number; z?: number }> {
-  return lm.map((q) => ({ ...q, x: unpadPoint(q.x, pad), y: unpadPoint(q.y, pad) }));
-}
-
-/**
- * ⭐ Guide point 16 — la sortie du modèle est validée ICI, à la frontière.
- * Rend la raison du rejet, ou null si la frame est exploitable.
- */
-export function landmarksInvalidReason(
-  lm: ReadonlyArray<{ x: number; y: number }> | undefined,
-): string | null {
-  if (lm === undefined || lm.length === 0) return null; // « aucun visage » n'est pas « sortie invalide »
-  if (lm.length < MIN_LANDMARKS) {
-    return `sortie partielle : ${lm.length} landmarks au lieu de ${MIN_LANDMARKS}`;
-  }
-  for (const i of CRITICAL_LANDMARKS) {
-    const p = lm[i];
-    if (p === undefined || !Number.isFinite(p.x) || !Number.isFinite(p.y)) {
-      return `landmark critique ${i} non fini`;
-    }
-  }
-  return null;
-}
+export { CRITICAL_LANDMARKS, landmarksInvalidReason, MIN_LANDMARKS } from './frameInput.js';
+export {
+  FULL_ERROR_MAX_CHARS,
+  NEGOTIATION_HISTORY_MAX,
+  YAW_AGREEMENT_MIN_RAD,
+  type FaceLoopControl,
+  type FaceLoopHandlers,
+  type FaceLoopOptions,
+  type FaceLoopStats,
+  type InferenceContext,
+  type LostCause,
+} from './loopTypes.js';
 
 export async function startFaceLoop(
   video: HTMLVideoElement,
   handlers: FaceLoopHandlers,
+  options: FaceLoopOptions = {},
 ): Promise<FaceLoopControl> {
-  const plan = initialPlan();
+  const plan = initialPlan(strategyIndexOf(options.initialStrategyId ?? null) ?? 0);
   let disposed = false;
   let lostStreak = 0;
   let lastTs = -1;
@@ -168,15 +76,25 @@ export async function startFaceLoop(
     invalidLandmarkFrames: 0,
     lastLandmarkAt: 0,
     lastInferenceError: null,
+    lastInferenceErrorFull: null,
+    lastInferenceContext: null,
+    yawAgreement: null,
+    generation: 0,
+    negotiation: [],
     modelState: 'creating',
     runningStrategy: null,
     feed: null,
+  };
+  const pushNegotiation = (entry: NegotiationEntry): void => {
+    stats.negotiation.push(entry);
+    if (stats.negotiation.length > NEGOTIATION_HISTORY_MAX) stats.negotiation.shift();
   };
 
   const host = createModelHost(plan, {
     onProgress: (r) => handlers.onProgress?.(r),
     onWarning: (m) => handlers.onWarning?.(m),
     onError: (m) => handlers.onError?.(m),
+    onAdvance: (id, outcome, detail) => pushNegotiation({ id, outcome, detail }),
   });
   host.ensure();
 
@@ -192,7 +110,10 @@ export async function startFaceLoop(
       host.ensure();
       return;
     }
-    if (host.takeGenerationBump()) lastTs = -1; // nouvelle instance → nouveaux timestamps
+    if (host.takeGenerationBump()) {
+      lastTs = -1; // nouvelle instance → nouveaux timestamps (jamais ≤ dans SA génération)
+      stats.generation++;
+    }
 
     if (!s.validity.valid) {
       lostStreak++;
@@ -202,9 +123,9 @@ export async function startFaceLoop(
     }
     stats.validFrames++;
 
-    // Tempête indépassable (échelle épuisée) : on n'attaque plus le moteur à
-    // la cadence caméra — la frame reste une perte « inference-error » DITE,
-    // sans nouvel appel natif. Une tentative espacée sonde le retour du pilote.
+    // Tempête indépassable (TOUT le catalogue essayé) : on n'attaque plus le
+    // moteur à la cadence caméra — la frame reste une perte « inference-error »
+    // DITE, sans appel natif. Une tentative espacée sonde le retour du pilote.
     const retryDelayMs = host.retryDelayMs();
     if (retryDelayMs > 0 && performance.now() - lastAttemptAtMs < retryDelayMs) {
       lostStreak++;
@@ -219,18 +140,44 @@ export async function startFaceLoop(
     let lm: ReadonlyArray<{ x: number; y: number; z?: number }> | undefined;
     let yaw = 0;
     const strategy = host.runningStrategy() ?? currentStrategy(plan);
+    const din = detectionInput(s, video, strategy, scratch);
     stats.inferenceAttempts++;
     try {
-      const res = landmarker.detectForVideo(inputFor(s, strategy, scratch), ts);
+      const res = landmarker.detectForVideo(din.input, ts);
       lm = res.faceLandmarks[0];
-      const mat = res.facialTransformationMatrixes[0];
-      if (mat !== undefined) yaw = yawFromMatrix(mat.data); // rotation : insensible à la marge
+      const mat = res.facialTransformationMatrixes?.[0];
+      if (mat !== undefined) {
+        yaw = yawFromMatrix(mat.data);
+        // Les deux voies coexistent ici : l'accord de SIGNE est observé aux
+        // angles francs — un repli au signe inversé serait VISIBLE, jamais tu.
+        if (lm !== undefined && Math.abs(yaw) > YAW_AGREEMENT_MIN_RAD) {
+          const alt = yawFromLandmarks(lm);
+          if (Math.abs(alt) > YAW_AGREEMENT_MIN_RAD / 2) stats.yawAgreement = Math.sign(alt) === Math.sign(yaw);
+        }
+      } else if (lm !== undefined) {
+        yaw = yawFromLandmarks(lm); // stratégie sans matrice : rotation par les landmarks
+      }
       stats.inferenceSuccess++;
       host.noteInferenceSuccess();
     } catch (err) {
       // ⭐ Point 71 — une exception d'inférence n'est PAS « visage non trouvé ».
+      const msg = err instanceof Error ? err.message : String(err);
       stats.inferenceErrors++;
-      stats.lastInferenceError = err instanceof Error ? err.message.slice(0, 120) : String(err).slice(0, 120);
+      stats.lastInferenceError = msg.slice(0, 120);
+      stats.lastInferenceErrorFull = msg.slice(0, FULL_ERROR_MAX_CHARS);
+      stats.lastInferenceContext = {
+        strategyId: strategy.id,
+        delegate: strategy.delegate,
+        source: strategy.padFraction !== null ? 'canvas' : strategy.source,
+        matrices: strategy.matrices,
+        inputW: din.w,
+        inputH: din.h,
+        videoW: video.videoWidth,
+        videoH: video.videoHeight,
+        tsMs: ts,
+        videoTimeS: s.videoTimeS,
+        generation: stats.generation,
+      };
       lostStreak++;
       handlers.onLost(lostStreak, 'inference-error', stats.lastInferenceError);
       host.noteInferenceError();
@@ -250,7 +197,17 @@ export async function startFaceLoop(
       lostStreak = 0;
       stats.landmarkFrames++;
       stats.lastLandmarkAt = performance.now();
-      planStep(plan, { frameValid: true, landmarksFound: true, nowMs: performance.now() });
+      const t = planStep(plan, { frameValid: true, landmarksFound: true, nowMs: performance.now() });
+      if (t.stableReached === true) {
+        // 🔴 La SEULE preuve de compatibilité : des landmarks réels, plusieurs
+        // frames — jamais « createFromOptions a réussi ».
+        pushNegotiation({
+          id: strategy.id,
+          outcome: 'stable',
+          detail: `${NEGOTIATION_STABLE_FRAMES} frames de landmarks validés`,
+        });
+        handlers.onStrategyStable?.(strategy.id);
+      }
       handlers.onLandmarks(lm, yaw, coordinateSpaceOf(strategy));
       return;
     }
@@ -259,6 +216,7 @@ export async function startFaceLoop(
     const t = planStep(plan, { frameValid: true, landmarksFound: false, nowMs: performance.now() });
     handlers.onLost(lostStreak, 'no-face', strategy.label);
     if (t.advanceTo !== null) {
+      if (t.recreate !== true) pushNegotiation({ id: strategy.id, outcome: 'muette', detail: t.reason ?? '' });
       handlers.onTransition?.(t.reason ?? currentStrategy(plan).label);
       // Une seule Task (A1) : l'ancienne est fermée, la création court sous
       // watchdog — les frames de la fenêtre sont `model-pending`, et c'est dit.

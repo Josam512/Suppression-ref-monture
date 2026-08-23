@@ -72,10 +72,10 @@ describe('échelle de stratégies — montées TEMPORELLES, sans sonde (points 6
   it('sans visage, l’échelle entière est gravie par élimination, en DURÉE', () => {
     const plan = initialPlan();
     expect(currentStrategy(plan).id).toBe('gpu');
-    // 15 fps pendant 12 s : trois montées attendues (2,5 s de silence chacune).
-    const advanced = feedSilent(plan, 180, 66, 0);
+    // 15 fps pendant ~40 s : les 9 montées attendues (2,5 s de silence chacune).
+    const advanced = feedSilent(plan, 600, 66, 0);
     expect(advanced).toBe(DETECTION_STRATEGIES.length - 1);
-    expect(currentStrategy(plan).id).toBe('cpu-seuils');
+    expect(currentStrategy(plan).id).toBe('cpu-canvas-sans-matrice');
   });
 
   it('le même code à 60 fps monte au même MOMENT, pas au même nombre de frames', () => {
@@ -124,10 +124,10 @@ describe('échelle de stratégies — montées TEMPORELLES, sans sonde (points 6
 
   it('en haut de l’échelle : on continue de chercher, honnêtement — pas de ping-pong', () => {
     const plan = initialPlan();
-    feedSilent(plan, 180, 66, 0); // gravit tout
-    expect(currentStrategy(plan).id).toBe('cpu-seuils');
+    feedSilent(plan, 600, 66, 0); // gravit tout le catalogue
+    expect(currentStrategy(plan).id).toBe('cpu-canvas-sans-matrice');
     expect(feedSilent(plan, 600, 66, 60_000)).toBe(0);
-    expect(currentStrategy(plan).id).toBe('cpu-seuils');
+    expect(currentStrategy(plan).id).toBe('cpu-canvas-sans-matrice');
     expect(plan.phase).toBe('searching');
   });
 
@@ -174,26 +174,55 @@ describe('échelle de stratégies — montées TEMPORELLES, sans sonde (points 6
     expect(plan.strategyEverTracked).toBe(false); // la nouvelle marche repart en acquisition rapide
   });
 
-  it('A2 — en haut de l’échelle : une seule recréation par épisode, puis on cherche honnêtement', () => {
+  it('A2 — après un épisode suivi : UNE recréation, un tour COMPLET du catalogue, puis recherche honnête', () => {
     const plan = initialPlan();
-    feedSilent(plan, 180, 66, 0); // gravit tout sans jamais suivre
-    expect(currentStrategy(plan).id).toBe('cpu-seuils');
-    planStep(plan, { frameValid: true, landmarksFound: true, nowMs: 20_000 }); // suit enfin
+    feedSilent(plan, 600, 66, 0); // gravit tout le catalogue sans jamais suivre
+    expect(currentStrategy(plan).id).toBe('cpu-canvas-sans-matrice');
+    planStep(plan, { frameValid: true, landmarksFound: true, nowMs: 60_000 }); // suit enfin → tour RÉ-ANCRÉ
     const actions: ReturnType<typeof planStep>[] = [];
-    for (let i = 0; i < 900; i++) {
-      const t = planStep(plan, { frameValid: true, landmarksFound: false, nowMs: 21_000 + i * 66 });
+    for (let i = 0; i < 1500; i++) {
+      const t = planStep(plan, { frameValid: true, landmarksFound: false, nowMs: 61_000 + i * 66 });
       if (t.advanceTo !== null) actions.push(t);
     }
-    expect(actions).toHaveLength(1);
+    // La PREMIÈRE action est la recréation de la MÊME marche — et il n'y en a qu'UNE par épisode.
     expect(actions[0]!.recreate).toBe(true);
-    expect(currentStrategy(plan).id).toBe('cpu-seuils'); // pas de ping-pong au sommet
+    expect(actions.filter((a) => a.recreate === true)).toHaveLength(1);
+    // Le retour de landmarks avait RÉ-ANCRÉ le tour : l'épisode repaie un tour
+    // COMPLET du catalogue (avance circulaire), puis on cherche, honnêtement.
+    expect(feedSilent(plan, 600, 66, 200_000)).toBe(0);
+    expect(plan.phase).toBe('searching');
   });
 
-  it('l’échelle finit sur la stratégie la plus permissive : marge + seuils 0,25 en CPU', () => {
+  it('le catalogue finit sur le dernier recours : CPU, canvas, sans matrice, seuils 0,25', () => {
     const last = DETECTION_STRATEGIES[DETECTION_STRATEGIES.length - 1]!;
     expect(last.minConfidence).toBe(0.25);
-    expect(last.padFraction).not.toBeNull();
     expect(last.delegate).toBe('CPU');
+    expect(last.source).toBe('canvas');
+    expect(last.matrices).toBe(false);
+    // …et la marche « marge + seuils » (visage très proche) existe toujours.
+    const permissive = DETECTION_STRATEGIES.find((s) => s.id === 'cpu-seuils')!;
+    expect(permissive.padFraction).not.toBeNull();
+    expect(permissive.minConfidence).toBe(0.25);
+  });
+
+  it('🔴 NÉGOCIATION — le catalogue couvre TOUT l’espace {GPU,CPU} × {vidéo,canvas} × {matrices ON,OFF}', () => {
+    // La casse Samsung (2026-08-22) venait d’axes jamais variés. Chaque combinaison
+    // doit exister : retirer une marche du catalogue rend ce test rouge.
+    for (const delegate of ['GPU', 'CPU'] as const) {
+      for (const source of ['video', 'canvas'] as const) {
+        for (const matrices of [true, false]) {
+          const hit = DETECTION_STRATEGIES.some(
+            (s) => s.delegate === delegate && matrices === s.matrices &&
+              (s.padFraction !== null ? 'canvas' : s.source) === source,
+          );
+          expect(hit, `combinaison absente : ${delegate}/${source}/matrices ${matrices ? 'ON' : 'OFF'}`).toBe(true);
+        }
+      }
+    }
+    // Les ids sont uniques (la mémoire par appareil s'y réfère).
+    expect(new Set(DETECTION_STRATEGIES.map((s) => s.id)).size).toBe(DETECTION_STRATEGIES.length);
+    // La première marche reste le nominal : GPU, vidéo directe, matrices ON.
+    expect(DETECTION_STRATEGIES[0]).toMatchObject({ id: 'gpu', delegate: 'GPU', source: 'video', matrices: true });
   });
 
   it('le dé-mappage de la marge est EXACT : centre → centre, bords → bords', () => {

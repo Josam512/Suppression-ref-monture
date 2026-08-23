@@ -18,6 +18,7 @@ import {
   createModelHost,
   INFERENCE_ERROR_SWAP_AFTER,
   MODEL_CREATE_TIMEOUT_MS,
+  NEGOTIATION_ERROR_NEXT_AFTER,
   STORM_RETRY_MS,
   type LandmarkerFactory,
 } from '../src/tracking/modelLifecycle.js';
@@ -148,46 +149,93 @@ describe('modelLifecycle — une seule Task, fermer avant créer (A1)', () => {
     host.dispose();
   });
 
-  it('tempête d’inférence : recréer LA MÊME stratégie, puis descendre', async () => {
+  it('tempête d’inférence sur stratégie ÉPROUVÉE : recréer LA MÊME, puis avancer', async () => {
     const b = bench();
     const plan = initialPlan();
     const host = createModelHost(plan, silent, b.factory);
     host.ensure();
     await flush();
+    plan.strategyEverTracked = true; // elle a SUIVI un visage : règle prudente
     for (let i = 0; i < INFERENCE_ERROR_SWAP_AFTER; i++) host.noteInferenceError();
     await flush();
     expect(host.runningStrategy()?.id).toBe('gpu'); // recréée, pas remplacée
     expect(b.log).toEqual(['création:gpu', 'fermeture:gpu', 'création:gpu']);
     for (let i = 0; i < INFERENCE_ERROR_SWAP_AFTER; i++) host.noteInferenceError();
     await flush();
-    expect(host.runningStrategy()?.id).toBe('cpu'); // la tempête persiste → échelle
+    expect(host.runningStrategy()?.id).toBe('cpu'); // la tempête persiste → suivante
     expect(plan.strategyEverTracked).toBe(false);
     expect(b.maxAlive()).toBe(1);
     host.dispose();
   });
 
-  it('tempête INDÉPASSABLE : échelle épuisée → tentatives ESPACÉES, un succès → plein régime', async () => {
+  it('🔴 NÉGOCIATION : stratégie JAMAIS éprouvée qui lève → fermée après 3 erreurs, suivante essayée', async () => {
+    const b = bench();
+    const advances: string[] = [];
+    const plan = initialPlan();
+    const host = createModelHost(plan, { ...silent, onAdvance: (id, outcome) => advances.push(`${id}:${outcome}`) }, b.factory);
+    host.ensure();
+    await flush();
+    for (let i = 0; i < NEGOTIATION_ERROR_NEXT_AFTER - 1; i++) host.noteInferenceError();
+    await flush();
+    expect(host.runningStrategy()?.id).toBe('gpu'); // 2 erreurs : rien encore
+    host.noteInferenceError(); // la 3e élimine
+    await flush();
+    expect(host.runningStrategy()?.id).toBe('cpu');
+    expect(b.log).toEqual(['création:gpu', 'fermeture:gpu', 'création:cpu']); // fermer AVANT créer
+    expect(advances).toEqual(['gpu:erreurs']);
+    // Un succès sur la nouvelle marche remet les compteurs : 2 erreurs isolées n'éliminent plus.
+    host.noteInferenceSuccess();
+    for (let i = 0; i < NEGOTIATION_ERROR_NEXT_AFTER - 1; i++) host.noteInferenceError();
+    await flush();
+    expect(host.runningStrategy()?.id).toBe('cpu');
+    expect(b.maxAlive()).toBe(1);
+    host.dispose();
+  });
+
+  it('tempête INDÉPASSABLE : TOUT le catalogue épuisé → tentatives ESPACÉES, un succès → plein régime', async () => {
     const b = bench();
     const plan = initialPlan();
     const host = createModelHost(plan, silent, b.factory);
     host.ensure();
     await flush();
-    // Une première tempête (recréation de la même stratégie) n'espace RIEN :
-    // l'échelle doit garder toute sa réactivité tant qu'elle a des marches.
-    for (let i = 0; i < INFERENCE_ERROR_SWAP_AFTER; i++) host.noteInferenceError();
-    await flush();
-    expect(host.retryDelayMs()).toBe(0);
-    // Descendre TOUTE l'échelle : chaque étage subit recréation puis descente.
-    for (let round = 0; round < 2 * DETECTION_STRATEGIES.length; round++) {
-      for (let i = 0; i < INFERENCE_ERROR_SWAP_AFTER; i++) host.noteInferenceError();
+    // La négociation traverse le catalogue : 3 erreurs par stratégie jamais éprouvée.
+    for (let rung = 1; rung < DETECTION_STRATEGIES.length; rung++) {
+      expect(host.retryDelayMs()).toBe(0); // AUCUN espacement tant qu'il reste une marche
+      for (let i = 0; i < NEGOTIATION_ERROR_NEXT_AFTER; i++) host.noteInferenceError();
       await flush();
     }
-    expect(host.runningStrategy()?.id).toBe('cpu-seuils'); // dernier étage, VIVANT
+    expect(host.runningStrategy()?.id).toBe('cpu-canvas-sans-matrice'); // dernier recours, VIVANT
+    // Tout visité : la règle prudente reprend — recréation, puis épuisement.
+    for (let i = 0; i < INFERENCE_ERROR_SWAP_AFTER; i++) host.noteInferenceError();
+    await flush();
+    expect(host.retryDelayMs()).toBe(0); // la recréation du dernier recours a eu sa chance
+    for (let i = 0; i < INFERENCE_ERROR_SWAP_AFTER; i++) host.noteInferenceError();
+    await flush();
     expect(host.state()).toBe('ready');
     expect(host.retryDelayMs()).toBe(STORM_RETRY_MS); // plus rien à essayer → espacement
     expect(b.maxAlive()).toBe(1);
     host.noteInferenceSuccess(); // le pilote revient : plein régime immédiat
     expect(host.retryDelayMs()).toBe(0);
+    host.dispose();
+  });
+
+  it('🔴 NÉGOCIATION : partie d’une stratégie MÉMORISÉE, l’élimination BOUCLE sur tout le catalogue', async () => {
+    const b = bench();
+    const startIndex = DETECTION_STRATEGIES.length - 2; // avant-dernière mémorisée
+    const plan = initialPlan(startIndex);
+    const host = createModelHost(plan, silent, b.factory);
+    host.ensure();
+    await flush();
+    expect(host.runningStrategy()?.id).toBe(DETECTION_STRATEGIES[startIndex]!.id);
+    // Elle lève : la suivante, PUIS retour au début du catalogue (wrap), sans épuisement prématuré.
+    for (let i = 0; i < NEGOTIATION_ERROR_NEXT_AFTER; i++) host.noteInferenceError();
+    await flush();
+    expect(host.runningStrategy()?.id).toBe(DETECTION_STRATEGIES[DETECTION_STRATEGIES.length - 1]!.id);
+    for (let i = 0; i < NEGOTIATION_ERROR_NEXT_AFTER; i++) host.noteInferenceError();
+    await flush();
+    expect(host.runningStrategy()?.id).toBe('gpu'); // le tour continue au début
+    expect(host.retryDelayMs()).toBe(0); // 3 visitées sur 10 : rien d'épuisé
+    expect(b.maxAlive()).toBe(1);
     host.dispose();
   });
 
