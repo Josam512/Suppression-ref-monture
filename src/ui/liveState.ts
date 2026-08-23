@@ -76,6 +76,11 @@ export interface Live {
   /** ⚖️ 2026-08-23 — l'échelle VISUELLE de secours est active : la cause du
    *  refus d'iris qu'elle pallie (null = échelle iris ou calibrée). */
   visualFallbackReason: string | null;
+  /** 🔴 Ré-audit 2026-08-23 — référence de l'échelle visuelle, FIGÉE à la
+   *  première monture affichée de la session. Jamais la monture en cours :
+   *  à travers une référence unique, une 150 mm reste 25 % plus large qu'une
+   *  120 mm — sans elle, toutes « couvriraient » le visage (interdit). */
+  visualRefWidthMm: number | null;
   /** Filtre One-Euro de la POSE (rendu seul, jamais la métrologie — c32). */
   poseFilter: PoseFilter;
   /** Dernière échelle d'aperçu vue — pour instrumenter la transition (c6). */
@@ -140,6 +145,7 @@ export function createLive(
     firstScaleWaitSinceMs: null,
     firstScaleRefusal: null,
     visualFallbackReason: null,
+    visualRefWidthMm: null,
     poseFilter: new PoseFilter(),
     lastProvisionalPxPerMm: null,
     scaleJump: null,

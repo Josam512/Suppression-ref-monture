@@ -46,11 +46,23 @@ describe('resolveSceneScale — le rendu n’est jamais l’otage de la métrolo
 
   it('🔴 iris REFUSÉS (quantification) → échelle VISUELLE : la monture apparaît QUAND MÊME', () => {
     // Iris de 2 px < plancher de 3 px : l'échelle de pose refuse — et avant
-    // l'arbitrage, l'écran restait SANS monture. Plus maintenant.
+    // l'arbitrage, l'écran restait SANS monture. Plus maintenant. Le 132 est
+    // la RÉFÉRENCE DE SESSION (figée par renderScene), pas la monture en cours.
     const d = resolveSceneScale(null, face(0.3, 2), W, H, 0, null, 132, 0);
-    expect(d.scale).toBeCloseTo((0.3 * W) / 132, 6); // la monture couvre le visage
+    expect(d.scale).toBeCloseTo((0.3 * W) / 132, 6);
     expect(d.visualFallbackReason).not.toBeNull(); // …et la cause du repli est DITE
     expect(d.refusalDetail).toMatch(/iris/i);
+  });
+
+  it('🔴 INVARIANT (ré-audit 2026-08-23) : l’échelle visuelle ne dépend PAS de la monture essayée', () => {
+    // La référence de session est FIGÉE : changer de monture ne change pas la
+    // décision d'échelle. Rendues à travers la MÊME échelle, une 150 mm reste
+    // 25 % plus large qu'une 120 mm — le fallback ne les « adapte » jamais.
+    const ref = 132;
+    const d = resolveSceneScale(null, face(0.3, 2), W, H, 0, null, ref, 0);
+    expect(d.scale).not.toBeNull();
+    const drawn = (frameWidthMm: number) => d.scale! * frameWidthMm;
+    expect(drawn(150) / drawn(120)).toBeCloseTo(150 / 120, 9);
   });
 
   it('le repli visuel SUIT la distance : visage 2× plus proche → échelle 2×', () => {

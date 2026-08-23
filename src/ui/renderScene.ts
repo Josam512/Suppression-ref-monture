@@ -64,6 +64,11 @@ export function paintScene(
   // ── Échelle de la frame : métrique, pose (iris), ou VISUELLE de secours —
   // la décision est PURE et testée branche par branche (ui/sceneScale.ts).
   live.provisional = live.cal === null;
+  // 🔴 Ré-audit 2026-08-23 — la référence de l'échelle visuelle est FIGÉE à la
+  // première monture affichée, puis JAMAIS mise à jour au changement de
+  // monture : l'échelle provisoire appartient à la session, pas à la monture
+  // essayée, sinon toutes les montures « couvriraient » le visage.
+  live.visualRefWidthMm ??= front.sprite.spec.totalWidthMm;
   const decision = resolveSceneScale(
     live.cal,
     lm,
@@ -71,7 +76,7 @@ export function paintScene(
     h,
     yawRad,
     live.cameraProfile,
-    front.sprite.spec.totalWidthMm,
+    live.visualRefWidthMm,
     Date.now(),
   );
   const freshScale = decision.scale;

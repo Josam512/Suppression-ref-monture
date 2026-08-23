@@ -7,8 +7,10 @@
  *   1. calibration présente  → échelle MÉTRIQUE (frameMetrics) ;
  *   2. iris exploitables     → échelle de POSE (renderPose, provisoire) ;
  *   3. iris refusés          → ⚖️ échelle VISUELLE de secours (arbitrage
- *      2026-08-23) : la monture choisie couvre la largeur du visage — la
- *      monture APPARAÎT, la métrologie continue en parallèle ;
+ *      2026-08-23) : la monture APPARAÎT sur une échelle provisoire de
+ *      SESSION (référence figée — ré-audit du soir : jamais la monture en
+ *      cours, sans quoi toutes « couvriraient » le visage) — la métrologie
+ *      continue en parallèle ;
  *   4. repères dégénérés     → rien d'honnête à poser (seul cas restant).
  *
  * Aucun gate PD / anatomie / qualité d'iris ne bloque les branches 2-3 : le
@@ -41,7 +43,8 @@ export function resolveSceneScale(
   h: number,
   yawRad: number,
   cameraProfile: CameraProfile | null,
-  frameTotalWidthMm: number,
+  /** Référence de session FIGÉE (ré-audit 2026-08-23) — PAS la monture en cours. */
+  visualRefWidthMm: number,
   nowMs: number,
 ): SceneScaleDecision {
   if (cal !== null) {
@@ -63,9 +66,10 @@ export function resolveSceneScale(
   }
   const refusalDetail = rp.refusal?.detail ?? null;
   // ⚖️ Arbitrage 2026-08-23 — l'iris refusé ne prive PLUS de monture : échelle
-  // VISUELLE de secours. Plausible à l'œil, JAMAIS métrologique : rien n'est
+  // VISUELLE de secours sur la RÉFÉRENCE DE SESSION (jamais la monture en
+  // cours — ré-audit). Plausible à l'œil, JAMAIS métrologique : rien n'est
   // persisté, la métrologie ne la voit pas, la légende reste gelée.
-  const visual = estimateVisualScale(lm, w, h, frameTotalWidthMm);
+  const visual = estimateVisualScale(lm, w, h, visualRefWidthMm);
   if (visual !== null) {
     return {
       scale: visual,
