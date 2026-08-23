@@ -4,11 +4,12 @@
  */
 
 import { OVERLAY_PADDING_MM } from '../render/composite.js';
-import { APP_BUILD_TAG } from '../core/versions.js';
+import { APP_BUILD_TAG, GIT_SHA } from '../core/versions.js';
 import type { Mode } from './TryOn.js';
 
-/** Tampon de build — défini dans `core/versions.ts` (complément 43), affiché ici. */
-export const BUILD_TAG = APP_BUILD_TAG;
+/** Tampon de build (complément 43) + SHA — 🔴 ré-audit 2026-08-23 : le SHA au
+ *  BANDEAU, pas seulement au HUD : une capture d'écran client dit LE commit. */
+export const BUILD_TAG = `${APP_BUILD_TAG} · ${GIT_SHA}`;
 
 export function TryOnHeader(props: { mode: Mode; onQuit(): void }): JSX.Element {
   return (

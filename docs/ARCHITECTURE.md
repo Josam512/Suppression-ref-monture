@@ -69,9 +69,14 @@ contredit un arbitrage :
    catalogue de stratégies est négocié par ÉLIMINATION RÉELLE sur l'appareil,
    jamais par une règle `if <appareil>`.
 6. **Une stratégie n'est saine que lorsqu'elle produit réellement des
-   landmarks** — `init`/`createFromOptions` réussi ne prouve rien (sonde :
-   3 inférences propres → healthy ; stable : 478 landmarks validés sur
-   5 frames → mémorisée pour l'appareil).
+   landmarks** — `init`/`createFromOptions` réussi ne prouve rien, et une
+   inférence propre mais VIDE non plus (🔴 ré-audit 2026-08-23) : la sonde
+   n'avance que sur des VISAGES VALIDÉS (3 → healthy), la stabilité exige
+   5 frames validées **consécutives** (→ mémorisée pour l'appareil, fenêtre
+   prudente, ré-ancrage du tour). Catalogue épuisé ≠ figé : tant que rien
+   n'a été prouvé dans la session, un NOUVEAU TOUR de négociation repart
+   périodiquement (tempête : 20 s, espacé ; silence : 30 s) — dès qu'une
+   stratégie a été prouvée, plus aucun tour (silence = champ vide).
 
 Chemin critique : caméra → TrackerManager (négociation) → FaceTrackingResult
 → rendu (échelle métrique OU pose iris OU **visuelle de secours**,

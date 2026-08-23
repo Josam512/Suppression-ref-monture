@@ -48,7 +48,10 @@ export const DISTANCE_ALGO_VERSION = 3; // v3 : distance MESURÉE publiée
  * capture d'écran quelle version le client teste. Trois allers-retours ont été
  * perdus exactement là-dessus.
  */
-export const APP_BUILD_TAG = 'b12 · 2026-08-21';
+// 🔴 Ré-audit 2026-08-23 : deux refontes radicalement différentes affichaient
+// encore « b12 » — le tampon s'incrémente À CHAQUE livraison visible, et le
+// bandeau porte AUSSI le SHA (TryOnHeader), pas seulement le HUD.
+export const APP_BUILD_TAG = 'b13 · 2026-08-23';
 
 declare const __GIT_SHA__: string | undefined;
 

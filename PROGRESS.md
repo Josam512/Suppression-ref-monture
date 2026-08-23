@@ -1472,3 +1472,60 @@ dans `docs/ARCHITECTURE.md`.
 
 Preuves exécutées : 469 tests (méta 459) ; matrice de pannes S1–S19 60/60
 verts, dont S19 neuf ; typecheck strict clean, diagMain compris.
+
+---
+
+## Ré-audit humain du 2026-08-23 (soir) — dix constats, six commits
+
+L'utilisateur a audité la refonte jusqu'à `8a0745b` et relevé dix problèmes.
+Tous fondés. Corrigés dans cet ordre (le n° 3 était BLOQUANT avant tout test
+téléphone) :
+
+1. **(Bloquant, pt 3) L'échelle visuelle s'adaptait à la monture.** Le repli
+   divisait facePx par la largeur de LA monture sélectionnée : petite monture
+   zoomée, grande réduite — toutes « couvraient » le visage, soit le slider
+   de taille (§1 bug #1) revenu par la fenêtre. Corrigé : référence FIGÉE par
+   session (`live.visualRefWidthMm`, première monture affichée), jamais mise
+   à jour au changement de monture — une 150 mm reste 25 % plus large qu'une
+   120 mm, chacune suit la distance. L'ancien test qui verrouillait le
+   comportement fautif est REMPLACÉ par l'invariant inverse.
+2. **(pt 4) « healthy » sans visage.** La sonde avançait sur toute inférence
+   propre — 3 detect() vides = sain. Scindé noteInferenceCompleted /
+   noteValidFace (tracking/inferenceNotes.ts) : seule une frame de landmarks
+   VALIDÉS avance la sonde.
+3. **(pt 5) modelCreated ≠ trackerProven.** `whenProven()` se règle au
+   premier visage validé ; startMissing (collectes d'arrière-plan) attend ce
+   signal. startAuto reste à la création — arbitrage consigné : son ÉCRAN
+   (statut + sortie carte) doit exister même si aucun visage n'arrive (S13),
+   et son moteur ne mesure que sur pump(landmarks).
+4. **(pt 6) Stable = CONSÉCUTIF, égards = PREUVE.** stableFrames remis à zéro
+   par toute frame valide sans visage ; la fenêtre prudente de 20 s et le
+   ré-ancrage du tour exigent strategyProven (5 consécutives) — une frame
+   chanceuse ne confère plus rien.
+5. **(pt 7) Catalogue épuisé ≠ figé.** Tempête : cooldown 20 s puis nouveau
+   tour depuis la dernière stratégie historiquement saine (sinon le début),
+   toujours espacé 250 ms. Silence intégral sans preuve : tour toutes les
+   30 s. Une stratégie prouvée dans la session → plus aucun tour périodique
+   (champ vide ≠ panne ; batterie).
+6. **(pt 8) Rendu D'ABORD.** paintScene avant pump ; métrologie décimée à
+   ~15 Hz (METROLOGY_MIN_INTERVAL_MS) sur frames ET pertes. Le film de carte
+   garde ~100+ vues par aller-retour (plancher 8).
+7. **(pt 9) Yaw par landmarks VALIDÉ.** Banc synthétique en perspective
+   exacte : amplitude juste à < 1,5° à 0/10/20/30°, monotonie, signe,
+   invariance au roll, lecture matricielle. L'accord face au maillage réel
+   reste l'affaire de `yawAgreement` (santé), observé en continu.
+8. **(pts 1-2) Topologie canonique au périmètre du tracking.**
+   `FaceTracker.topology` (points sémantiques NOMMÉS, déclarés par le
+   backend) ; la validation de sortie dérive du topology — plus de « 478 »
+   codé en dur ; test de remplaçabilité avec un maillage de 68 points.
+   ⚠️ Périmètre assumé : la migration du rendu/métrologie vers les accesseurs
+   nommés et le SECOND MOTEUR réel (TF.js/WebNN = nouvelle dépendance,
+   §9.1-8) sont le lot suivant, sur validation humaine.
+9. **(pt 10) b13 · SHA au bandeau.** APP_BUILD_TAG = « b13 · 2026-08-23 » et
+   TryOnHeader affiche `b13 · <sha>` — une capture d'écran client dit LE
+   commit, plus seulement le HUD.
+
+Constat d'horodatage consigné : les captures Samsung de 10:19 étaient
+antérieures au déploiement de 11:14 (gh-pages bâti de 8a0745b) — elles ne
+testaient pas la refonte. Le bandeau b13·SHA rend cette confusion impossible
+à l'avenir.
