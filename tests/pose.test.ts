@@ -29,7 +29,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { at, midpoint, px } from '../src/core/geom.js';
-import { eyeLineY, frameMetrics, poseAnchorOf, SELLION } from '../src/core/faceMetrics.js';
+import { eyeLineY, FACE_L, FACE_R, frameMetrics, poseAnchorOf, SELLION, visibleTempleSide } from '../src/core/faceMetrics.js';
 import { spriteToScreen } from '../src/core/transform.js';
 import { makeCal, specForTotalWidthMm, SPRITE_PX_PER_MM, W, H } from './fixtures/builders.js';
 import { makeFace } from './fixtures/landmarks.js';
@@ -121,5 +121,35 @@ describe('POSE : sous roulis, chaque axe garde sa référence', () => {
     const mid = midpoint(spriteToScreen(SPEC.lensCenterL, SPEC, m), spriteToScreen(SPEC.lensCenterR, SPEC, m));
     expect(mid.x).toBeCloseTo(anchor.x, 6);
     expect(mid.y).toBeCloseTo(anchor.y, 6);
+  });
+});
+
+describe('🔴 terrain 2026-08-26 — le côté de branche vient de la GÉOMÉTRIE, jamais du signe du yaw', () => {
+  const mk = (sellionX: number, leftX: number, rightX: number) => {
+    const lm: Array<{ x: number; y: number }> = [];
+    lm[SELLION] = { x: sellionX, y: 0.5 };
+    lm[FACE_L] = { x: leftX, y: 0.5 };
+    lm[FACE_R] = { x: rightX, y: 0.5 };
+    return lm;
+  };
+
+  it('joue image-GAUCHE plus large (tête tournée) → branche côté -1, et réciproquement', () => {
+    // Tête tournée : la moitié TOURNÉE VERS LA CAMÉRA occupe plus de largeur.
+    expect(visibleTempleSide(mk(0.52, 0.3, 0.62), 1280, 720)).toBe(-1); // gauche large
+    expect(visibleTempleSide(mk(0.48, 0.38, 0.7), 1280, 720)).toBe(1); // droite large
+  });
+
+  it('invariant au ROLL : une tête penchée ne change pas le côté choisi', () => {
+    const lm: Array<{ x: number; y: number }> = [];
+    // Même asymétrie (gauche large), mais tournée de 30° dans le plan image.
+    const rot = (x: number, y: number) => {
+      const c = Math.cos(Math.PI / 6);
+      const s = Math.sin(Math.PI / 6);
+      return { x: 0.5 + (x - 0.5) * c - (y - 0.5) * s, y: 0.5 + (x - 0.5) * s + (y - 0.5) * c };
+    };
+    lm[SELLION] = rot(0.52, 0.5);
+    lm[FACE_L] = rot(0.3, 0.5);
+    lm[FACE_R] = rot(0.62, 0.5);
+    expect(visibleTempleSide(lm, 1280, 720)).toBe(-1);
   });
 });

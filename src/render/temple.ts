@@ -61,9 +61,12 @@ export function drawTemple(
   m: FrameMetrics,
   alpha: number,
   faceOutline: Path2D | null,
+  /** 🔴 Terrain 2026-08-26 — le côté visible vient de la GÉOMÉTRIE PROJETÉE
+   *  (core/faceMetrics.visibleTempleSide), plus jamais du signe du yaw : la
+   *  convention absolue de ce signe n'est prouvée par rien sur la voie sans
+   *  matrice, et un signe inversé dessinait la branche du mauvais côté. */
+  side: 1 | -1,
 ): void {
-  // La branche visible est celle du côté opposé au sens de rotation de la tête.
-  const side: 1 | -1 = m.yawRad >= 0 ? -1 : 1;
   const t = templeAffine(profile.spec, m, side);
 
   const off = layerFor(ctx.canvas.width, ctx.canvas.height);

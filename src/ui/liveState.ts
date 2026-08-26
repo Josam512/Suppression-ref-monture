@@ -86,6 +86,13 @@ export interface Live {
   /** Dernière échelle d'aperçu vue — pour instrumenter la transition (c6). */
   lastProvisionalPxPerMm: number | null;
   scaleJump: ScaleJump | null;
+  /** 🔴 Terrain 2026-08-26 — la POSE PEINTE est observable : ancre brute de la
+   *  frame, ancre filtrée réellement dessinée, instant vidéo correspondant.
+   *  C'est ce qui permet au banc « visage mobile » (S20) d'opposer le sprite
+   *  peint à la position VRAIE du visage — et au HUD de tracer les écarts. */
+  anchorRawPx: { x: number; y: number } | null;
+  anchorFilteredPx: { x: number; y: number } | null;
+  lastVideoTimeS: number;
   /** Compteurs de rendu — HUD : « le rendu est observable » (point 73). */
   renderedFrames: number;
   skippedRenderFrames: number;
@@ -146,6 +153,9 @@ export function createLive(
     firstScaleRefusal: null,
     visualFallbackReason: null,
     visualRefWidthMm: null,
+    anchorRawPx: null,
+    anchorFilteredPx: null,
+    lastVideoTimeS: 0,
     poseFilter: new PoseFilter(),
     lastProvisionalPxPerMm: null,
     scaleJump: null,

@@ -27,15 +27,24 @@
 /** Perte au-delà de laquelle le filtre repart à neuf (durée, pas frames). */
 export const RESET_AFTER_MS = 300;
 
-/** Réglages One-Euro — communs aux cinq grandeurs, homogènes au geste de tête. */
+/** Réglages One-Euro. 🔴 Terrain 2026-08-26 (banc S20) : `beta` multiplie la
+ *  VITESSE dans l'unité du signal — l'ancienne valeur unique (0,012, héritée
+ *  des unités normalisées du papier) laissait la coupure quasi au plancher
+ *  face à des px/s : ~37 px de retard médian sur le banc mobile, et sur un
+ *  vrai geste de tête (5-10× plus rapide) la monture décrochait d'un quart
+ *  d'écran. `beta` est donc PAR UNITÉ : pixels (x, y, échelle) et radians
+ *  (roll, yaw — le retard de yaw détachait la branche en trois-quarts). */
 export const ONE_EURO_MIN_CUTOFF_HZ = 1.2;
-export const ONE_EURO_BETA = 0.012;
+export const ONE_EURO_BETA_PX = 0.06; // 250 px/s → coupure ~16 Hz : latence ~10 ms
+export const ONE_EURO_BETA_RAD = 2.0; // 2 rad/s (tour de tête) → ~+4 Hz ; tremblement ~0,05 rad/s inchangé
 export const ONE_EURO_D_CUTOFF_HZ = 1.0;
 
 class OneEuro {
   private xPrev: number | null = null;
   private dxPrev = 0;
   private tPrevMs: number | null = null;
+
+  constructor(private readonly beta: number) {}
 
   reset(): void {
     this.xPrev = null;
@@ -68,7 +77,7 @@ class OneEuro {
     const dxHat = aD * dx + (1 - aD) * this.dxPrev;
     this.dxPrev = dxHat;
 
-    const cutoff = ONE_EURO_MIN_CUTOFF_HZ + ONE_EURO_BETA * Math.abs(dxHat);
+    const cutoff = ONE_EURO_MIN_CUTOFF_HZ + this.beta * Math.abs(dxHat);
     const a = alphaFor(cutoff);
     const out = a * x + (1 - a) * this.xPrev;
     this.xPrev = out;
@@ -94,11 +103,13 @@ export interface FilteredPose {
 }
 
 export class PoseFilter {
-  private readonly fx = new OneEuro();
-  private readonly fy = new OneEuro();
-  private readonly fRoll = new OneEuro();
-  private readonly fYaw = new OneEuro();
-  private readonly fScale = new OneEuro();
+  private readonly fx = new OneEuro(ONE_EURO_BETA_PX);
+  private readonly fy = new OneEuro(ONE_EURO_BETA_PX);
+  private readonly fRoll = new OneEuro(ONE_EURO_BETA_RAD);
+  private readonly fYaw = new OneEuro(ONE_EURO_BETA_RAD);
+  // L'échelle varie LENTEMENT par nature (distance au poste) : le beta px lui
+  // laisse sa stabilité — c'est la position qui devait cesser de traîner.
+  private readonly fScale = new OneEuro(ONE_EURO_BETA_PX);
   private lastFedMs: number | null = null;
 
   /** À appeler quand la détection est perdue : arme le reset temporel. */

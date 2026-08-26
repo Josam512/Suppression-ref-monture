@@ -15,4 +15,5 @@ dist-single/
 essayage.html
 tests/fixtures/face.y4m
 tests/fixtures/face-shades.y4m
+tests/fixtures/face-moving.y4m
 tests/fixtures/black.y4m

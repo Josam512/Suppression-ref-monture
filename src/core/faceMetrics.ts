@@ -12,6 +12,34 @@ import type { UserCalibration } from './calibration.js';
 // MediaPipe FaceLandmarker renvoie 478 points.
 export const FACE_L = 234;
 export const FACE_R = 454; // contour externe, niveau tempes/joues
+
+/**
+ * 🔴 Terrain 2026-08-26 — le CÔTÉ de branche visible, lu dans la GÉOMÉTRIE
+ * PROJETÉE, jamais dans le signe du yaw.
+ *
+ * L'ancien choix (`yawRad >= 0 ? -1 : 1`) reposait sur la convention de signe
+ * absolue du yaw — or sur la voie nominale (sans matrice), cette convention
+ * face au maillage réel n'était prouvée par rien, et un signe inversé
+ * dessinait la branche DU MAUVAIS CÔTÉ (capture réelle : branche flottant
+ * dans les cheveux en trois-quarts). Le critère projectif est sans
+ * convention : quand la tête tourne, la joue TOURNÉE VERS LA CAMÉRA occupe
+ * plus de largeur à l'écran — la branche visible est de ce côté-là. Distances
+ * EUCLIDIENNES au sellion (invariant au roll). De face, les deux moitiés se
+ * valent et la branche est de toute façon fondue (smoothstep sous 0,10 rad).
+ *
+ * Convention de retour : -1 = côté IMAGE-GAUCHE (repère 234, oreille 162),
+ * +1 = côté IMAGE-DROIT (repère 454, oreille 389) — celle de templeAffine.
+ */
+export function visibleTempleSide(
+  lm: readonly NormalizedLandmark[],
+  w: number,
+  h: number,
+): 1 | -1 {
+  const s = px(at(lm, SELLION), w, h);
+  const dLeft = dist(s, px(at(lm, FACE_L), w, h));
+  const dRight = dist(s, px(at(lm, FACE_R), w, h));
+  return dLeft > dRight ? -1 : 1;
+}
 export const EYE_L = 33;
 export const EYE_R = 263; // coins externes des yeux → inclinaison
 export const EYE_L_INNER = 133; // coin interne de l'œil gauche → centre de l'œil

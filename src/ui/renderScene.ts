@@ -24,6 +24,7 @@ import {
   MAX_YAW_FOR_SCALE_RAD,
   poseAnchorOf,
   rollRadOf,
+  visibleTempleSide,
   type FrameMetrics,
 } from '../core/faceMetrics.js';
 import { at, px, type NormalizedLandmark } from '../core/geom.js';
@@ -105,6 +106,10 @@ export function paintScene(
   }
   live.firstScaleWaitSinceMs = null;
   live.firstScaleRefusal = null;
+  // 🔴 Terrain 2026-08-26 — la pose peinte est OBSERVABLE (banc S20, HUD) :
+  // l'ancre brute de CETTE frame et l'ancre filtrée réellement dessinée.
+  live.anchorRawPx = { x: anchor.x, y: anchor.y };
+  live.anchorFilteredPx = { x: filtered.x, y: filtered.y };
 
   // ⭐ Complément 6 — la PREMIÈRE frame calibrée consigne le saut d'échelle
   // aperçu → final. On le mesure et on l'affiche (HUD) ; on ne le lisse pas.
@@ -163,7 +168,9 @@ export function paintScene(
       { front: front.sprite, profile: profile.status === 'ready' ? profile.sprite : null },
       m,
       faceOutlinePath(lm, w, h),
-      { overlayPaddingMm: live.overlayPaddingMm },
+      // 🔴 Terrain 2026-08-26 — le côté de branche est MESURÉ sur les
+      // landmarks bruts (géométrie projetée), plus déduit du signe du yaw.
+      { overlayPaddingMm: live.overlayPaddingMm, templeSide: visibleTempleSide(lm, w, h) },
     );
   }
   live.renderedFrames++;

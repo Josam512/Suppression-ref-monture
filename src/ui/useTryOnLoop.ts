@@ -83,6 +83,11 @@ function publishHealth(
       firstScaleRefusal: live.firstScaleRefusal,
       // ⚖️ 2026-08-23 — la monture est posée à l'échelle VISUELLE de secours.
       visualFallback: live.visualFallbackReason,
+      // 🔴 Terrain 2026-08-26 — la POSE PEINTE, observable : le banc S20
+      // oppose l'ancre dessinée à la position VRAIE du visage mobile.
+      anchorRawPx: live.anchorRawPx,
+      anchorFilteredPx: live.anchorFilteredPx,
+      lastVideoTimeS: live.lastVideoTimeS,
       invariants: invariantReport(),
     };
   } catch {
@@ -185,6 +190,8 @@ export function useTryOnLoop(deps: TryOnLoopDeps): { retryCamera(): void } {
       s.lastYawRad = yawRad;
       s.lastLandmarksAtMs = performance.now();
       s.coordinateSpace = space;
+      // 🔴 Terrain 2026-08-26 — l'instant vidéo de la frame rendue (banc S20).
+      s.lastVideoTimeS = videoRef.current?.currentTime ?? 0;
 
       // Étape carte (diagnostic) : rien ne mesure, la vidéo passe sous un
       // canvas vide — le client lit la consigne et appuie quand il veut.

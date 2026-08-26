@@ -11,6 +11,11 @@
 import { spawn, execSync } from 'node:child_process';
 import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { chromium } from 'playwright';
+import { MOVING_AMPL_PX, movingCenterX } from './movingLaw.mjs';
+
+/** Filtre de développement : FAULTS_ONLY=S20 n'exécute que les scénarios dont
+ *  le nom contient la sous-chaîne. La CI ne le pose JAMAIS (matrice entière). */
+const ONLY = process.env.FAULTS_ONLY ?? null;
 
 const PORT = 5188;
 const BASE = `http://localhost:${PORT}`;
@@ -52,7 +57,11 @@ function makeBlackY4m(path) {
   writeFileSync(path, Buffer.concat(parts));
 }
 
-if (!existsSync('tests/fixtures/face.y4m') || !existsSync('tests/fixtures/face-shades.y4m')) {
+if (
+  !existsSync('tests/fixtures/face.y4m') ||
+  !existsSync('tests/fixtures/face-shades.y4m') ||
+  !existsSync('tests/fixtures/face-moving.y4m')
+) {
   execSync('node scripts/make-face-y4m.mjs', { stdio: 'inherit' });
 }
 execSync('node scripts/sync-wasm.mjs', { stdio: 'inherit' });
@@ -71,6 +80,7 @@ const LAUNCH = (video) => ({
 });
 
 async function scenario(browser, name, { init, routes, run, url }) {
+  if (ONLY !== null && !name.includes(ONLY)) return; // filtre de dev, jamais en CI
   const ctx = await browser.newContext({ permissions: ['camera'] });
   const pageErrors = [];
   try {
@@ -516,6 +526,104 @@ try {
       // sur des yeux occlus ? À confronter au vrai visage — cf. PROGRESS.
       const pd = (await page.locator('body').innerText()).match(/PD[^\n]{0,40}/)?.[0] ?? 'PD non affiché';
       console.log(`   ↳ constat yeux occlus : calibrated=${h?.calibrated} · ${pd.replace(/\s+/g, ' ')}`);
+    },
+  });
+  await browser.close();
+
+  // S20 — 🔴 terrain 2026-08-26 (capture réelle Windows/Chrome) : la monture
+  // décrochait dès que le visage BOUGEAIT ou s'écartait du centre — et toutes
+  // les fixtures historiques étaient statiques et centrées. Ici le visage
+  // suit une loi sinusoïdale CONNUE (movingLaw.mjs) : on oppose, frame par
+  // frame, l'ancre réellement PEINTE à la position vraie du visage.
+  browser = await chromium.launch(LAUNCH('tests/fixtures/face-moving.y4m'));
+  await scenario(browser, 'S20 la monture SUIT un visage MOBILE', {
+    run: async (page, name, pageErrors) => {
+      await page
+        .waitForFunction(() => (globalThis.__VTO_HEALTH__?.renderedFrames ?? 0) > 5, { timeout: 60_000 })
+        .catch(() => {});
+      const samples = [];
+      const deadline = Date.now() + 12_000;
+      while (Date.now() < deadline) {
+        // Un SEUL evaluate : la pose peinte (santé) et la position VRAIE lue
+        // dans les PIXELS de la vidéo (repère fiduciaire au sommet du cadre) —
+        // même tâche JS, donc pas de biais d'échantillonnage entre les deux.
+        const s = await page.evaluate(() => {
+          const h = globalThis.__VTO_HEALTH__ ?? null;
+          const v = document.querySelector('video');
+          let markerX = null;
+          let vt = null;
+          if (v !== null && v.videoWidth > 0) {
+            vt = v.currentTime;
+            const g = (globalThis.__S20C ??= (() => {
+              const c = document.createElement('canvas');
+              return c.getContext('2d', { willReadFrequently: true });
+            })());
+            g.canvas.width = v.videoWidth;
+            g.canvas.height = 16;
+            g.drawImage(v, 0, 0, v.videoWidth, 16, 0, 0, v.videoWidth, 16);
+            const row = g.getImageData(0, 7, v.videoWidth, 1).data;
+            const dark = [];
+            for (let i = 0; i < v.videoWidth; i++) {
+              const l = 0.299 * row[i * 4] + 0.587 * row[i * 4 + 1] + 0.114 * row[i * 4 + 2];
+              if (l < 70) dark.push(i);
+            }
+            if (dark.length >= 3) markerX = dark.reduce((a, b) => a + b, 0) / dark.length;
+          }
+          return {
+            x: h?.anchorFilteredPx?.x ?? null,
+            raw: h?.anchorRawPx?.x ?? null,
+            t: h?.lastVideoTimeS ?? null,
+            rf: h?.renderedFrames ?? 0,
+            markerX,
+            vt,
+          };
+        });
+        if (s.x !== null && s.markerX !== null) samples.push(s);
+        await page.waitForTimeout(120);
+      }
+      const uniq = samples.filter((s, i) => i === 0 || s.rf !== samples[i - 1].rf);
+      check(`${name} : échantillons de pose collectés`, uniq.length >= 40, `n=${uniq.length}`);
+      if (uniq.length >= 40) {
+        // 1) Le sprite SE DÉPLACE avec l'amplitude du mouvement (±120 px).
+        const xs = uniq.map((s) => s.x);
+        const spread = Math.max(...xs) - Math.min(...xs);
+        check(`${name} : le sprite se DÉPLACE (amplitude réelle)`, spread > 1.2 * MOVING_AMPL_PX, `étendue=${spread.toFixed(0)} px`);
+        // 2) Le TAMPON du faux périphérique d'abord : le repère fiduciaire
+        // (pixels) daté par currentTime mesure le retard contenu ↔ horloge —
+        // propriété du BANC (Chromium), jamais de l'application. On l'estime
+        // puis on l'ôte de la vérité terrain.
+        const medOf = (arr) => [...arr].sort((a, b) => a - b)[Math.floor(arr.length / 2)];
+        let capTau = 0;
+        let capBest = Number.POSITIVE_INFINITY;
+        for (let tau = 0; tau <= 0.5; tau += 0.02) {
+          const m = medOf(uniq.map((s) => Math.abs(s.markerX - movingCenterX(s.vt - tau))));
+          if (m < capBest) {
+            capBest = m;
+            capTau = tau;
+          }
+        }
+        // 3) Vérité terrain à l'INSTANT DE LA FRAME PEINTE : loi(t_peint − τ).
+        // Un décalage CONSTANT (sellion ↔ centre photo) est toléré et estimé ;
+        // les RÉSIDUS, eux, doivent être petits — un pipeline en miroir, un
+        // espace de coordonnées faux ou un retard perceptible explosent ici.
+        const truth = (s) => movingCenterX(s.t - capTau);
+        const offset = medOf(uniq.map((s) => s.x - truth(s)));
+        const resid = uniq.map((s) => Math.abs(s.x - truth(s) - offset)).sort((a, b) => a - b);
+        const med = resid[Math.floor(resid.length / 2)];
+        const p90 = resid[Math.floor(resid.length * 0.9)];
+        check(`${name} : l'ancre peinte est SUR le visage (décalage constant borné)`, Math.abs(offset) < 60, `δ=${offset.toFixed(0)} px`);
+        check(`${name} : elle SUIT le mouvement (résidu médian)`, med < 30, `méd=${med.toFixed(0)} px`);
+        check(`${name} : y compris aux vitesses de pointe (p90)`, p90 < 60, `p90=${p90.toFixed(0)} px`);
+        const rawOffset = medOf(uniq.map((s) => s.raw - truth(s)));
+        const rawMed = medOf(uniq.map((s) => Math.abs(s.raw - truth(s) - rawOffset)));
+        console.log(
+          `   ↳ diagnostic : tampon de capture τ≈${(capTau * 1000).toFixed(0)} ms (résidu ${capBest.toFixed(0)} px) · ` +
+            `brut méd=${rawMed.toFixed(0)} px · filtré méd=${med.toFixed(0)} px`,
+        );
+      }
+      const h2 = await health(page);
+      check(`${name} : aucun invariant violé`, h2?.invariants?.violations === 0);
+      check(`${name} : aucune exception non rattrapée`, pageErrors.length === 0, pageErrors[0] ?? '');
     },
   });
   await browser.close();

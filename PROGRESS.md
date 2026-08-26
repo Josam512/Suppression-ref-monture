@@ -1529,3 +1529,43 @@ Constat d'horodatage consigné : les captures Samsung de 10:19 étaient
 antérieures au déploiement de 11:14 (gh-pages bâti de 8a0745b) — elles ne
 testaient pas la refonte. Le bandeau b13·SHA rend cette confusion impossible
 à l'avenir.
+
+---
+
+## Terrain 2026-08-26 — la monture décroche quand le visage BOUGE (poste Windows réel)
+
+Cinq captures b13·9210569 : de face immobile, pose et taille JUSTES (légende
+cohérente, métrologie conclue — PD 57,6 ± 2,5, distance 46 cm) ; en mouvement
+ou en trois-quarts, sprite très décalé et branche flottant du mauvais côté.
+
+Constat d'outillage : TOUTES les fixtures de banc étaient statiques et
+centrées — aucun banc n'avait jamais exercé un visage qui bouge. Construit :
+
+1. **`face-moving.y4m`** (make-face-y4m + scripts/movingLaw.mjs) : cadre
+   paysage 640×480, visage réduit, position sinusoïdale de loi CONNUE
+   (±120 px, période 3 s), repère FIDUCIAIRE dans les pixels (barre noire au
+   sommet, à l'abscisse vraie) — la vérité terrain se lit dans le CONTENU,
+   immunisée contre les tampons de capture.
+2. **S20 « la monture SUIT un visage MOBILE »** : santé enrichie
+   (anchorRawPx, anchorFilteredPx, lastVideoTimeS), échantillonnage atomique
+   pose-peinte + repère, estimation du tampon du faux périphérique (MESURÉ :
+   ≈ 240 ms sur ce Chromium — artefact de BANC, pas de l'app), puis résidus
+   contre loi(t_peint − τ). Verdicts finaux : δ=18 px (aucun miroir, aucun
+   espace faux), résidu médian 8 px, p90 24 px, brut = filtré.
+
+Deux correctifs réels au passage :
+- **One-Euro : beta PAR UNITÉ** (0,06 px ; 2,0 rad — l'ancienne valeur unique
+  0,012 venait des unités normalisées du papier : coupure quasi au plancher
+  face à des px/s, latence de filtre inutile aux vitesses réelles de tête).
+- **Côté de branche par la GÉOMÉTRIE PROJETÉE** (`visibleTempleSide` : la
+  moitié la plus large à l'écran est la joue tournée vers la caméra),
+  remplaçant `yaw >= 0 ? -1 : 1` — le signe absolu du yaw-par-landmarks
+  n'était prouvé par RIEN sur la voie nominale sans matrice, et un signe
+  inversé mettait la branche dans les cheveux (capture 4). Invariant au roll,
+  vrai sur toutes les stratégies, testé.
+
+Honnêteté sur ce qui RESTE : la latence perçue sur un poste réel contient la
+chaîne caméra (~100 ms) + l'inférence sur CE matériel — l'app n'y ajoute
+quasiment rien (8 px au banc), et on n'invente pas de prédiction de pose
+(fabrication). En mouvement rapide la monture suivra avec la latence du
+matériel ; à l'arrêt elle est exacte — c'était déjà vrai sur les captures 3/5.

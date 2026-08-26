@@ -267,7 +267,8 @@ export function runProof(): ProofCase[] {
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, W, H);
-    drawTemple(ctx, { img: temple, spec: spec2 }, mOcc, 1, outline);
+    // Banc synthétique sans landmarks : le côté suit l'ancienne règle de signe.
+    drawTemple(ctx, { img: temple, spec: spec2 }, mOcc, 1, outline, mOcc.yawRad >= 0 ? -1 : 1);
     const alphaAt = (mm: number): number => {
       const x = Math.round(anchor.x + ux * mm * mOcc.livePxPerMm);
       const y = Math.round(anchor.y + uy * mm * mOcc.livePxPerMm);

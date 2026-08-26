@@ -65,6 +65,9 @@ export interface DrawOptions {
    * mode magasin (V2), où une monture physique se trouve sous le sprite.
    */
   overlayPaddingMm?: number;
+  /** 🔴 Terrain 2026-08-26 — côté de branche VISIBLE, mesuré par l'appelant
+   *  dans la géométrie projetée (visibleTempleSide) ; jamais le signe du yaw. */
+  templeSide?: 1 | -1;
 }
 
 export function drawFrame(
@@ -90,7 +93,10 @@ export function drawFrame(
   const profile = sprites.profile;
   const templeAlpha = smoothstep(TEMPLE_FADE_IN, TEMPLE_FADE_FULL, Math.abs(m.yawRad));
   if (templeAlpha > 0.01 && profile !== null && profile.spec.slug === sprites.front.spec.slug) {
-    drawTemple(ctx, profile, m, templeAlpha, faceOutline);
+    // 🔴 Terrain 2026-08-26 — le côté vient de la géométrie projetée (mesuré
+    // par l'appelant sur les landmarks BRUTS) ; à défaut, l'ancienne règle de
+    // signe reste le repli des bancs synthétiques qui n'ont pas de landmarks.
+    drawTemple(ctx, profile, m, templeAlpha, faceOutline, options.templeSide ?? (m.yawRad >= 0 ? -1 : 1));
   }
 
   // ⚠️ yawRad se lit sur `m` (T2). Ne PAS le repasser en paramètre : deux
