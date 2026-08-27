@@ -255,10 +255,12 @@ export function runProof(): ProofCase[] {
 
     const side: 1 | -1 = yawOcc >= 0 ? -1 : 1;
     const anchor = spriteToScreen(templeRootOf(spec2, side), spec2, mOcc);
+    // Arbitrage 2026-08-27 : la branche court le long des AXES DE LA TÊTE —
+    // on échantillonne exactement sur cette ligne, plus vers l'oreille.
+    const ux = side * Math.cos(mOcc.rollRad);
+    const uy = side * Math.sin(mOcc.rollRad);
     const ear = side > 0 ? mOcc.ear.right : mOcc.ear.left;
-    const norm = Math.hypot(ear.x - anchor.x, ear.y - anchor.y);
-    const ux = (ear.x - anchor.x) / norm;
-    const uy = (ear.y - anchor.y) / norm;
+    const tEarMm = ((ear.x - anchor.x) * ux + (ear.y - anchor.y) * uy) / mOcc.livePxPerMm;
 
     // Contour « visage » : un disque de 30 mm autour du tenon — il recouvre
     // toute la racine, exactement le cas qui la faisait disparaître.
@@ -267,8 +269,9 @@ export function runProof(): ProofCase[] {
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, W, H);
-    // Banc synthétique sans landmarks : le côté suit l'ancienne règle de signe.
-    drawTemple(ctx, { img: temple, spec: spec2 }, mOcc, 1, outline, mOcc.yawRad >= 0 ? -1 : 1);
+    // Banc synthétique sans landmarks : le côté est fourni explicitement
+    // (dans l'application, visibleTempleSide le mesure sur les landmarks).
+    drawTemple(ctx, { img: temple, spec: spec2 }, mOcc, 1, outline, side);
     const alphaAt = (mm: number): number => {
       const x = Math.round(anchor.x + ux * mm * mOcc.livePxPerMm);
       const y = Math.round(anchor.y + uy * mm * mOcc.livePxPerMm);
@@ -293,6 +296,31 @@ export function runProof(): ProofCase[] {
         '',
       ),
     );
+    // 🔴 Terrain 2026-08-27 : le MANCHON est coupé derrière l'oreille — plus
+    // loin que la racine de l'hélix le long de la branche, plus aucun pixel.
+    out.push(
+      compare(
+        `occlusion à ${label} : le manchon disparaît derrière l'oreille`,
+        0,
+        alphaAt(tEarMm + 10) > 8 ? 1 : 0,
+        0,
+        '',
+      ),
+    );
+    // …et la coupe ne mange pas la branche AVANT l'oreille : hors de l'ovale
+    // (30 mm) et avant l'hélix, la branche reste peinte. Émis seulement quand
+    // la fixture laisse une fenêtre nette (à 30°, tEar ≈ 37 mm).
+    if (tEarMm - 3 > 31) {
+      out.push(
+        compare(
+          `occlusion à ${label} : la branche reste VISIBLE entre l'ovale et l'oreille`,
+          1,
+          alphaAt(tEarMm - 3) > 8 ? 1 : 0,
+          0,
+          '',
+        ),
+      );
+    }
   }
 
   return out;

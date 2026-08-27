@@ -169,49 +169,42 @@ export function templeRootOf(spec: FrameSpec, side: 1 | -1): Pt {
 }
 
 /**
- * Affine de la BRANCHE — arbitrage 2026-08-19 : « branche physiquement
- * cohérente + fin cachée » plutôt que « branche déformée + extrémité parfaite ».
+ * Affine de la BRANCHE — arbitrage terrain 2026-08-27 : la branche PROLONGE
+ * la face. « Reprendre bêtement le dessin de la jonction de la face avec la
+ * branche au niveau du tenon » : cette matrice fait ça, et rien d'autre.
  *
- * Trois décisions, dans cet ordre :
- *  1. Elle PART du tenon de la face, projeté par l'affine unique (T3).
- *  2. Elle est à l'échelle PHYSIQUE : la longueur réelle du sprite, raccourcie
- *     en sin(|yaw|) — projection d'un segment perpendiculaire au plan du
- *     visage, nulle de face, maximale de profil. `brancheMm` CALIBRE l'échelle
- *     du sprite ; il ne fabrique JAMAIS une transformation qui étire ou
- *     comprime la branche pour la faire « tomber juste ».
- *  3. Elle est ORIENTÉE vers l'oreille mesurée — la DIRECTION seulement.
- *     Son extrémité tombe où la physique la met : sur l'oreille si la branche
- *     est à la taille de ce crâne, avant ou après sinon. C'est une information
- *     (une branche trop courte SE VOIT), et l'occlusion de `render/temple.ts`
- *     cache naturellement ce qui passe derrière la tête ou l'oreille.
+ *  1. Elle PART du tenon de la face, projeté par l'affine unique (T3) — la
+ *     jonction face ↔ branche est commune par construction, à tout yaw.
+ *  2. Elle vit dans les AXES DE LA FACE : mêmes cos/sin du roll que
+ *     `spriteAffine`. Le long de la branche : sin(|yaw|), projection d'un
+ *     segment perpendiculaire au plan du visage — nulle de face, maximale de
+ *     profil. Perpendiculairement : l'échelle pleine — un raccourci de
+ *     perspective raccourcit, il n'amincit pas. L'inclinaison réelle de la
+ *     branche (sa montée, la plongée du manchon) vient de la PHOTO, comme la
+ *     forme vient de la photo (§1 bug #2).
+ *  3. Le côté image-gauche est le MIROIR horizontal du côté droit
+ *     (déterminant < 0) : le bas du sprite reste le bas de l'écran des deux
+ *     côtés, comme une branche gauche est l'image miroir d'une branche droite.
  *
- * 🔴 Version précédente, SUPPRIMÉE : une similitude envoyait l'extrémité
- * nominale exactement sur l'oreille — elle étirait donc une branche de 140 mm
- * et comprimait une branche de 150 mm jusqu'à ce que les deux « aillent ».
- * C'était le slider de taille (§1 bug #1) appliqué à la branche : quelle que
- * soit la longueur réelle, l'extrémité tombait juste. Ne pas la réintroduire.
+ * 🔴 Versions précédentes, SUPPRIMÉES — ne réintroduire ni l'une ni l'autre :
+ *  - une similitude envoyait l'extrémité exactement sur l'oreille : le slider
+ *    de taille (§1 bug #1) appliqué à la branche. `brancheMm` CALIBRE l'échelle
+ *    du sprite, il n'étire jamais la branche pour la faire « tomber juste » ;
+ *  - la branche était ensuite ORIENTÉE vers le point d'oreille détecté
+ *    (162/389). Constaté sur captures réelles (2026-08-27) : cette visée
+ *    INVENTAIT une orientation — le landmark de contour n'est pas à la hauteur
+ *    du sillon de la branche, qui montait — et le côté gauche, construit par
+ *    rotation ≈ 180° au lieu d'un miroir, peignait le sprite TÊTE-BÊCHE,
+ *    manchon vers le haut. L'oreille mesurée ne sert plus qu'à l'OCCLUSION
+ *    (render/temple.ts) : au-delà de la racine de l'hélix, la branche passe
+ *    derrière le pavillon.
  *
- * @param side +1 si la branche visible est celle de droite du sprite, -1 sinon.
+ * @param side +1 = branche du côté image-droit, -1 = image-gauche.
  */
 export function templeAffine(spec: FrameSpec, m: FrameMetrics, side: 1 | -1): Affine {
   const anchor = spriteToScreen(templeRootOf(spec, side), spec, m);
 
-  // Direction MESURÉE : du tenon vers l'oreille de ce visage-ci. On n'en tire
-  // que l'orientation — jamais une échelle, qui serait l'étirement supprimé.
-  const ear = side > 0 ? m.ear.right : m.ear.left;
-  const vx = ear.x - anchor.x;
-  const vy = ear.y - anchor.y;
-  const norm = Math.hypot(vx, vy);
-  // Cas dégénéré (tenon et oreille confondus à l'écran, strictement de face) :
-  // la branche y est de toute façon invisible (sin(yaw) ≈ 0, et le fondu de
-  // render/temple.ts la masque sous 0,10 rad). Une direction horizontale
-  // évite seulement le NaN.
-  const ux = norm > 1e-6 ? vx / norm : side;
-  const uy = norm > 1e-6 ? vy / norm : 0;
-
-  // Échelle PHYSIQUE, sans paramètre libre. Le long de la branche : sin(|yaw|).
-  // Perpendiculairement : l'épaisseur reste à l'échelle réelle — un raccourci
-  // de perspective raccourcit, il n'amincit pas.
+  // Échelle PHYSIQUE, sans paramètre libre.
   //
   // ⭐ Complément 30 — le sprite redressé est corrigé du rapport
   // `brancheMm / profileReferenceLengthMm` : sa longueur PEINTE est la cote
@@ -219,10 +212,15 @@ export function templeAffine(spec: FrameSpec, m: FrameMetrics, side: 1 | -1): Af
   const s = (m.livePxPerMm * profileScaleCorrection(spec)) / (spec.profilePxPerMm ?? spec.spritePxPerMm);
   const along = s * Math.sin(Math.abs(m.yawRad));
 
-  const a = ux * along;
-  const b = uy * along;
-  const c = -uy * s;
-  const d = ux * s;
+  // R(roll) · diag(side·along, s). À yaw = 0 la colonne X est nulle : une
+  // branche vue dans son axe n'a pas d'étendue — et le fondu de
+  // render/temple.ts la masque de toute façon sous 0,10 rad.
+  const cosR = Math.cos(m.rollRad);
+  const sinR = Math.sin(m.rollRad);
+  const a = side * cosR * along;
+  const b = side * sinR * along;
+  const c = -sinR * s;
+  const d = cosR * s;
 
   const hx = spec.hingeProfile.x;
   const hy = spec.hingeProfile.y;

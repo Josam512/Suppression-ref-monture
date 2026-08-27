@@ -180,15 +180,38 @@ describe('BRANCHE : échelle PHYSIQUE, départ au tenon, fin libre (2026-08-19)'
     expect(Math.hypot(corner.x - fallback.x, corner.y - fallback.y)).toBeGreaterThan(1);
   });
 
-  it('l’oreille donne la DIRECTION de la branche — jamais son échelle', () => {
+  it('🔴 ARBITRAGE 2026-08-27 : la branche PROLONGE la face — axes de la tête, pas d’oreille', () => {
+    // L'ancien test verrouillait « direction = tenon → oreille détectée » :
+    // c'est l'orientation INVENTÉE que le terrain a condamnée (le landmark de
+    // contour n'est pas à la hauteur du sillon — la branche montait, manchon
+    // en l'air). La direction est désormais celle des axes de la face :
+    // ±(cos roll, sin roll), l'inclinaison réelle venant de la photo.
     const t = templeAffine(b140, M30, 1);
-    const anchor = apply(t, b140.hingeProfile);
-    const ear = M30.ear.right;
-    // Le vecteur image de l'axe +x du sprite est colinéaire à (tenon → oreille)…
-    const cross = t.a * (ear.y - anchor.y) - t.b * (ear.x - anchor.x);
-    expect(Math.abs(cross) / Math.hypot(t.a, t.b)).toBeLessThan(1e-6);
-    // …et de même sens (la branche part VERS l'oreille, pas à l'opposé).
-    expect(t.a * (ear.x - anchor.x) + t.b * (ear.y - anchor.y)).toBeGreaterThan(0);
+    const cosR = Math.cos(M30.rollRad);
+    const sinR = Math.sin(M30.rollRad);
+    const cross = t.a * sinR - t.b * cosR;
+    expect(Math.abs(cross) / Math.hypot(t.a, t.b)).toBeLessThan(1e-9);
+    // Côté image-droit : la branche s'étend vers +x du repère de la tête.
+    expect(t.a * cosR + t.b * sinR).toBeGreaterThan(0);
+  });
+
+  it('🔴 le côté gauche est le MIROIR du droit — jamais une rotation tête-bêche', () => {
+    // Le bug des captures terrain : le côté gauche était construit par une
+    // rotation ≈ 180° — le manchon plongeant de la photo se peignait VERS LE
+    // HAUT. Un miroir horizontal est exigé : déterminant négatif, et un point
+    // situé SOUS la charnière dans le sprite se peint SOUS elle à l'écran,
+    // des deux côtés (roll ≈ 0 dans la fixture).
+    const tR = templeAffine(b140, M30, 1);
+    const tL = templeAffine(b140, M30, -1);
+    expect(tR.a * tR.d - tR.b * tR.c).toBeGreaterThan(0);
+    expect(tL.a * tL.d - tL.b * tL.c).toBeLessThan(0);
+    const below = { x: b140.hingeProfile.x, y: b140.hingeProfile.y + 100 };
+    for (const side of [1, -1] as const) {
+      const t = templeAffine(b140, M30, side);
+      const pivot = apply(t, b140.hingeProfile);
+      const p = apply(t, below);
+      expect(p.y, `côté ${side}`).toBeGreaterThan(pivot.y);
+    }
   });
 
   it('2.5D : la branche peinte s’allonge quand la tête tourne (profil progressif)', () => {

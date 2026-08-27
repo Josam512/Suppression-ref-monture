@@ -167,10 +167,14 @@ export interface FrameMetrics {
    */
   poseAnchor: Pt;
   /**
-   * ⭐ Jonction oreille ↔ crâne, à l'écran, des deux côtés. Elle donne la
-   * DIRECTION de la branche — jamais son échelle (arbitrage 2026-08-19 : la
-   * branche est peinte à sa longueur physique, son extrémité tombe où la
-   * physique la met, et l'occlusion cache ce qui passe derrière la tête).
+   * ⭐ Jonction oreille ↔ crâne, à l'écran, des deux côtés. Elle borne
+   * l'OCCLUSION de la branche : au-delà de la racine de l'hélix, la branche
+   * court dans le sillon rétro-auriculaire, cachée par le pavillon
+   * (render/temple.ts). Arbitrage terrain 2026-08-27 : elle ne donne PLUS la
+   * direction de la branche — cette visée inventait une orientation, le
+   * landmark de contour n'étant pas à la hauteur du sillon ; la branche
+   * prolonge la face dans les axes de la tête (core/transform.ts). Et jamais
+   * une échelle non plus : la branche est peinte à sa longueur physique.
    */
   ear: { left: Pt; right: Pt };
 }

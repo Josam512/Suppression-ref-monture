@@ -97,6 +97,31 @@ export function drawTemple(
     }
     octx.fill(faceOutline);
     octx.restore();
+
+    // 🔴 Terrain 2026-08-27 — le MANCHON passe DERRIÈRE l'oreille. Au-delà de
+    // la racine de l'hélix (162/389, `m.ear` du côté dessiné), la branche court
+    // dans le sillon rétro-auriculaire : le pavillon puis le crâne la cachent
+    // sur tout le domaine de yaw exploitable. On efface donc le demi-plan qui
+    // commence à l'oreille, perpendiculairement à la branche — dans les axes de
+    // la tête, les mêmes que `templeAffine`. Garde : si l'oreille détectée
+    // tombait en deçà de la zone protégée du tenon (détection aberrante), on ne
+    // coupe rien — un manchon visible vaut mieux qu'une branche effacée.
+    const ear = side > 0 ? m.ear.right : m.ear.left;
+    const ux = side * Math.cos(m.rollRad);
+    const uy = side * Math.sin(m.rollRad);
+    const tEar = (ear.x - anchor.x) * ux + (ear.y - anchor.y) * uy;
+    if (Number.isFinite(tEar) && tEar > r) {
+      const L = off.width + off.height; // couvre tout le calque, à toute rotation
+      const nx = -uy;
+      const ny = ux;
+      const cut = new Path2D();
+      cut.moveTo(ear.x - nx * L, ear.y - ny * L);
+      cut.lineTo(ear.x + nx * L, ear.y + ny * L);
+      cut.lineTo(ear.x + nx * L + ux * L, ear.y + ny * L + uy * L);
+      cut.lineTo(ear.x - nx * L + ux * L, ear.y - ny * L + uy * L);
+      cut.closePath();
+      octx.fill(cut);
+    }
   }
 
   ctx.save();

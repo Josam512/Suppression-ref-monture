@@ -1569,3 +1569,44 @@ chaîne caméra (~100 ms) + l'inférence sur CE matériel — l'app n'y ajoute
 quasiment rien (8 px au banc), et on n'invente pas de prédiction de pose
 (fabrication). En mouvement rapide la monture suivra avec la latence du
 matériel ; à l'arrêt elle est exacte — c'était déjà vrai sur les captures 3/5.
+
+## Terrain 2026-08-27 — la branche PROLONGE la face (arbitrage utilisateur)
+
+Retour terrain, deux reproches, tous deux fondés : « tu inventes une
+orientation des branches — le manchon est toujours orienté vers le haut au
+lieu d'être caché derrière l'oreille » ; « tu ne reprends pas bêtement le
+dessin de la jonction face ↔ branche au niveau du tenon ».
+
+Diagnostic dans la matrice (`templeAffine`) :
+1. la branche était ORIENTÉE vers le point d'oreille détecté (162/389) — une
+   visée qui inventait une orientation : le landmark de contour n'est pas à
+   la hauteur du sillon, la branche montait ;
+2. le côté image-gauche était construit par rotation ≈ 180° au lieu d'un
+   miroir : le sprite se peignait TÊTE-BÊCHE, le manchon plongeant de la
+   photo pointait vers le HAUT (les photos réelles ont toutes charnière à
+   gauche, manchon plongeant à droite — vérifié sur les 3 fiches) ;
+3. le manchon n'était occlus par rien : l'ovale facial ne couvre pas les
+   oreilles, la branche continuait sur le pavillon et les cheveux.
+
+Correctifs (commit de ce chapitre) :
+- **`templeAffine` = R(roll) · diag(side·s·sin|yaw|, s)** : la branche vit
+  dans les MÊMES axes que la face (`spriteAffine`), part du tenon projeté par
+  l'affine unique (jonction commune par construction), s'étend en sin(yaw)
+  vers le côté visible — et le côté gauche est le MIROIR horizontal du droit
+  (déterminant < 0) : le bas du sprite reste le bas de l'écran des deux
+  côtés. L'inclinaison réelle de la branche vient de la PHOTO. Aucun point
+  d'oreille dans la direction.
+- **Occlusion du manchon** (`render/temple.ts`) : au-delà de la racine de
+  l'hélix (162/389, côté dessiné), la branche court dans le sillon
+  rétro-auriculaire — le demi-plan qui commence à l'oreille,
+  perpendiculairement à la branche, est effacé du calque. Garde : oreille
+  détectée en deçà de la protection du tenon → aucune coupe.
+- **`m.ear` change de rôle** (doc `core/faceMetrics.ts`) : borne d'occlusion,
+  plus jamais direction, jamais échelle.
+
+Preuves : tests réécrits/ajoutés (direction = axes de la tête à tout yaw ;
+déterminants opposés ; un point sous la charnière se peint SOUS elle des deux
+côtés ; colonnes Y identiques des deux côtés) ; banc pixels render-proof :
+« le manchon disparaît derrière l'oreille » aux 4 angles des deux côtés, et
+« la branche reste visible entre l'ovale et l'oreille » à 30°. 489 tests
+vitest verts, banc navigateur tout vert.

@@ -133,11 +133,14 @@ describe('Lot 7 — la branche est perpendiculaire à la face', () => {
         templeLengthMm(spec) * Math.sin(Math.abs(yaw)),
         6,
       );
-      // …et l'oreille n'attire PAS l'extrémité : la direction est la sienne,
-      // la distance est celle de la physique.
-      const ear = side > 0 ? m.ear.right : m.ear.left;
-      const cross = t.a * (ear.y - anchor.y) - t.b * (ear.x - anchor.x);
-      expect(Math.abs(cross) / Math.hypot(t.a, t.b), `direction yaw=${yaw}`).toBeLessThan(1e-6);
+      // …et la direction est celle des AXES DE LA TÊTE, vers le côté dessiné
+      // (arbitrage 2026-08-27) : l'oreille n'oriente plus rien — sa visée
+      // inventait une orientation (manchon en l'air sur les captures réelles).
+      const cosR = Math.cos(m.rollRad);
+      const sinR = Math.sin(m.rollRad);
+      const cross = t.a * sinR - t.b * cosR;
+      expect(Math.abs(cross) / Math.hypot(t.a, t.b), `direction yaw=${yaw}`).toBeLessThan(1e-9);
+      expect((t.a * cosR + t.b * sinR) * side, `sens yaw=${yaw}`).toBeGreaterThan(0);
     }
   });
 
@@ -165,21 +168,18 @@ describe('Lot 7 — la branche est perpendiculaire à la face', () => {
     // De trois quarts, les DEUX branches font la même longueur réelle et le
     // même angle avec l'axe optique : même |échelle| — l'ancien modèle « à
     // l'oreille » les rendait différentes, puisque chaque côté s'étirait vers
-    // SON oreille. Les directions, elles, diffèrent (chacune vers la sienne).
+    // SON oreille.
     const yaw = Math.PI / 6;
     const m = frameMetrics(makeFaceAtYaw(yaw), W, H, makeCal(), yaw);
     const t1 = templeAffine(spec, m, 1);
     const t2 = templeAffine(spec, m, -1);
     expect(Math.hypot(t1.a, t1.b)).toBeCloseTo(Math.hypot(t2.a, t2.b), 9);
-    // Chaque côté vise SA propre oreille (colinéarité mesurée, pas supposée).
-    for (const [t, side] of [
-      [t1, 1],
-      [t2, -1],
-    ] as const) {
-      const anchor = apply(t, spec.hingeProfile);
-      const ear = side > 0 ? m.ear.right : m.ear.left;
-      const cross = t.a * (ear.y - anchor.y) - t.b * (ear.x - anchor.x);
-      expect(Math.abs(cross) / Math.hypot(t.a, t.b), `côté ${side}`).toBeLessThan(1e-6);
-    }
+    // Arbitrage 2026-08-27 : directions OPPOSÉES le long des axes de la tête,
+    // colonnes Y IDENTIQUES — le miroir est horizontal, le bas du sprite reste
+    // le bas de l'écran des deux côtés (jamais de rotation tête-bêche).
+    expect(t2.a).toBeCloseTo(-t1.a, 9);
+    expect(t2.b).toBeCloseTo(-t1.b, 9);
+    expect(t2.c).toBeCloseTo(t1.c, 9);
+    expect(t2.d).toBeCloseTo(t1.d, 9);
   });
 });
