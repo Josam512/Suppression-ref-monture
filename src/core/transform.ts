@@ -179,9 +179,10 @@ export function templeRootOf(spec: FrameSpec, side: 1 | -1): Pt {
  *     `spriteAffine`. Le long de la branche : sin(|yaw|), projection d'un
  *     segment perpendiculaire au plan du visage — nulle de face, maximale de
  *     profil. Perpendiculairement : l'échelle pleine — un raccourci de
- *     perspective raccourcit, il n'amincit pas. L'inclinaison réelle de la
- *     branche (sa montée, la plongée du manchon) vient de la PHOTO, comme la
- *     forme vient de la photo (§1 bug #2).
+ *     perspective raccourcit, il n'amincit pas. La FORME de la branche (la
+ *     plongée du manchon par rapport à son axe) vient de la photo (§1
+ *     bug #2) ; la pente de MISE EN PAGE de la photo, elle, est annulée
+ *     (`profileAxisRad`, mesuré au chargement — voir plus bas).
  *  3. Le côté image-gauche est le MIROIR horizontal du côté droit
  *     (déterminant < 0) : le bas du sprite reste le bas de l'écran des deux
  *     côtés, comme une branche gauche est l'image miroir d'une branche droite.
@@ -212,15 +213,27 @@ export function templeAffine(spec: FrameSpec, m: FrameMetrics, side: 1 | -1): Af
   const s = (m.livePxPerMm * profileScaleCorrection(spec)) / (spec.profilePxPerMm ?? spec.spritePxPerMm);
   const along = s * Math.sin(Math.abs(m.yawRad));
 
-  // R(roll) · diag(side·along, s). À yaw = 0 la colonne X est nulle : une
-  // branche vue dans son axe n'a pas d'étendue — et le fondu de
-  // render/temple.ts la masque de toute façon sous 0,10 rad.
+  // 🔴 Terrain 2026-08-27 (2e retour) — la pente de MISE EN PAGE de la photo
+  // de profil est ANNULÉE avant projection : la composante hors-axe restait à
+  // l'échelle pleine pendant que l'axe s'écrasait en sin(yaw), donc la pente
+  // du fichier (severine : +9°) sortait AMPLIFIÉE ~1/sin(yaw) à l'écran —
+  // branche en oblique démesurée, découpes d'occlusion de travers. L'axe est
+  // MESURÉ au chargement (ui/profileAxis.ts) ; la plongée du manchon PAR
+  // RAPPORT à cet axe est une vraie forme, elle reste.
+  const axis = spec.profileAxisRad ?? 0;
+  const cosA = Math.cos(axis);
+  const sinA = Math.sin(axis);
+
+  // R(roll) · diag(side·along, s) · R(−axe). Miroir X à gauche (det < 0),
+  // jamais de retournement vertical. À yaw = 0 l'étendue le long de l'axe est
+  // nulle — et le fondu de render/temple.ts masque la branche sous 0,10 rad.
   const cosR = Math.cos(m.rollRad);
   const sinR = Math.sin(m.rollRad);
-  const a = side * cosR * along;
-  const b = side * sinR * along;
-  const c = -sinR * s;
-  const d = cosR * s;
+  const p = side * along;
+  const a = p * cosR * cosA + s * sinR * sinA;
+  const b = p * sinR * cosA - s * cosR * sinA;
+  const c = p * cosR * sinA - s * sinR * cosA;
+  const d = p * sinR * sinA + s * cosR * cosA;
 
   const hx = spec.hingeProfile.x;
   const hy = spec.hingeProfile.y;

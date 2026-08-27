@@ -214,6 +214,36 @@ describe('BRANCHE : échelle PHYSIQUE, départ au tenon, fin libre (2026-08-19)'
     }
   });
 
+  it('🔴 la pente de MISE EN PAGE de la photo est ANNULÉE — jamais amplifiée', () => {
+    // severine : la branche MONTE de ~9° dans son fichier (pose de la photo,
+    // pas propriété de la monture). Sans annulation, cette composante restait
+    // à l'échelle pleine pendant que l'axe s'écrasait en sin(yaw) : ~30° à
+    // l'écran à petit yaw (captures terrain du 2026-08-27). Un point de l'AXE
+    // mesuré doit se peindre SUR la ligne de la branche, à tout yaw, des deux
+    // côtés — et à la distance écrasée en sin(yaw), pas davantage.
+    const axis = (9 * Math.PI) / 180;
+    const skewed = { ...b140, profileAxisRad: axis };
+    for (const yaw of [0.15, 0.3, 0.6]) {
+      const m = frameMetrics(makeFaceAtYaw(yaw), W, H, makeCal(), yaw);
+      const sScale =
+        (m.livePxPerMm * profileScaleCorrection(skewed)) / (skewed.profilePxPerMm ?? skewed.spritePxPerMm);
+      for (const side of [1, -1] as const) {
+        const t = templeAffine(skewed, m, side);
+        const pivot = apply(t, skewed.hingeProfile);
+        const onAxis = apply(t, {
+          x: skewed.hingeProfile.x + 500 * Math.cos(axis),
+          y: skewed.hingeProfile.y + 500 * Math.sin(axis),
+        });
+        const cosR = Math.cos(m.rollRad);
+        const sinR = Math.sin(m.rollRad);
+        const perp = -(onAxis.x - pivot.x) * sinR + (onAxis.y - pivot.y) * cosR;
+        expect(Math.abs(perp), `hors-ligne yaw=${yaw} côté ${side}`).toBeLessThan(1e-6);
+        const alongPx = ((onAxis.x - pivot.x) * cosR + (onAxis.y - pivot.y) * sinR) * side;
+        expect(alongPx, `écrasement yaw=${yaw} côté ${side}`).toBeCloseTo(500 * sScale * Math.sin(yaw), 6);
+      }
+    }
+  });
+
   it('2.5D : la branche peinte s’allonge quand la tête tourne (profil progressif)', () => {
     const M6 = frameMetrics(makeFaceAtYaw(0.1), W, H, makeCal(), 0.1);
     const nearFrontal = renderedTempleLengthPx(b140, M6, 1);

@@ -21,9 +21,16 @@ import type { FrameSpec } from '../core/frameSpec.js';
 import { frontAnchorsInImageError, profileAnchorsInImageError } from '../core/specAnchors.js';
 import type { FrontSprite } from '../render/composite.js';
 import { assetUrl } from './assetUrl.js';
+import { measureProfileAxisRad } from './profileAxis.js';
 
 /** Une image de monture qui ne répond pas dans ce délai est déclarée en échec. */
 export const SPRITE_TIMEOUT_MS = 20_000;
+
+/** Exécute `fn` quand le thread respire (repli : après la rafale de démarrage). */
+function whenIdle(fn: () => void): void {
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(() => fn(), { timeout: 2000 });
+  else setTimeout(fn, 250);
+}
 
 export type SpriteSlot =
   | { status: 'idle' }
@@ -94,7 +101,24 @@ export function useSprites(spec: FrameSpec | null): SpritesState {
       (img) => {
         const anchorErr = profileAnchorsInImageError(spec, img.naturalWidth, img.naturalHeight);
         if (anchorErr !== null) slot('profile', { status: 'error', message: `« ${spec.slug} » : ${anchorErr}` });
-        else slot('profile', { status: 'ready', sprite: { img, spec } });
+        else {
+          // Le sprite sert IMMÉDIATEMENT, sans pente connue (comportement
+          // antérieur) : rien ne s'ajoute au chemin critique de démarrage.
+          slot('profile', { status: 'ready', sprite: { img, spec } });
+          // 🔴 Terrain 2026-08-27 — la pente de MISE EN PAGE de la photo est
+          // mesurée sur ses pixels réels, une fois, DIFFÉRÉE hors de la rafale
+          // de démarrage (mesurée dedans, elle décalait les scénarios au
+          // timing serré), puis annulée par templeAffine. Le spec du profil
+          // devient une copie enrichie — même slug (complément 29).
+          whenIdle(() => {
+            if (cancelled) return;
+            const profileAxisRad = measureProfileAxisRad(img, img.naturalWidth, img.naturalHeight, spec.hingeProfile);
+            console.info(
+              `profil « ${spec.slug} » : pente de mise en page ${((profileAxisRad * 180) / Math.PI).toFixed(1)}° (annulée au rendu)`,
+            );
+            slot('profile', { status: 'ready', sprite: { img, spec: { ...spec, profileAxisRad } } });
+          });
+        }
       },
       (err: unknown) =>
         slot('profile', { status: 'error', message: err instanceof Error ? err.message : String(err) }),

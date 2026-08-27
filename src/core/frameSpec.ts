@@ -93,6 +93,7 @@ export interface FrameSpec {
   profileReferenceLengthMm?: number;
   /** Nom HISTORIQUE de `profileReferenceLengthMm` — lu en repli, plus jamais écrit. */
   templeRectifiedMm?: number;
+  profileAxisRad?: number; // 🔴 pente de MISE EN PAGE du profil, mesurée au chargement (ui/profileAxis.ts) — jamais dans les fiches
 
   calibratedAt: string;
 }

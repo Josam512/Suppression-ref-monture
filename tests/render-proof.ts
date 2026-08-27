@@ -24,6 +24,7 @@ import { spriteToScreen, templeRootOf } from '../src/core/transform.js';
 import type { UserCalibration } from '../src/core/calibration.js';
 import { drawFrame, OVERLAY_PADDING_MM } from '../src/render/composite.js';
 import { drawTemple, TEMPLE_ROOT_PROTECT_MM } from '../src/render/temple.js';
+import { measureProfileAxisRad } from '../src/ui/profileAxis.js';
 import { makeFace, makeFaceAtYaw, BASE_FACE_PX, W, H } from './fixtures/landmarks.js';
 
 const SPRITE_PX_PER_MM = 12;
@@ -321,6 +322,64 @@ export function runProof(): ProofCase[] {
         ),
       );
     }
+  }
+
+  // ── 10. 🔴 Terrain 2026-08-27 (2e retour) — la pente de MISE EN PAGE d'une
+  // photo de profil est MESURÉE sur ses pixels puis ANNULÉE au rendu : un
+  // sprite penché de 20° dans son fichier se peint À PLAT le long de la
+  // branche, jamais en oblique amplifiée (~1/sin yaw — le défaut des captures).
+  {
+    const AXIS_DEG = 20;
+    const axisRad = (AXIS_DEG * Math.PI) / 180;
+    const BODY_LEN = 600; // px sprite, le long de l'axe penché
+    const BODY_THICK = 60;
+    const hinge = { x: 40, y: 260 };
+    const skew = document.createElement('canvas');
+    skew.width = 900;
+    skew.height = 520;
+    const sctx = skew.getContext('2d')!;
+    sctx.translate(hinge.x, hinge.y);
+    sctx.rotate(axisRad);
+    sctx.fillStyle = '#101010';
+    sctx.fillRect(0, -BODY_THICK / 2, BODY_LEN, BODY_THICK);
+
+    out.push(
+      compare(
+        'pente de mise en page : la MESURE retrouve l’angle sur les pixels',
+        AXIS_DEG,
+        (measureProfileAxisRad(skew, skew.width, skew.height, hinge) * 180) / Math.PI,
+        1.5,
+        '°',
+      ),
+    );
+
+    const yawFlat = Math.PI / 9; // 20°
+    const lmFlat = makeFaceAtYaw(yawFlat);
+    const mFlat = frameMetrics(lmFlat, W, H, CAL, yawFlat);
+    const specFlat: FrameSpec = { ...SPEC, hingeProfile: hinge, profileAxisRad: axisRad };
+    const sFlat = mFlat.livePxPerMm / SPRITE_PX_PER_MM;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    drawTemple(ctx, { img: skew, spec: specFlat }, mFlat, 1, null, -1);
+    const flatBox = paintedBBox(ctx);
+    out.push(
+      compare(
+        'sprite penché de 20° : hauteur peinte = ÉPAISSEUR (la pente est annulée)',
+        BODY_THICK * sFlat,
+        flatBox === null ? -1 : flatBox.h,
+        4,
+        'px',
+      ),
+    );
+    out.push(
+      compare(
+        'sprite penché de 20° : longueur peinte écrasée en sin(yaw)',
+        BODY_LEN * sFlat * Math.sin(yawFlat),
+        flatBox === null ? -1 : flatBox.w,
+        4,
+        'px',
+      ),
+    );
   }
 
   return out;

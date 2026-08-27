@@ -1610,3 +1610,48 @@ côtés ; colonnes Y identiques des deux côtés) ; banc pixels render-proof :
 « le manchon disparaît derrière l'oreille » aux 4 angles des deux côtés, et
 « la branche reste visible entre l'ovale et l'oreille » à 30°. 489 tests
 vitest verts, banc navigateur tout vert.
+
+### 2e retour du même jour — la pente de MISE EN PAGE de la photo, amplifiée
+
+Re-test terrain (b13·fa4023a) : branche partant en oblique démesurée dans le
+vide, morceaux de branche mal effacés autour de la monture (p8-m252). Cause
+trouvée en relisant la matrice ET les fichiers : la photo de profil n'est
+jamais parfaitement horizontale dans son fichier — pente de POSE de la photo,
+pas propriété de la monture (mesurée : severine +9°, p8-m252 +7°,
+ecaille-claire ~2°). Or la projection écrase la composante LE LONG de l'axe en
+sin(yaw) et garde la perpendiculaire à l'échelle pleine : la pente du fichier
+sortait AMPLIFIÉE ~1/sin(yaw) à l'écran (9° → ~30° à petit yaw), la branche
+ratait la tempe, et l'ovale + la coupe d'oreille découpaient une branche de
+travers → les « morceaux » constatés.
+
+Correctifs :
+- **`ui/profileAxis.ts`** (nouveau) : l'axe de mise en page est MESURÉ sur les
+  pixels réels du sprite au chargement — droite charnière → barycentre du
+  canal alpha (le manchon pèse peu : axe du corps à ~1-2° près). Champ
+  `FrameSpec.profileAxisRad`, runtime seulement, jamais écrit dans les fiches.
+- **`templeAffine` = R(roll) · diag(side·s·sin|yaw|, s) · R(−axe)** : l'axe
+  mesuré est ramené à l'horizontale du repère branche avant projection ; la
+  plongée du manchon PAR RAPPORT à l'axe (vraie forme) reste ; miroir et
+  occlusion inchangés.
+- **Côté prouvé en perspective exacte** : `visibleTempleSide` validé sur la
+  tête 3D minimale projetée en u = f·x/z (sellion déporté de 80 mm vers la
+  caméra) : à ±10/20/30°, roulis compris, le côté choisi est bien la joue qui
+  SE RAPPROCHE.
+
+Preuves : vitest « la pente de mise en page est ANNULÉE — jamais amplifiée »
+(point de l'axe peint SUR la ligne de branche, écrasé en sin(yaw), deux côtés,
+trois yaw) ; banc pixels : la mesure retrouve 19,95° pour 20° posés, et un
+sprite penché de 20° se peint À PLAT (hauteur = épaisseur 18 px, longueur =
+sin(yaw) — sans le correctif la hauteur aurait été ~3,5× plus grande). 491
+tests vitest, banc navigateur tout vert.
+
+Note d'exécution (honnêteté du journal) : cet après-midi, la machine de dev
+partagée s'est dégradée (charge résidente ~2,3–3,5 sur 4 CPU) et la CI locale
+COMPLÈTE est devenue non reproductible — 5 runs, 5 combinaisons de rouges
+différentes sur des scénarios de timing (smoke-V1, S6, S7, S14, puis S10/S9/
+S20 sur le run TÉMOIN rejoué sur fa4023a, l'état vert 2× le matin même) ;
+chaque scénario incriminé est vert en isolation. Diagnostic : environnement,
+pas code — établi par le témoin, pas supposé. Conformément à la règle du
+dépôt, le workflow GitHub (runner dédié) fait foi pour ce commit. Au passage,
+la mesure d'axe a été sortie du chemin critique de démarrage (requestIdle +
+willReadFrequently) — amélioration réelle, gardée.

@@ -152,4 +152,33 @@ describe('🔴 terrain 2026-08-26 — le côté de branche vient de la GÉOMÉTR
     lm[FACE_R] = rot(0.62, 0.5);
     expect(visibleTempleSide(lm, 1280, 720)).toBe(-1);
   });
+
+  it('🔴 PERSPECTIVE EXACTE : le côté choisi est la joue qui SE RAPPROCHE, à 10/20/30°', () => {
+    // Tête 3D minimale : tempes à ±70 mm, sellion 80 mm DEVANT leur plan (la
+    // proue du nez), caméra à 450 mm, focale 900 px — projection u = f·x/z,
+    // jamais la formule plane. Convention : yaw > 0 rapproche la tempe 454
+    // (droite-image) de la caméra → côté visible attendu +1.
+    const head = (yawRad: number, rollRad = 0): Array<{ x: number; y: number }> => {
+      const X0 = 70;
+      const NOSE_AHEAD = 80;
+      const Z0 = 450;
+      const F = 900;
+      const proj = (x3: number, z3: number) => (F * x3) / z3 / 1280;
+      const place = (u: number) => ({
+        x: 0.5 + u * Math.cos(rollRad),
+        y: 0.5 + u * Math.sin(rollRad),
+      });
+      const lm: Array<{ x: number; y: number }> = [];
+      lm[FACE_R] = place(proj(X0 * Math.cos(yawRad), Z0 - X0 * Math.sin(yawRad)));
+      lm[FACE_L] = place(proj(-X0 * Math.cos(yawRad), Z0 + X0 * Math.sin(yawRad)));
+      lm[SELLION] = place(proj(-NOSE_AHEAD * Math.sin(yawRad), Z0 - NOSE_AHEAD * Math.cos(yawRad)));
+      return lm;
+    };
+    for (const deg of [10, 20, 30]) {
+      const yaw = (deg * Math.PI) / 180;
+      expect(visibleTempleSide(head(yaw), 1280, 720), `+${deg}°`).toBe(1);
+      expect(visibleTempleSide(head(-yaw), 1280, 720), `-${deg}°`).toBe(-1);
+      expect(visibleTempleSide(head(yaw, (25 * Math.PI) / 180), 1280, 720), `+${deg}° roulé`).toBe(1);
+    }
+  });
 });
