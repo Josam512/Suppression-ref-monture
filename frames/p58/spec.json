@@ -1,0 +1,44 @@
+{
+  "slug": "p58",
+  "aMm": 48,
+  "pontMm": 21,
+  "bMm": 37,
+  "brancheMm": 145,
+  "totalWidthMm": 136.5,
+  "front": "front.png",
+  "profile": "profile.png",
+  "spritePxPerMm": 10.4762,
+  "alphaBBox": {
+    "x": 100,
+    "y": 313,
+    "w": 1430,
+    "h": 437
+  },
+  "bridgeCenter": {
+    "x": 816.8,
+    "y": 357
+  },
+  "lensCenterL": {
+    "x": 459.5,
+    "y": 536
+  },
+  "lensCenterR": {
+    "x": 1174,
+    "y": 539
+  },
+  "templeRootL": {
+    "x": 100,
+    "y": 538
+  },
+  "templeRootR": {
+    "x": 1529,
+    "y": 538
+  },
+  "hingeProfile": {
+    "x": 15,
+    "y": 548.5
+  },
+  "profilePxPerMm": 4.0515,
+  "profileReferenceLengthMm": 145,
+  "calibratedAt": "2026-08-31"
+}

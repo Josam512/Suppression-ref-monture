@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Diagnostic tracking — outil d'appareil</title>
+    <style>
+      :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+      body { margin: 0; padding: 16px; }
+      h1 { font-size: 1.1rem; }
+      table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
+      td, th { padding: 4px 8px; border-bottom: 1px solid #8884; text-align: left; vertical-align: top; }
+      .ok { color: #1a7f37; font-weight: 600; }
+      .ko { color: #c62828; font-weight: 600; }
+      .muted { opacity: 0.65; }
+      .err { font-family: ui-monospace, monospace; font-size: 0.72rem; white-space: pre-wrap; word-break: break-word; max-width: 42ch; }
+      video { width: 160px; border-radius: 6px; }
+      #verdict { margin: 12px 0; font-weight: 600; }
+    </style>
+    <script type="module" crossorigin src="/Suppression-ref-monture/assets/diagnostic-CdqFPyVD.js"></script>
+    <link rel="modulepreload" crossorigin href="/Suppression-ref-monture/assets/geom-DFbVmSFK.js">
+    <link rel="modulepreload" crossorigin href="/Suppression-ref-monture/assets/assetUrl-C035hkbt.js">
+    <link rel="modulepreload" crossorigin href="/Suppression-ref-monture/assets/frameInput-DpM1NNPW.js">
+  </head>
+  <body>
+    <h1>Diagnostic tracking — le catalogue entier, sur CETTE caméra</h1>
+    <p class="muted">
+      Outil d'appareil (jamais montré à un client). Chaque stratégie est créée,
+      SONDÉE par inférences réelles, puis éliminée — une seule Task à la fois.
+      Le produit fait la même négociation automatiquement ; cette page la rend
+      exhaustive et lisible en un tableau.
+    </p>
+    <video id="cam" autoplay muted playsinline></video>
+    <div id="verdict">Ouverture de la caméra…</div>
+    <table>
+      <thead>
+        <tr><th>Stratégie</th><th>Init</th><th>Inférence</th><th>Landmarks</th><th>Erreur (intégrale)</th></tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </body>
+</html>
