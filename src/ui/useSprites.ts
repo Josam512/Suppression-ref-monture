@@ -111,12 +111,18 @@ export function useSprites(spec: FrameSpec | null): SpritesState {
           // timing serré), puis annulée par templeAffine. Le spec du profil
           // devient une copie enrichie — même slug (complément 29).
           whenIdle(() => {
-            if (cancelled) return;
-            const profileAxisRad = measureProfileAxisRad(img, img.naturalWidth, img.naturalHeight, spec.hingeProfile);
-            console.info(
-              `profil « ${spec.slug} » : pente de mise en page ${((profileAxisRad * 180) / Math.PI).toFixed(1)}° (annulée au rendu)`,
-            );
-            slot('profile', { status: 'ready', sprite: { img, spec: { ...spec, profileAxisRad } } });
+            // Un callback détaché ne laisse JAMAIS fuir : une exception ici
+            // serait une pageerror silencieuse (§1 bug #3 — le soak l'a vu).
+            try {
+              if (cancelled) return;
+              const profileAxisRad = measureProfileAxisRad(img, img.naturalWidth, img.naturalHeight, spec.hingeProfile);
+              console.info(
+                `profil « ${spec.slug} » : pente de mise en page ${((profileAxisRad * 180) / Math.PI).toFixed(1)}° (annulée au rendu)`,
+              );
+              slot('profile', { status: 'ready', sprite: { img, spec: { ...spec, profileAxisRad } } });
+            } catch (err) {
+              console.warn(`pente de mise en page non mesurée sur « ${spec.slug} » :`, err);
+            }
           });
         }
       },

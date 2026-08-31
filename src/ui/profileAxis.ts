@@ -47,21 +47,25 @@ export const MIN_AXIS_BASE_PX = 4;
 export function measureProfileAxisRad(img: CanvasImageSource, w: number, h: number, hinge: Pt): number {
   if (!(w > 0) || !(h > 0)) return 0;
 
-  const canvas = document.createElement('canvas');
-  canvas.width = w;
-  canvas.height = h;
-  // willReadFrequently : raster CPU d'emblée — sans lui, le getImageData force
-  // une synchronisation GPU→CPU qui peut bloquer le thread principal bien plus
-  // longtemps que le comptage lui-même.
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  if (ctx === null) return 0;
-  ctx.drawImage(img, 0, 0);
-
+  // 🔴 TOUT le chemin canvas est rattrapé : cette mesure court en tâche de
+  // fond, et une exception qui y fuirait serait une panne silencieuse de
+  // session (règle du §1 bug #3 — le soak sabote drawImage et l'a prouvé).
+  // Pixels illisibles, contexte refusé, drawImage en panne : pente inconnue
+  // (0), jamais une erreur — une pente inconnue n'empêche pas de dessiner.
   let data: Uint8ClampedArray;
   try {
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    // willReadFrequently : raster CPU d'emblée — sans lui, le getImageData
+    // force une synchronisation GPU→CPU qui peut bloquer le thread principal
+    // bien plus longtemps que le comptage lui-même.
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (ctx === null) return 0;
+    ctx.drawImage(img, 0, 0);
     data = ctx.getImageData(0, 0, w, h).data;
   } catch {
-    return 0; // pixels illisibles (contexte souillé…) : pente inconnue, pas de panne
+    return 0;
   }
 
   let sx = 0;
