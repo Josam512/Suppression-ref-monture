@@ -10,6 +10,7 @@
  *     dimensions RÉELLES de l'image au chargement du sprite.
  */
 
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { parseFrameSpec, type FrameSpec } from '../src/core/frameSpec.js';
@@ -24,6 +25,20 @@ describe('A15 — le parseur de spec ne laisse plus passer', () => {
 
   it('un spec complet passe', () => {
     expect(() => parseFrameSpec(base())).not.toThrow();
+  });
+
+  it('🔴 les fiches RÉELLES du dépôt se parsent toutes (cohérence bbox ↔ largeur comprise)', () => {
+    // Garde-fou données : une fiche livrée qui ne passerait pas parseFrameSpec
+    // serait écartée au runtime — autant que la CI le voie AVANT le client
+    // (ajouté avec la fiche p58 préparée depuis les photos de l'opticien).
+    const index = JSON.parse(readFileSync('public/frames/index.json', 'utf8')) as {
+      frames: Array<{ slug: string }>;
+    };
+    expect(index.frames.length).toBeGreaterThan(0);
+    for (const { slug } of index.frames) {
+      const raw = JSON.parse(readFileSync(`public/frames/${slug}/spec.json`, 'utf8')) as unknown;
+      expect(() => parseFrameSpec(raw), slug).not.toThrow();
+    }
   });
 
   it('slug / front / profile vides ou absents → refusés, champ nommé', () => {

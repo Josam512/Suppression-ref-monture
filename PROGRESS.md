@@ -1655,3 +1655,37 @@ pas code — établi par le témoin, pas supposé. Conformément à la règle du
 dépôt, le workflow GitHub (runner dédié) fait foi pour ce commit. Au passage,
 la mesure d'axe a été sortie du chemin critique de démarrage (requestIdle +
 willReadFrequently) — amélioration réelle, gardée.
+
+## 2026-08-31 — fiche « p58 » depuis les photos produit de l'opticien
+
+Test demandé : préparer une fiche avec DES PHOTOS DÉJÀ DÉTOURÉES fournies
+(hypothèse : les défauts de branche venaient de mon propre détourage), cotes
+A=48, pont=21 (intérieur drageoir), B=37, branche=145 ; largeur totale par
+proportionnalité ; preview ouverte sur ce modèle.
+
+Constat d'entrée : les images sont arrivées recompressées SANS canal alpha
+(WebP aplati, damier incrusté dans les pixels). Le damier gris-neutre clair se
+retire de façon déterministe — rien à voir avec un détourage de photo :
+`scripts/prepare-p58.mjs` (atelier versionné, sources sous docs/atelier/) :
+- composantes « quasi-gris clair » : le fond (touche le bord) et les VERRES
+  (grandes composantes intérieures) deviennent transparents, les reflets
+  d'acétate restent, les îlots d'étiquette flottant dans un verre sont retirés ;
+- échelle par le PONT : 21 mm = l'écart minimal entre les deux trous, la
+  définition exacte donnée — 220 px → 10,476 px/mm. Contrôles : trous
+  47,2/47,1 mm pour A=48 (déficit ≈ drageoir), 34,8 mm pour B=37, les deux
+  verres concordants à 0,1 mm (photo bien frontale) ;
+- totalWidthMm = bbox/échelle = 136,5 mm ; AUCUN débord latéral des manchons
+  repliés (les tenons mesurés SONT les extrêmes de la bbox) ; tenons marqués
+  (templeRootL/R mesurés) ;
+- branche isolée du trois-quarts : coupe à la jonction (le profil d'épaisseur
+  des colonnes explose à la face), 15 px de tenon gardés (60 px embarquaient
+  un arc de cerclage de ~80 mm), MIROIR horizontal (convention charnière à
+  gauche), profilePxPerMm = 587,5 px / 145 mm, référence 145 (longueur peinte
+  = cote fabricant) ; la pente de mise en page restante est annulée au
+  chargement (profileAxis).
+
+Catalogue : p58 en PREMIER (la preview s'ouvre dessus) ; les trois autres
+fiches restent — les bancs S4/S14 les utilisent, leurs routes suivent le
+nouveau défaut. Nouveau garde-fou vitest : toutes les fiches RÉELLES du dépôt
+passent parseFrameSpec (492 tests). Smoke vert avec p58 par défaut : la fiche
+se charge de bout en bout (parseur, ancres, sprites, rendu).

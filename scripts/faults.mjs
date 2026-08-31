@@ -149,8 +149,9 @@ try {
 
   await scenario(browser, 'S4 spec.json corrompu (monture par défaut)', {
     routes: (page) =>
-      page.route('**/frames/ecaille-claire/spec.json', (r) =>
-        r.fulfill({ status: 200, contentType: 'application/json', body: '{"slug":"ecaille-claire"}' }),
+      // p58 est la monture par défaut du catalogue depuis le 2026-08-31.
+      page.route('**/frames/p58/spec.json', (r) =>
+        r.fulfill({ status: 200, contentType: 'application/json', body: '{"slug":"p58"}' }),
       ),
     run: async (page, name) => {
       check(`${name} : une fiche mauvaise ≠ application morte (point 5/55)`, await CALIBRATED()(page));
@@ -355,8 +356,8 @@ try {
   await scenario(browser, 'S14 sprite tardif d’une autre monture', {
     routes: (page) =>
       page.route('**/frames/**/front.png', async (route) => {
-        // Seule la monture NON-défaut est ralentie de 8 s.
-        if (!route.request().url().includes('ecaille-claire')) {
+        // Seule la monture NON-défaut est ralentie de 8 s (défaut : p58).
+        if (!route.request().url().includes('p58')) {
           await new Promise((r) => setTimeout(r, 8000));
         }
         await route.continue();
